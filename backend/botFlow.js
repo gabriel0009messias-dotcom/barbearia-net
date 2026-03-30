@@ -38,8 +38,17 @@ function normalizarTexto(texto = '') {
     .toLowerCase();
 }
 
+function nomePareceIdentificador(nome = '') {
+  const texto = String(nome || '').trim().toLowerCase();
+  return !texto || texto.includes('@lid') || texto.includes('@c.us') || /^\d+$/.test(texto);
+}
+
 function formatarPreco(preco) {
   return `R$ ${Number(preco).toFixed(2).replace('.', ',')}`;
+}
+
+function erroHorarioJaOcupado(error) {
+  return error?.code === 'SQLITE_CONSTRAINT' || /ja foi agendado|unique|constraint/i.test(String(error?.message || ''));
 }
 
 function getAsync(sql, params = []) {
@@ -237,9 +246,11 @@ function montarMenuServicosFallback(servicos) {
 }
 
 function montarResumoAgendamento(user, estado) {
+  const nomeCliente = estado.nomeCliente || user;
+
   return [
     'Resumo do agendamento:',
-    `Cliente: ${user}`,
+    `Cliente: ${nomeCliente}`,
     `Servico: ${estado.servico.nome}`,
     `Preco: ${formatarPreco(estado.servico.preco)}`,
     `Data: ${new Date(`${estado.data}T00:00:00`).toLocaleDateString('pt-BR')}`,
@@ -338,29 +349,71 @@ async function buscarDatasDisponiveis(configuracaoAgenda, sessionKey) {
   return disponibilidade.filter(Boolean);
 }
 
-async function salvarAgendamento(user, estado, sessionKey) {
+async function carregarNomeClienteSalvo(user, sessionKey) {
   if (usarApiRemota(sessionKey)) {
-    await buscarApi(sessionKey, '/api/agendamentos', {
-      method: 'POST',
-      body: JSON.stringify({
-        cliente: user,
-        telefone: user,
-        servicoId: estado.servico.id,
-        servicoNome: estado.servico.nome,
-        servicoPreco: estado.servico.preco,
-        data: estado.data,
-        hora: estado.hora,
-      }),
-    });
-    return;
+    const agendamentos = await buscarApi(sessionKey, '/api/agendamentos');
+    const ultimo = agendamentos
+      .filter((item) => item.telefone === user && item.cliente && !nomePareceIdentificador(item.cliente))
+      .sort((a, b) => {
+        const chaveA = `${a.data || ''} ${a.hora || ''} ${String(a.id || 0).padStart(10, '0')}`;
+        const chaveB = `${b.data || ''} ${b.hora || ''} ${String(b.id || 0).padStart(10, '0')}`;
+        return chaveA < chaveB ? 1 : -1;
+      })[0];
+
+    return ultimo?.cliente || null;
   }
 
-  await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [user, user]);
-  const cliente = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [user]);
-  await runAsync(
-    'INSERT INTO agendamentos (cliente_id, servico_id, data, hora, status) VALUES (?, ?, ?, ?, ?)',
-    [cliente.id, estado.servico.id, estado.data, estado.hora, 'confirmado']
-  );
+  const cliente = await getAsync('SELECT nome FROM clientes WHERE telefone = ? ORDER BY id DESC LIMIT 1', [user]);
+  return cliente?.nome && !nomePareceIdentificador(cliente.nome) ? cliente.nome : null;
+}
+
+async function pedirNomeCliente(client, user, estado, sessionKey) {
+  const nomeSalvo = await carregarNomeClienteSalvo(user, sessionKey);
+
+  if (nomeSalvo) {
+    estado.nomeCliente = nomeSalvo;
+    return true;
+  }
+
+  estado.etapa = 'nome';
+  await enviarTexto(client, user, 'Antes de agendar, me diga seu nome para eu salvar seu horario certinho.');
+  return false;
+}
+
+async function salvarAgendamento(user, estado, sessionKey) {
+  const nomeCliente = estado.nomeCliente || user;
+
+  try {
+    if (usarApiRemota(sessionKey)) {
+      await buscarApi(sessionKey, '/api/agendamentos', {
+        method: 'POST',
+        body: JSON.stringify({
+          cliente: nomeCliente,
+          telefone: user,
+          servicoId: estado.servico.id,
+          servicoNome: estado.servico.nome,
+          servicoPreco: estado.servico.preco,
+          data: estado.data,
+          hora: estado.hora,
+        }),
+      });
+      return;
+    }
+
+    await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [nomeCliente, user]);
+    await runAsync('UPDATE clientes SET nome = ? WHERE telefone = ?', [nomeCliente, user]);
+    const cliente = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [user]);
+    await runAsync(
+      'INSERT INTO agendamentos (cliente_id, servico_id, data, hora, status) VALUES (?, ?, ?, ?, ?)',
+      [cliente.id, estado.servico.id, estado.data, estado.hora, 'confirmado']
+    );
+  } catch (error) {
+    if (erroHorarioJaOcupado(error)) {
+      throw new Error('Esse horario acabou de ser reservado por outro cliente. Digite MENU para escolher outro horario.');
+    }
+
+    throw error;
+  }
 }
 
 async function buscarUltimoAgendamentoConfirmado(user, sessionKey) {
@@ -839,6 +892,12 @@ function attachBotHandlers(client, options = {}) {
 
       if (estado.etapa === 'menu') {
         if (payload === 'menu_agendar' || normalizado === '1' || normalizado === 'agendar') {
+          const podeContinuar = await pedirNomeCliente(client, user, estado, sessionKey);
+
+          if (!podeContinuar) {
+            return;
+          }
+
           await enviarListaServicos(client, user, estado, servicos);
           return;
         }
@@ -849,6 +908,20 @@ function attachBotHandlers(client, options = {}) {
         }
 
         await enviarTexto(client, user, 'Nao entendi sua escolha. Digite Menu para abrir as opcoes do atendimento.');
+        return;
+      }
+
+      if (estado.etapa === 'nome') {
+        const nomeCliente = body.trim();
+
+        if (nomeCliente.length < 3 || /^\d+$/.test(nomeCliente)) {
+          await enviarTexto(client, user, 'Me envie seu nome para eu salvar o agendamento certinho.');
+          return;
+        }
+
+        estado.nomeCliente = nomeCliente;
+        await enviarTexto(client, user, `Perfeito, ${nomeCliente}. Agora vamos escolher seu servico.`);
+        await enviarListaServicos(client, user, estado, servicos);
         return;
       }
 
