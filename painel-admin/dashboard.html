@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Painel Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Admin SaaS</p>
+          <h1>Seu painel</h1>
+          <p class="sidebar-copy">
+            Veja quantas barbearias estao cadastradas, quem pagou, quem nao pagou, por qual metodo e o status do
+            WhatsApp.
+          </p>
+        </div>
+
+        <div class="status-card">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Controle central</strong>
+            <p>Gestao de cobranca, vencimento, suporte e conexao do WhatsApp em um unico lugar.</p>
+          </div>
+        </div>
+
+        <div class="help-card">
+          <h2>Acesso protegido</h2>
+          <p>Esta area so abre com o seu PIN admin.</p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Administracao</p>
+            <h2>Gerencie todas as assinaturas</h2>
+            <p>
+              Acompanhe vencimento, forma de pagamento, ultimo pagamento, QR do WhatsApp e bloqueie ou reative cada
+              barbearia quando precisar.
+            </p>
+          </div>
+          <button id="refreshButton" class="primary-button">Atualizar painel</button>
+        </section>
+
+        <section class="metrics">
+          <article class="metric-card">
+            <span>Barbearias</span>
+            <strong id="totalAssinaturas">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>Ativas</span>
+            <strong id="assinaturasAtivas">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>Pendentes</span>
+            <strong id="assinaturasPendentes">0</strong>
+          </article>
+        </section>
+
+        <section class="subscription-grid">
+          <article class="panel-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Cadastro</p>
+                <h3>Link para enviar</h3>
+              </div>
+            </div>
+
+            <div class="form-grid compact-form">
+              <label>
+                Link do cadastro do barbeiro
+                <input id="cadastroLinkInput" type="text" readonly />
+              </label>
+              <button id="copiarCadastroLinkButton" type="button" class="primary-button">Copiar link</button>
+            </div>
+
+            <p id="cadastroLinkMessage" class="form-message"></p>
+
+            <div class="support-note">
+              <strong>Envie esse link para novas barbearias</strong>
+              <p>Esse e o site onde o barbeiro faz o cadastro, cria a senha e conecta o WhatsApp.</p>
+            </div>
+          </article>
+
+          <article class="panel-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Suporte</p>
+                <h3>Numero principal</h3>
+              </div>
+            </div>
+
+            <form id="suporteForm" class="form-grid compact-form">
+              <label>
+                Numero de suporte
+                <input id="suporteNumeroInput" type="text" />
+              </label>
+              <button type="submit" class="primary-button">Salvar suporte</button>
+            </form>
+
+            <p id="suporteMessage" class="form-message"></p>
+
+            <div class="support-note">
+              <strong id="supportNumberLabel">Suporte: --</strong>
+              <p>Esse numero aparece para os barbeiros no site de assinatura.</p>
+            </div>
+          </article>
+
+          <article class="panel-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Resumo</p>
+                <h3>Formas de pagamento</h3>
+              </div>
+            </div>
+
+            <div class="support-note">
+              <strong id="pagamentoResumo">PIX: 0 | BOLETO: 0</strong>
+              <p id="vencimentoResumo">Vencimentos 5: 0 | 19: 0 | 26: 0</p>
+            </div>
+          </article>
+        </section>
+
+        <section class="panel-card admin-card">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Financeiro</p>
+              <h3>Assinaturas cadastradas</h3>
+            </div>
+            <span id="assinaturaCount" class="badge">0 cadastros</span>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Barbearia</th>
+                  <th>Responsavel</th>
+                  <th>Pagamento</th>
+                  <th>Teste</th>
+                  <th>Vencimento</th>
+                  <th>WhatsApp</th>
+                  <th>Status</th>
+                  <th>Ultimo pagamento</th>
+                  <th>Observacoes</th>
+                  <th>Servicos</th>
+                  <th>Salvar</th>
+                  <th>Excluir</th>
+                </tr>
+              </thead>
+              <tbody id="assinaturasTable">
+                <tr>
+                  <td colspan="12">Nenhuma assinatura cadastrada.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/controle-interno/assets/admin.js"></script>
+  </body>
+</html>
