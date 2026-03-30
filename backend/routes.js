@@ -1,20 +1,3 @@
-// Endpoint para excluir assinatura (admin)
-router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  try {
-    // Remove serviços vinculados
-    await runAsync('DELETE FROM servicos_assinatura WHERE assinatura_id = ?', [id]);
-    // Remove a assinatura
-    const result = await runAsync('DELETE FROM assinaturas WHERE id = ?', [id]);
-    if (result.changes === 0) {
-      res.status(404).json({ error: 'Assinatura não encontrada.' });
-      return;
-    }
-    res.json({ sucesso: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 const crypto = require('crypto');
 const express = require('express');
 
@@ -39,6 +22,24 @@ const DIAS_SEMANA = [
   { value: 5, label: 'Sexta-feira' },
   { value: 6, label: 'Sabado' },
 ];
+
+// Endpoint para excluir assinatura (admin)
+router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Remove serviços vinculados
+    await runAsync('DELETE FROM servicos_assinatura WHERE assinatura_id = ?', [id]);
+    // Remove a assinatura
+    const result = await runAsync('DELETE FROM assinaturas WHERE id = ?', [id]);
+    if (result.changes === 0) {
+      res.status(404).json({ error: 'Assinatura não encontrada.' });
+      return;
+    }
+    res.json({ sucesso: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 function calcularProximoVencimento(diaVencimento) {
   const hoje = new Date();
