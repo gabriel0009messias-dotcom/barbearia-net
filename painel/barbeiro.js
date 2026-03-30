@@ -232,6 +232,10 @@ function atualizarStatusWhatsapp(status, qrCode) {
     return;
   }
 
+  if (status === 'erro') {
+    qrCodeImage.hidden = true;
+  }
+
   qrCodeImage.hidden = true;
 }
 
@@ -350,6 +354,10 @@ async function consultarStatusWhatsapp() {
   try {
     const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
+
+    if (status.status === 'erro') {
+      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o WhatsApp neste servidor.';
+    }
 
     if (status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
       clearInterval(whatsappPolling);
