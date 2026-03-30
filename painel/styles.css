@@ -757,6 +757,15 @@ select {
   color: var(--muted);
 }
 
+.login-payment-card {
+  margin-top: 14px;
+}
+
+.login-payment-card .landing-login-button {
+  width: 100%;
+  margin-top: 14px;
+}
+
 .pix-qr-panel {
   margin-top: 14px;
   display: grid;
