@@ -27,6 +27,16 @@ function fecharRecuperacao() {
   recuperacaoModal.hidden = true;
 }
 
+function normalizarMensagemRecuperacao(error) {
+  const mensagem = String(error?.message || '').toLowerCase();
+
+  if (mensagem.includes('gmail ainda nao esta configurada') || mensagem.includes('email ainda nao esta configurada')) {
+    return 'Recuperacao por e-mail ainda nao esta disponivel. Fale com o suporte da barbearia.';
+  }
+
+  return error?.message || 'Nao foi possivel concluir a recuperacao agora.';
+}
+
 function esconderPixBloqueado() {
   loginBlockedPixCard.hidden = true;
   loginBlockedPixQrPanel.hidden = true;
@@ -166,7 +176,7 @@ recuperacaoSolicitarForm.addEventListener('submit', async (event) => {
     recuperacaoMessage.textContent = payload.mensagem;
   } catch (error) {
     console.error(error);
-    recuperacaoMessage.textContent = error.message;
+    recuperacaoMessage.textContent = normalizarMensagemRecuperacao(error);
   }
 });
 
@@ -187,7 +197,7 @@ recuperacaoRedefinirForm.addEventListener('submit', async (event) => {
     recuperacaoMessage.textContent = payload.mensagem;
   } catch (error) {
     console.error(error);
-    recuperacaoMessage.textContent = error.message;
+    recuperacaoMessage.textContent = normalizarMensagemRecuperacao(error);
   }
 });
 
