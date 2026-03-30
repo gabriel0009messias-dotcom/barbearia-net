@@ -1,0 +1,12 @@
+{
+  "name": "barbearia-painel",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "scripts": {
+    "start": "echo \"Painel web: configure com create-react-app ou Vite\""
+  }
+}

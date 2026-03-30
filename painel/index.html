@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Barberflix</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <section id="authLanding" class="auth-landing">
+      <div class="landing-overlay"></div>
+      <header class="landing-topbar">
+        <div class="landing-brand">BARBERFLIX</div>
+        <div class="landing-topbar-actions">
+          <button class="landing-topbar-button" type="button" data-open-cadastro>Fazer cadastro</button>
+        </div>
+      </header>
+
+      <div class="landing-grid">
+        <div class="landing-copy">
+          <p class="landing-kicker">Assinatura mensal com WhatsApp integrado</p>
+          <h1>Agendamentos, QR Code e painel do barbeiro em um so lugar</h1>
+          <p class="landing-subcopy">
+            Entre no painel da sua barbearia ou clique em fazer cadastro para criar sua assinatura e testar tudo.
+          </p>
+        </div>
+
+        <div class="landing-panel">
+          <p class="eyebrow">Login do barbeiro</p>
+          <h2>Entre para continuar</h2>
+          <p class="landing-panel-copy">Use seu telefone ou e-mail cadastrado para abrir seu painel.</p>
+
+          <form id="loginBarbeiroForm" class="landing-login-form">
+            <input id="loginIdentificadorInput" type="text" placeholder="Telefone ou e-mail" required />
+            <input id="loginSenhaInput" type="password" placeholder="Senha" required />
+            <button type="submit" class="landing-login-button">Entrar</button>
+          </form>
+
+          <p id="loginBarbeiroMessage" class="form-message light-message"></p>
+
+          <button id="abrirRecuperacaoButton" class="landing-secondary-button forgot-link" type="button">
+            Esqueci minha senha
+          </button>
+
+          <div class="landing-cta-row">
+            <span>Ainda nao tem acesso?</span>
+            <button class="landing-secondary-button" type="button" data-open-cadastro>Quero fazer meu cadastro</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="recuperacaoModal" class="modal-shell" hidden>
+      <div
+        id="recuperacaoBackdrop"
+        class="modal-backdrop"
+        onclick="document.getElementById('recuperacaoModal').hidden = true"
+      ></div>
+      <div class="modal-card">
+        <button
+          id="fecharRecuperacaoButton"
+          class="modal-close"
+          type="button"
+          onclick="document.getElementById('recuperacaoModal').hidden = true"
+        >
+          Fechar
+        </button>
+        <p class="eyebrow">Recuperar senha</p>
+        <h2>Receba um codigo e crie uma nova senha</h2>
+        <p class="landing-panel-copy">
+          Escolha o telefone ou Gmail cadastrado. A recuperacao imediata funciona pelo telefone via WhatsApp.
+        </p>
+
+        <form id="recuperacaoSolicitarForm" class="form-grid">
+          <label>
+            Metodo
+            <select id="recuperacaoMetodoInput" required>
+              <option value="telefone">Telefone</option>
+              <option value="email">Gmail</option>
+            </select>
+          </label>
+
+          <label>
+            Telefone ou e-mail cadastrado
+            <input id="recuperacaoIdentificadorInput" type="text" required />
+          </label>
+
+          <button type="submit" class="landing-login-button">Enviar codigo</button>
+        </form>
+
+        <form id="recuperacaoRedefinirForm" class="form-grid top-space">
+          <label>
+            Codigo recebido
+            <input id="recuperacaoCodigoInput" type="text" inputmode="numeric" />
+          </label>
+
+          <label>
+            Nova senha
+            <input id="recuperacaoNovaSenhaInput" type="password" minlength="4" />
+          </label>
+
+          <button type="submit" class="landing-login-button">Redefinir senha</button>
+        </form>
+
+        <p id="recuperacaoMessage" class="form-message light-message"></p>
+      </div>
+    </section>
+
+    <script src="./landing.js"></script>
+  </body>
+</html>

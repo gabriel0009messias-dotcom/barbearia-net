@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cadastro da Barbearia</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <section class="auth-landing cadastro-landing">
+      <div class="landing-overlay"></div>
+      <header class="landing-topbar">
+        <div class="landing-brand">BARBERFLIX</div>
+        <div class="landing-topbar-actions">
+          <a class="landing-topbar-button link-button" href="/">Voltar para login</a>
+        </div>
+      </header>
+
+      <div class="cadastro-grid">
+        <div class="landing-copy cadastro-copy">
+          <p class="landing-kicker">Cadastro da barbearia</p>
+          <h1>Crie sua assinatura e conecte o WhatsApp da sua loja</h1>
+          <p class="landing-subcopy">
+            Cadastre sua barbearia, defina os servicos, escolha o vencimento e gere o QR Code para comecar o teste.
+          </p>
+          <div class="cadastro-copy-note">
+            <strong id="supportNumberLabel">Suporte: --</strong>
+            <p>Depois do cadastro, voce recebe 24 horas para testar o sistema completo.</p>
+          </div>
+        </div>
+
+        <div class="cadastro-panels">
+          <article class="landing-panel cadastro-form-panel">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Assinatura</p>
+                <h2>Cadastro da barbearia</h2>
+              </div>
+              <span class="badge">R$ 50,00 / mes</span>
+            </div>
+
+            <form id="assinaturaForm" class="form-grid">
+              <label>
+                Nome da barbearia
+                <input id="barbeariaNomeInput" type="text" required />
+              </label>
+
+              <label>
+                Nome do responsavel
+                <input id="responsavelNomeInput" type="text" required />
+              </label>
+
+              <label>
+                Telefone
+                <input id="telefoneAssinaturaInput" type="text" required />
+              </label>
+
+              <label>
+                E-mail
+                <input id="emailAssinaturaInput" type="email" />
+              </label>
+
+              <label>
+                Crie sua senha
+                <input id="senhaAssinaturaInput" type="password" minlength="4" required />
+              </label>
+
+              <label>
+                Forma de pagamento
+                <select id="metodoPagamentoInput" required></select>
+              </label>
+
+              <div id="pixInfoCard" class="support-note" hidden>
+                <strong>Pagamento via Pix</strong>
+                <p id="pixFavorecidoLabel">Favorecido: --</p>
+                <p id="pixChaveLabel">Chave Pix: --</p>
+              </div>
+
+              <label>
+                Dia do vencimento
+                <select id="diaVencimentoInput" required></select>
+              </label>
+
+              <label>
+                WhatsApp da barbearia
+                <input id="whatsappNumeroInput" type="text" required />
+              </label>
+
+              <div class="panel-card embedded-card">
+                <div class="card-header compact">
+                  <div>
+                    <p class="eyebrow">Funcionamento</p>
+                    <h3>Dias e horarios</h3>
+                  </div>
+                </div>
+
+                <div id="diasFuncionamentoInput" class="day-selector"></div>
+
+                <div class="schedule-grid">
+                  <label>
+                    Abre
+                    <input id="horarioAberturaInput" type="time" required />
+                  </label>
+
+                  <label>
+                    Almoco inicio
+                    <input id="horarioAlmocoInicioInput" type="time" required />
+                  </label>
+
+                  <label>
+                    Almoco fim
+                    <input id="horarioAlmocoFimInput" type="time" required />
+                  </label>
+
+                  <label>
+                    Fecha
+                    <input id="horarioFechamentoInput" type="time" required />
+                  </label>
+                </div>
+              </div>
+
+              <div class="service-builder">
+                <div class="service-builder-header">
+                  <strong>Servicos e precos</strong>
+                  <button id="addServiceButton" type="button" class="table-action">Adicionar servico</button>
+                </div>
+                <div id="serviceRows" class="service-rows"></div>
+              </div>
+
+              <button type="submit" class="landing-login-button">Cadastrar assinatura</button>
+            </form>
+
+            <p id="assinaturaFormMessage" class="form-message light-message"></p>
+          </article>
+
+          <article class="landing-panel cadastro-whatsapp-panel">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">WhatsApp</p>
+                <h2>Conecte seu numero</h2>
+              </div>
+              <span id="whatsappStatusBadge" class="badge">Aguardando cadastro</span>
+            </div>
+
+            <p id="whatsappHelpText" class="landing-panel-copy">
+              Depois do cadastro, clique em gerar QR Code para conectar o WhatsApp da barbearia e iniciar os testes.
+            </p>
+
+            <div class="cadastro-actions">
+              <button id="generateQrButton" class="landing-login-button" type="button" disabled>Gerar QR Code</button>
+                <a id="abrirPainelButton" class="landing-secondary-button strong-link" href="/barbeiro.html" hidden>Abrir painel do barbeiro</a>
+            </div>
+
+            <div class="qr-panel cadastro-qr-panel">
+              <img id="qrCodeImage" alt="QR Code do WhatsApp" hidden />
+              <p id="qrStatusMessage" class="form-message light-message">Nenhum QR Code gerado ainda.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <script src="./cadastro.js"></script>
+  </body>
+</html>

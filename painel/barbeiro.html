@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Painel do Barbeiro</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar">
+        <div>
+          <p class="eyebrow">Barbearia</p>
+          <h1>Painel do barbeiro</h1>
+          <p class="sidebar-copy">
+            Acompanhe agenda, faturamento, bloqueios, servicos e o WhatsApp da sua barbearia em um unico lugar.
+          </p>
+        </div>
+
+        <div class="status-card">
+          <span class="status-dot"></span>
+          <div>
+            <strong>Sistema operacional</strong>
+            <p>Atualize seus servicos, horarios e acompanhe os agendamentos em tempo real.</p>
+          </div>
+        </div>
+
+        <div class="help-card">
+          <h2>Suporte</h2>
+          <p id="supportNumberLabel">Suporte: --</p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section id="cadastroHero" class="hero">
+          <div>
+            <p class="eyebrow">Painel do barbeiro</p>
+            <h2>Gerencie sua barbearia</h2>
+            <p>Atualize servicos, conecte o WhatsApp e acompanhe sua agenda com o painel liberado.</p>
+          </div>
+          <div class="hero-actions">
+            <button id="logoutBarbeiroButton" class="table-action" type="button">Sair</button>
+            <button id="refreshButton" class="primary-button panel-only" type="button">Atualizar painel</button>
+          </div>
+        </section>
+
+        <section id="whatsappSection" class="panel-card">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">WhatsApp</p>
+              <h3>Conecte seu numero para receber agendamentos</h3>
+            </div>
+            <span id="whatsappStatusBadge" class="badge">Aguardando cadastro</span>
+          </div>
+
+          <div class="whatsapp-connect-grid">
+            <div>
+              <p id="whatsappHelpText" class="table-subcopy">
+                Gere o QR Code e escaneie com o WhatsApp da barbearia sempre que precisar conectar o atendimento.
+              </p>
+              <button id="generateQrButton" class="primary-button" type="button" disabled>Gerar QR Code</button>
+            </div>
+
+            <div class="qr-panel">
+              <img id="qrCodeImage" alt="QR Code do WhatsApp" hidden />
+              <p id="qrStatusMessage" class="form-message">Nenhum QR Code gerado ainda.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="painelLiberadoMessage" class="panel-card success-panel" hidden>
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Painel liberado</p>
+              <h3>Seu acesso esta ativo</h3>
+            </div>
+          </div>
+          <p class="table-subcopy">
+            Seu painel do barbeiro foi liberado. Agora voce pode acompanhar agenda, faturamento e bloqueios abaixo.
+          </p>
+        </section>
+
+        <section id="painelBloqueadoMessage" class="panel-card blocked-panel" hidden>
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Acesso bloqueado</p>
+              <h3>Sua assinatura nao esta liberada</h3>
+            </div>
+          </div>
+          <p id="blockedMessageText" class="table-subcopy">
+            Regularize o pagamento mensal para voltar a usar o sistema.
+          </p>
+        </section>
+
+        <section id="painelOperacional">
+          <section class="panel-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Configuracoes</p>
+                <h3>Atualize servicos e funcionamento</h3>
+              </div>
+            </div>
+
+            <form id="configuracoesBarbeiroForm" class="form-grid">
+              <div>
+                <p class="eyebrow">Dias de funcionamento</p>
+                <div id="diasFuncionamentoPainel" class="day-selector"></div>
+              </div>
+
+              <div class="schedule-grid">
+                <label>
+                  Abre
+                  <input id="painelHorarioAberturaInput" type="time" required />
+                </label>
+
+                <label>
+                  Almoco inicio
+                  <input id="painelHorarioAlmocoInicioInput" type="time" required />
+                </label>
+
+                <label>
+                  Almoco fim
+                  <input id="painelHorarioAlmocoFimInput" type="time" required />
+                </label>
+
+                <label>
+                  Fecha
+                  <input id="painelHorarioFechamentoInput" type="time" required />
+                </label>
+              </div>
+
+              <div class="service-builder">
+                <div class="service-builder-header">
+                  <strong>Servicos e precos atuais</strong>
+                  <button id="addPainelServiceButton" type="button" class="table-action">Adicionar servico</button>
+                </div>
+                <div id="painelServiceRows" class="service-rows"></div>
+              </div>
+
+              <button type="submit" class="primary-button">Salvar atualizacoes</button>
+            </form>
+
+            <p id="configuracoesMessage" class="form-message"></p>
+          </section>
+
+          <section class="metrics">
+            <article class="metric-card">
+              <span>Hoje</span>
+              <strong id="faturamentoDia">R$ 0,00</strong>
+            </article>
+            <article class="metric-card">
+              <span>Mes</span>
+              <strong id="faturamentoMes">R$ 0,00</strong>
+            </article>
+            <article class="metric-card">
+              <span>Ano</span>
+              <strong id="faturamentoAno">R$ 0,00</strong>
+            </article>
+          </section>
+
+          <section class="grid">
+            <article class="panel-card">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">Agenda</p>
+                  <h3>Agendamentos</h3>
+                </div>
+                <span id="agendamentoCount" class="badge">0 itens</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Servico</th>
+                      <th>Data</th>
+                      <th>Hora</th>
+                      <th>Status</th>
+                      <th>Acao</th>
+                    </tr>
+                  </thead>
+                  <tbody id="agendamentosTable">
+                    <tr>
+                      <td colspan="6">Nenhum agendamento encontrado.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel-card">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">Operacao</p>
+                  <h3>Bloquear horario</h3>
+                </div>
+              </div>
+
+              <form id="bloqueioForm" class="form-grid">
+                <label>
+                  Data
+                  <input id="dataInput" type="date" required />
+                </label>
+
+                <label>
+                  Hora
+                  <input id="horaInput" type="time" required />
+                </label>
+
+                <button type="submit" class="primary-button">Salvar bloqueio</button>
+              </form>
+
+              <p id="formMessage" class="form-message"></p>
+
+              <div class="card-header compact">
+                <div>
+                  <p class="eyebrow">Agenda interna</p>
+                  <h3>Bloqueios cadastrados</h3>
+                </div>
+              </div>
+              <ul id="bloqueiosList" class="list">
+                <li>Nenhum bloqueio cadastrado.</li>
+              </ul>
+            </article>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./barbeiro.js"></script>
+  </body>
+</html>
