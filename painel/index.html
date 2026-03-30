@@ -28,10 +28,10 @@
         <div class="landing-panel">
           <p class="eyebrow">Login do barbeiro</p>
           <h2>Entre para continuar</h2>
-          <p class="landing-panel-copy">Use seu telefone ou e-mail cadastrado para abrir seu painel.</p>
+          <p class="landing-panel-copy">Use seu e-mail cadastrado para abrir seu painel.</p>
 
           <form id="loginBarbeiroForm" class="landing-login-form">
-            <input id="loginIdentificadorInput" type="text" placeholder="Telefone ou e-mail" required />
+            <input id="loginIdentificadorInput" type="email" placeholder="Seu e-mail" required />
             <div class="password-field">
               <input id="loginSenhaInput" type="password" placeholder="Senha" required />
               <button class="password-toggle" type="button" data-toggle-password="loginSenhaInput">Mostrar</button>
@@ -86,21 +86,13 @@
         <p class="eyebrow">Recuperar senha</p>
         <h2>Receba um codigo e crie uma nova senha</h2>
         <p class="landing-panel-copy">
-          Escolha o telefone ou Gmail cadastrado. A recuperacao imediata funciona pelo telefone via WhatsApp.
+          Informe o e-mail cadastrado para receber o codigo e criar uma nova senha.
         </p>
 
         <form id="recuperacaoSolicitarForm" class="form-grid">
           <label>
-            Metodo
-            <select id="recuperacaoMetodoInput" required>
-              <option value="telefone">Telefone</option>
-              <option value="email">Gmail</option>
-            </select>
-          </label>
-
-          <label>
-            Telefone ou e-mail cadastrado
-            <input id="recuperacaoIdentificadorInput" type="text" required />
+            E-mail cadastrado
+            <input id="recuperacaoIdentificadorInput" type="email" required />
           </label>
 
           <button type="submit" class="landing-login-button">Enviar codigo</button>
