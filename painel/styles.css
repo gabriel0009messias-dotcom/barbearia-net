@@ -25,6 +25,7 @@ body {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   color: var(--text);
   background: linear-gradient(180deg, #111 0%, #181818 100%);
+  overflow-x: hidden;
 }
 
 button,
@@ -41,6 +42,9 @@ a {
   display: grid;
   grid-template-columns: 320px 1fr;
   min-height: 100vh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .auth-landing {
@@ -164,6 +168,7 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
   backdrop-filter: blur(12px);
+  min-width: 0;
 }
 
 .landing-panel h2 {
@@ -345,6 +350,7 @@ a {
 .cadastro-panels {
   display: grid;
   gap: 24px;
+  min-width: 0;
 }
 
 .cadastro-form-panel,
@@ -429,6 +435,9 @@ a {
   background:
     radial-gradient(circle at top left, rgba(184, 92, 56, 0.22), transparent 28%),
     linear-gradient(135deg, #efe3cf, #f7f2e8 45%, #e8dfd0);
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .hero,
@@ -447,12 +456,15 @@ a {
   gap: 20px;
   padding: 28px;
   border-radius: 28px;
+  min-width: 0;
 }
 
 .hero-actions {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 .hero-compact {
@@ -509,6 +521,8 @@ a {
 .panel-card {
   border-radius: 24px;
   padding: 24px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .collapsed-section {
@@ -555,11 +569,13 @@ a {
 
 .table-wrap {
   overflow-x: auto;
+  max-width: 100%;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
+  min-width: 0;
 }
 
 th,
@@ -584,6 +600,7 @@ th {
 .service-builder {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .embedded-card {
@@ -643,6 +660,7 @@ th {
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 20px;
   align-items: start;
+  min-width: 0;
 }
 
 .qr-panel {
@@ -654,6 +672,7 @@ th {
   border-radius: 18px;
   border: 1px dashed rgba(74, 53, 37, 0.18);
   background: rgba(255, 250, 241, 0.55);
+  min-width: 0;
 }
 
 .qr-panel img {
