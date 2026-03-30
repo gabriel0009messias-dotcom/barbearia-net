@@ -1,8 +1,9 @@
 const crypto = require('crypto');
 const express = require('express');
+const nodemailer = require('nodemailer');
 
 const db = require('./database');
-const { iniciarSessao, statusSessao, clienteSessao } = require('./whatsappManager');
+const { iniciarSessao, statusSessao } = require('./whatsappManager');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -524,19 +525,75 @@ function normalizarIdentificador(identificador = '') {
   return String(identificador).trim();
 }
 
-function normalizarTelefoneWhatsapp(telefone = '') {
-  const digitos = String(telefone).replace(/\D/g, '');
-
-  if (!digitos) {
-    return null;
-  }
-
-  const numeroBrasil = digitos.startsWith('55') ? digitos : `55${digitos}`;
-  return `${numeroBrasil}@c.us`;
-}
-
 function criarCodigoRecuperacao() {
   return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function criarTransporteEmail() {
+  const gmailUser = String(process.env.GMAIL_USER || '').trim();
+  const gmailPassword = String(process.env.GMAIL_APP_PASSWORD || '').trim();
+  const smtpHost = String(process.env.SMTP_HOST || '').trim();
+  const smtpUser = String(process.env.SMTP_USER || '').trim();
+  const smtpPass = String(process.env.SMTP_PASS || '').trim();
+
+  if (gmailUser && gmailPassword) {
+    return {
+      from: String(process.env.GMAIL_FROM || gmailUser).trim(),
+      transport: nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: gmailUser,
+          pass: gmailPassword,
+        },
+      }),
+    };
+  }
+
+  if (smtpHost && smtpUser && smtpPass) {
+    return {
+      from: String(process.env.SMTP_FROM || smtpUser).trim(),
+      transport: nodemailer.createTransport({
+        host: smtpHost,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: String(process.env.SMTP_SECURE || '').trim() === 'true',
+        auth: {
+          user: smtpUser,
+          pass: smtpPass,
+        },
+      }),
+    };
+  }
+
+  return null;
+}
+
+async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
+  const email = String(destino || '').trim();
+  const config = criarTransporteEmail();
+
+  if (!email) {
+    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+  }
+
+  if (!config) {
+    const error = new Error(
+      'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no Render.'
+    );
+    error.statusCode = 501;
+    throw error;
+  }
+
+  await config.transport.sendMail({
+    from: config.from,
+    to: email,
+    subject: 'Codigo de recuperacao do Barberflix',
+    text: `Codigo de recuperacao do Barberflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
+    html: `<p>Codigo de recuperacao do Barberflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
+  });
+}
+
+function erroHorarioJaOcupado(error) {
+  return error?.code === 'SQLITE_CONSTRAINT' || /unique|constraint/i.test(String(error?.message || ''));
 }
 
 function assinaturaPertenceAoBarbeiro(req, res) {
@@ -618,6 +675,11 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
       status: 'confirmado',
     });
   } catch (error) {
+    if (erroHorarioJaOcupado(error)) {
+      res.status(409).json({ error: 'Esse horario ja foi agendado por outro cliente e nao esta mais disponivel.' });
+      return;
+    }
+
     res.status(500).json({ error: error.message });
   }
 });
@@ -784,7 +846,7 @@ router.post('/barbeiro/login', async (req, res) => {
   const { identificador, senha } = req.body;
 
   if (!identificador || !senha) {
-    res.status(400).json({ error: 'Informe seu telefone ou e-mail e a senha.' });
+    res.status(400).json({ error: 'Informe seu Gmail e a senha.' });
     return;
   }
 
@@ -829,8 +891,8 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
   const identificador = normalizarIdentificador(req.body.identificador);
   const metodo = String(req.body.metodo || '').trim().toLowerCase();
 
-  if (!identificador || !['telefone', 'email'].includes(metodo)) {
-    res.status(400).json({ error: 'Informe telefone ou e-mail e escolha um metodo valido.' });
+  if (!identificador || metodo !== 'email') {
+    res.status(400).json({ error: 'Informe seu Gmail cadastrado para recuperar a senha.' });
     return;
   }
 
@@ -851,28 +913,8 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
       return;
     }
 
-    if (metodo === 'email') {
-      res.status(501).json({
-        error:
-          'Recuperacao por Gmail ainda nao esta configurada neste servidor. Use o telefone via WhatsApp ou fale com o suporte.',
-      });
-      return;
-    }
-
-    const client = clienteSessao(assinatura.id);
-
-    if (!client) {
-      res.status(409).json({
-        error:
-          'O WhatsApp dessa barbearia nao esta conectado agora. Conecte o numero ou fale com o suporte para redefinir a senha.',
-      });
-      return;
-    }
-
-    const destino = normalizarTelefoneWhatsapp(assinatura.whatsapp_numero || assinatura.telefone);
-
-    if (!destino) {
-      res.status(400).json({ error: 'Essa barbearia nao possui telefone valido para recuperar a senha.' });
+    if (!assinatura.email) {
+      res.status(400).json({ error: 'Essa barbearia nao possui Gmail cadastrado para recuperar a senha.' });
       return;
     }
 
@@ -880,21 +922,18 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
     passwordRecoveryRequests.set(assinatura.id, {
       hash: gerarHashSenha(codigo, assinatura.senha_salt),
       expiresAt: Date.now() + 15 * 60 * 1000,
-      metodo: 'telefone',
-      identificador,
+      metodo: 'email',
+      identificador: assinatura.email,
     });
 
-    await client.sendText(
-      destino,
-      `Codigo de recuperacao do Barberflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`
-    );
+    await enviarCodigoRecuperacaoPorEmail(assinatura.email, codigo);
 
     res.json({
       ok: true,
-      mensagem: 'Enviamos um codigo de recuperacao para o telefone da barbearia no WhatsApp.',
+      mensagem: 'Enviamos um codigo de recuperacao para o Gmail da barbearia.',
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 
