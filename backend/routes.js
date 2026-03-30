@@ -375,6 +375,29 @@ async function carregarAssinaturaPorToken(token) {
   return assinatura;
 }
 
+async function carregarAssinaturaPorBridgeToken(token) {
+  if (!token) {
+    return null;
+  }
+
+  const assinaturaOriginal = await getAsync('SELECT * FROM assinaturas WHERE whatsapp_bridge_token = ?', [token]);
+  const assinatura = await sincronizarStatusPorVencimento(assinaturaOriginal);
+
+  if (!assinatura) {
+    return null;
+  }
+
+  const acesso = avaliarAcessoAssinatura(assinatura);
+
+  if (!acesso.liberado) {
+    const error = new Error(acesso.mensagem);
+    error.statusCode = 403;
+    throw error;
+  }
+
+  return assinatura;
+}
+
 async function requireBarbeiro(req, res, next) {
   try {
     const token = req.headers['x-barbeiro-token'];
@@ -386,6 +409,28 @@ async function requireBarbeiro(req, res, next) {
     }
 
     req.barbeiroToken = token;
+    req.assinatura = assinatura;
+    next();
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+}
+
+async function requirePainelOuBridge(req, res, next) {
+  try {
+    const barberToken = req.headers['x-barbeiro-token'];
+    const bridgeToken = req.headers['x-whatsapp-bridge-token'];
+    const assinatura = barberToken
+      ? await carregarAssinaturaPorToken(barberToken)
+      : await carregarAssinaturaPorBridgeToken(bridgeToken);
+
+    if (!assinatura) {
+      res.status(401).json({ error: 'Acesso da assinatura nao autorizado.' });
+      return;
+    }
+
+    req.barbeiroToken = barberToken || null;
+    req.whatsappBridgeToken = bridgeToken || null;
     req.assinatura = assinatura;
     next();
   } catch (error) {
@@ -503,7 +548,7 @@ function assinaturaPertenceAoBarbeiro(req, res) {
   return true;
 }
 
-router.get('/agendamentos', requireBarbeiro, (req, res) => {
+router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
   const query = `
     SELECT
       a.id,
@@ -530,7 +575,7 @@ router.get('/agendamentos', requireBarbeiro, (req, res) => {
   });
 });
 
-router.post('/agendamentos', requireBarbeiro, async (req, res) => {
+router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
   const { cliente, telefone, servicoId, servicoNome, servicoPreco, data, hora } = req.body;
 
   if (!telefone || !data || !hora || (!servicoId && !servicoNome)) {
@@ -576,7 +621,7 @@ router.post('/agendamentos', requireBarbeiro, async (req, res) => {
   }
 });
 
-router.delete('/agendamentos/:id', requireBarbeiro, (req, res) => {
+router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
   db.run('DELETE FROM agendamentos WHERE id = ?', [id], function onDelete(err) {
@@ -625,7 +670,7 @@ router.get('/faturamento', requireBarbeiro, (req, res) => {
   });
 });
 
-router.get('/bloqueios', requireBarbeiro, (req, res) => {
+router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
   db.all('SELECT * FROM bloqueios ORDER BY data ASC, hora ASC', [], (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
@@ -636,7 +681,7 @@ router.get('/bloqueios', requireBarbeiro, (req, res) => {
   });
 });
 
-router.post('/bloqueios', requireBarbeiro, (req, res) => {
+router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
   const { data, hora } = req.body;
 
   if (!data || !hora) {
@@ -1155,7 +1200,40 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
   }
 });
 
-router.get('/publico/assinaturas/:id/acesso', requireBarbeiro, async (req, res) => {
+router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    if (!assinaturaPertenceAoBarbeiro(req, res)) {
+      return;
+    }
+
+    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const bridgeToken = assinatura.whatsapp_bridge_token || crypto.randomBytes(24).toString('hex');
+
+    if (bridgeToken !== assinatura.whatsapp_bridge_token) {
+      await runAsync(
+        `UPDATE assinaturas
+         SET whatsapp_bridge_token = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [bridgeToken, id]
+      );
+    }
+
+    res.json({ token: bridgeToken });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/publico/assinaturas/:id/acesso', requirePainelOuBridge, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1183,7 +1261,7 @@ router.get('/publico/assinaturas/:id/acesso', requireBarbeiro, async (req, res) 
   }
 });
 
-router.get('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
+router.get('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -1207,7 +1285,7 @@ router.get('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
   }
 });
 
-router.patch('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
+router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res) => {
   const { id } = req.params;
   const {
     diasFuncionamento,

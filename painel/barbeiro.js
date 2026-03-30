@@ -108,6 +108,14 @@ async function buscarJson(url, options = {}) {
   return response.json();
 }
 
+async function buscarBridgeToken() {
+  const payload = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/bridge-token`, {
+    method: 'POST',
+  });
+
+  return payload.token;
+}
+
 async function buscarJsonBridge(url, options = {}) {
   try {
     const response = await fetch(url, options);
@@ -539,12 +547,13 @@ generateQrButton.addEventListener('click', async () => {
 
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
+    const bridgeToken = await buscarBridgeToken();
     await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         apiBaseUrl: window.location.origin,
-        barberToken: authToken,
+        bridgeToken,
       }),
     });
 

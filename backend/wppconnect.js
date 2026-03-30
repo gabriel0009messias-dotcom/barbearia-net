@@ -35,6 +35,7 @@ function obterSessao(assinaturaId) {
       ultimoErro: null,
       apiBaseUrl: null,
       barberToken: null,
+      bridgeToken: null,
     });
   }
 
@@ -53,8 +54,9 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
   sessao.ultimoErro = null;
   sessao.apiBaseUrl = contexto.apiBaseUrl || sessao.apiBaseUrl;
   sessao.barberToken = contexto.barberToken || sessao.barberToken;
+  sessao.bridgeToken = contexto.bridgeToken || sessao.bridgeToken;
 
-  if (!sessao.apiBaseUrl || !sessao.barberToken) {
+  if (!sessao.apiBaseUrl || (!sessao.bridgeToken && !sessao.barberToken)) {
     sessao.status = 'erro';
     sessao.ultimoErro = 'Abra o painel publicado, faca login e gere o QR Code por la para autorizar o bot local.';
     return null;
@@ -97,6 +99,7 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
         assinaturaId: Number(assinaturaId),
         apiBaseUrl: sessao.apiBaseUrl,
         barberToken: sessao.barberToken,
+        bridgeToken: sessao.bridgeToken,
       });
       console.log(`Bot do WhatsApp conectado para a assinatura ${assinaturaId}.`);
       return client;

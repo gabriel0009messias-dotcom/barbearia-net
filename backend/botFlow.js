@@ -21,6 +21,7 @@ function definirContextoSessao(sessionKey, options = {}) {
   contextosPorSessao.set(sessionKey, {
     apiBaseUrl: options.apiBaseUrl || null,
     barberToken: options.barberToken || null,
+    bridgeToken: options.bridgeToken || null,
     assinaturaId: options.assinaturaId || null,
   });
 }
@@ -82,13 +83,13 @@ function runAsync(sql, params = []) {
 
 function usarApiRemota(sessionKey) {
   const contexto = getContextoSessao(sessionKey);
-  return Boolean(contexto.apiBaseUrl && contexto.barberToken);
+  return Boolean(contexto.apiBaseUrl && (contexto.bridgeToken || contexto.barberToken));
 }
 
 async function buscarApi(sessionKey, path, options = {}) {
   const contexto = getContextoSessao(sessionKey);
 
-  if (!contexto.apiBaseUrl || !contexto.barberToken) {
+  if (!contexto.apiBaseUrl || (!contexto.bridgeToken && !contexto.barberToken)) {
     throw new Error('Bot local sem conexao autorizada com a API publicada.');
   }
 
@@ -96,7 +97,8 @@ async function buscarApi(sessionKey, path, options = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'x-barbeiro-token': contexto.barberToken,
+      ...(contexto.bridgeToken ? { 'x-whatsapp-bridge-token': contexto.bridgeToken } : {}),
+      ...(contexto.barberToken ? { 'x-barbeiro-token': contexto.barberToken } : {}),
       ...(options.headers || {}),
     },
   });
