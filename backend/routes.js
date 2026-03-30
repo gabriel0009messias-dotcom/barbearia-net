@@ -520,7 +520,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
 
     res.json({
       suporteNumero,
-      valorMensal: 60,
+      valorMensal: 1,
       pix: {
         chave: '119.063.635.28',
         favorecido: 'Gabriel Messias Rios',
@@ -940,7 +940,7 @@ router.post('/publico/assinaturas', async (req, res) => {
         email || '',
         metodoPagamento,
         dia,
-        60,
+        1,
         'teste',
         suporteNumero,
         proximoVencimento,
@@ -1233,7 +1233,7 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
 
     res.json({
       suporteNumero,
-      valorMensal: 60,
+      valorMensal: 1,
       diasVencimento: DIAS_VENCIMENTO,
       metodosPagamento: METODOS_PAGAMENTO,
       statusDisponiveis: STATUS_ASSINATURA,

@@ -54,7 +54,7 @@ let assinaturaAtualId = null;
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let whatsappPolling = null;
 let pixConfig = null;
-let valorMensalAtual = 60;
+let valorMensalAtual = 1;
 
 function formatarData(data) {
   if (!data) return '-';
@@ -305,7 +305,7 @@ async function carregarPainelBarbeiro() {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
-    valorMensalAtual = Number(config.valorMensal || 60);
+    valorMensalAtual = Number(config.valorMensal || 1);
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;

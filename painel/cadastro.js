@@ -38,7 +38,7 @@ let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let assinaturaAtualId = null;
 let whatsappPolling = null;
 let pixConfig = null;
-let valorMensalAtual = 60;
+let valorMensalAtual = 1;
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -225,7 +225,7 @@ async function carregarConfiguracao() {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
-    valorMensalAtual = Number(config.valorMensal || 60);
+    valorMensalAtual = Number(config.valorMensal || 1);
     metodoPagamentoInput.innerHTML = config.metodosPagamento
       .map((metodo) => `<option value="${metodo}">${metodo.toUpperCase()}</option>`)
       .join('');
