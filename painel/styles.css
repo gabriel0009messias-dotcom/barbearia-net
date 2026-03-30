@@ -194,6 +194,26 @@ a {
   color: #fff;
 }
 
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 96px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+
 .landing-login-form input::placeholder {
   color: rgba(255, 255, 255, 0.58);
 }

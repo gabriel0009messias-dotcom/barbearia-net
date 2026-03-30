@@ -109,6 +109,20 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+document.querySelectorAll('[data-toggle-password]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = document.getElementById(button.dataset.togglePassword);
+
+    if (!input) {
+      return;
+    }
+
+    const mostrar = input.type === 'password';
+    input.type = mostrar ? 'text' : 'password';
+    button.textContent = mostrar ? 'Ocultar' : 'Mostrar';
+  });
+});
+
 loginBarbeiroForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   esconderPixBloqueado();

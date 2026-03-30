@@ -32,7 +32,10 @@
 
           <form id="loginBarbeiroForm" class="landing-login-form">
             <input id="loginIdentificadorInput" type="text" placeholder="Telefone ou e-mail" required />
-            <input id="loginSenhaInput" type="password" placeholder="Senha" required />
+            <div class="password-field">
+              <input id="loginSenhaInput" type="password" placeholder="Senha" required />
+              <button class="password-toggle" type="button" data-toggle-password="loginSenhaInput">Mostrar</button>
+            </div>
             <button type="submit" class="landing-login-button">Entrar</button>
           </form>
 
@@ -105,7 +108,10 @@
 
           <label>
             Nova senha
-            <input id="recuperacaoNovaSenhaInput" type="password" minlength="4" />
+            <div class="password-field">
+              <input id="recuperacaoNovaSenhaInput" type="password" minlength="4" />
+              <button class="password-toggle" type="button" data-toggle-password="recuperacaoNovaSenhaInput">Mostrar</button>
+            </div>
           </label>
 
           <button type="submit" class="landing-login-button">Redefinir senha</button>
