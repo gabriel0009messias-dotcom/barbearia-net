@@ -4,6 +4,7 @@ const assinaturasAtivas = document.getElementById('assinaturasAtivas');
 const assinaturasPendentes = document.getElementById('assinaturasPendentes');
 const assinaturasTable = document.getElementById('assinaturasTable');
 const refreshButton = document.getElementById('refreshButton');
+const logoutButton = document.getElementById('logoutButton');
 const suporteForm = document.getElementById('suporteForm');
 const suporteNumeroInput = document.getElementById('suporteNumeroInput');
 const suporteMessage = document.getElementById('suporteMessage');
@@ -21,9 +22,20 @@ if (!adminToken) {
   window.location.href = '/controle-interno';
 }
 
-// Substituir pelo IP local para compartilhamento na rede
-cadastroLinkInput.value = `http://192.168.0.107:3001/`;
-cadastroLinkInput.value = `${window.location.origin}/`;
+// Exibir o link correto de cadastro conforme ambiente
+const renderLink = 'https://barbearia-net.onrender.com/';
+const hostname = window.location.hostname;
+const usandoServidorLocal =
+  hostname === 'localhost' ||
+  hostname === '127.0.0.1' ||
+  hostname === '::1' ||
+  hostname.endsWith('.local');
+
+if (window.location.hostname.includes('onrender.com') || usandoServidorLocal) {
+  cadastroLinkInput.value = renderLink;
+} else {
+  cadastroLinkInput.value = `${window.location.origin}/`;
+}
 
 function formatarData(data) {
   if (!data) return '-';
@@ -262,6 +274,11 @@ assinaturasTable.addEventListener('click', async (event) => {
 });
 
 refreshButton.addEventListener('click', carregarPainelAdmin);
+
+logoutButton.addEventListener('click', () => {
+  localStorage.removeItem('barbearia_admin_token');
+  window.location.href = '/controle-interno';
+});
 
 copiarCadastroLinkButton.addEventListener('click', async () => {
   try {

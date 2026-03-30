@@ -541,32 +541,25 @@ router.get('/publico/assinatura-config', async (req, res) => {
   }
 });
 
+router.get('/publico/pix/chave', (req, res) => {
+  const chavePix = '11906363528';
+  res.json({ chave: chavePix, tipo: 'cpf' });
+});
+
+router.post('/publico/pix/qrcode', async (req, res) => {
+  const { valor, descricao } = req.body;
+  const chavePix = '11906363528';
+  const nomeRecebedor = 'Barbearia Exemplo';
+  const cidade = 'SAO PAULO';
+  const txid = `BARBER${Date.now()}`;
+  const valorFormatado = Number.isFinite(Number(valor)) ? Number(valor).toFixed(2) : '0.00';
+  const payload = `00020126360014BR.GOV.BCB.PIX0111${chavePix}520400005303986540${valorFormatado}5802BR5915${nomeRecebedor}6009${cidade}62070503${txid}6304`;
+
+  res.json({ payload, txid, valor, descricao });
+});
+
 router.post('/barbeiro/login', async (req, res) => {
   const { identificador, senha } = req.body;
-    // --- PIX ---
-    // Endpoint para retornar a chave PIX fixa
-    router.get('/publico/pix/chave', (req, res) => {
-      // Chave PIX fixa (CPF)
-      const chavePix = '11906363528';
-      res.json({ chave: chavePix, tipo: 'cpf' });
-    });
-
-    // Endpoint para gerar QR Code dinâmico PIX (exemplo)
-    // Para produção, integre com API de terceiros (Gerencianet, Mercado Pago, etc)
-    router.post('/publico/pix/qrcode', async (req, res) => {
-      const { valor, descricao } = req.body;
-      // Exemplo: gerar payload estático (não faz cobrança real)
-      // Para produção, use API de cobrança instantânea do seu banco ou gateway
-      const chavePix = '11906363528';
-      const nomeRecebedor = 'Barbearia Exemplo';
-      const cidade = 'SAO PAULO';
-      const txid = 'BARBER' + Date.now();
-      // Payload Pix Copia e Cola (simples, sem validação)
-      const payload = `00020126360014BR.GOV.BCB.PIX0111${chavePix}520400005303986540${valor ? valor.toFixed(2) : '0.00'}5802BR5915${nomeRecebedor}6009${cidade}62070503${txid}6304`;
-      // Para produção, gere o CRC16 do payload e adicione ao final
-      // Aqui, retornamos o payload simples para testes
-      res.json({ payload, txid, valor, descricao });
-    });
 
   if (!identificador || !senha) {
     res.status(400).json({ error: 'Informe seu telefone ou e-mail e a senha.' });

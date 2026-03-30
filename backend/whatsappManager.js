@@ -1,7 +1,16 @@
-const wppconnect = require('@wppconnect-team/wppconnect');
 const { attachBotHandlers } = require('./botFlow');
 
 const sessoes = new Map();
+let wppconnectInstance = null;
+
+function obterWppconnect() {
+  if (!wppconnectInstance) {
+    // Carrega o WPPConnect somente quando alguem realmente iniciar uma sessao.
+    wppconnectInstance = require('@wppconnect-team/wppconnect');
+  }
+
+  return wppconnectInstance;
+}
 
 function obterSessao(assinaturaId) {
   if (!sessoes.has(assinaturaId)) {
@@ -26,6 +35,8 @@ async function iniciarSessao(assinaturaId) {
 
   sessao.status = 'iniciando';
   sessao.ultimoErro = null;
+
+  const wppconnect = obterWppconnect();
 
   sessao.startPromise = wppconnect
     .create({
