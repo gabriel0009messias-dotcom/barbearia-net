@@ -558,7 +558,8 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
       s.preco,
       a.data,
       a.hora,
-      a.status
+      a.status,
+      a.lembrete_15_enviado_em
     FROM agendamentos a
     LEFT JOIN clientes c ON c.id = a.cliente_id
     LEFT JOIN servicos s ON s.id = a.servico_id
@@ -637,6 +638,30 @@ router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
 
     res.json({ success: true });
   });
+});
+
+router.post('/agendamentos/:id/lembrete-15', requirePainelOuBridge, async (req, res) => {
+  const { id } = req.params;
+  const enviadoEm = String(req.body?.enviadoEm || new Date().toISOString());
+
+  try {
+    const resultado = await runAsync(
+      `UPDATE agendamentos
+       SET lembrete_15_enviado_em = ?
+       WHERE id = ?
+         AND lembrete_15_enviado_em IS NULL`,
+      [enviadoEm, id]
+    );
+
+    if (!resultado.changes) {
+      res.json({ ok: true, atualizado: false });
+      return;
+    }
+
+    res.json({ ok: true, atualizado: true, enviadoEm });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 router.get('/faturamento', requireBarbeiro, (req, res) => {

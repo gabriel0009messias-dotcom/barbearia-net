@@ -158,6 +158,7 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'senha_hash', 'TEXT');
   garantirColuna('assinaturas', 'senha_salt', 'TEXT');
   garantirColuna('assinaturas', 'whatsapp_bridge_token', 'TEXT');
+  garantirColuna('agendamentos', 'lembrete_15_enviado_em', 'TEXT');
 
   db.run(`UPDATE assinaturas
           SET metodo_pagamento = 'pix'
