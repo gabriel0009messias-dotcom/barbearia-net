@@ -55,6 +55,7 @@ let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let whatsappPolling = null;
 let pixConfig = null;
 let valorMensalAtual = 1;
+let whatsappBridgeUrl = null;
 
 function formatarData(data) {
   if (!data) return '-';
@@ -102,6 +103,31 @@ async function buscarJson(url, options = {}) {
   }
 
   return response.json();
+}
+
+async function buscarJsonBridge(url, options = {}) {
+  const response = await fetch(url, options);
+
+  if (!response.ok) {
+    let detalhe = '';
+
+    try {
+      const payload = await response.json();
+      detalhe = payload?.error ? payload.error : '';
+    } catch (error) {
+      detalhe = '';
+    }
+
+    const erro = new Error(detalhe || 'Nao consegui falar com o bot local do WhatsApp.');
+    erro.status = response.status;
+    throw erro;
+  }
+
+  return response.json();
+}
+
+function getWhatsappBridgeBase() {
+  return String(whatsappBridgeUrl || 'http://127.0.0.1:3010').replace(/\/$/, '');
 }
 
 function limparSessaoBarbeiro() {
@@ -310,6 +336,7 @@ async function carregarPainelBarbeiro() {
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
     valorMensalAtual = Number(config.valorMensal || 1);
+    whatsappBridgeUrl = config.whatsappBridgeUrl || 'http://127.0.0.1:3010';
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
@@ -352,11 +379,11 @@ async function consultarStatusWhatsapp() {
   }
 
   try {
-    const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
+    const status = await buscarJsonBridge(`${getWhatsappBridgeBase()}/sessions/${assinaturaAtualId}/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
 
     if (status.status === 'erro') {
-      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o WhatsApp neste servidor.';
+      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o bot local do WhatsApp.';
     }
 
     if (status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
@@ -365,10 +392,8 @@ async function consultarStatusWhatsapp() {
     }
   } catch (error) {
     console.error(error);
-    if (tratarErroSessao(error)) {
-      return;
-    }
-    qrStatusMessage.textContent = 'Nao consegui consultar o status do WhatsApp.';
+    qrStatusMessage.textContent =
+      'Nao consegui falar com o bot local do WhatsApp. Abra a pasta do projeto e rode backend\\iniciar-whatsapp.bat ou npm run bot dentro de backend.';
   }
 }
 
@@ -467,8 +492,13 @@ generateQrButton.addEventListener('click', async () => {
 
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
-    await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
+    await buscarJsonBridge(`${getWhatsappBridgeBase()}/sessions/${assinaturaAtualId}/start`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiBaseUrl: window.location.origin,
+        barberToken: authToken,
+      }),
     });
 
     await consultarStatusWhatsapp();

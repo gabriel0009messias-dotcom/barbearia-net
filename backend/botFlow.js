@@ -1,6 +1,7 @@
 const db = require('./database');
 
 const estadosPorSessao = new Map();
+const contextosPorSessao = new Map();
 const mensagensEnviadasPeloBot = new Set();
 
 function getEstados(sessionKey) {
@@ -14,6 +15,18 @@ function getEstados(sessionKey) {
 function resetarEstado(sessionKey, user) {
   const estados = getEstados(sessionKey);
   estados[user] = { etapa: 'inicio' };
+}
+
+function definirContextoSessao(sessionKey, options = {}) {
+  contextosPorSessao.set(sessionKey, {
+    apiBaseUrl: options.apiBaseUrl || null,
+    barberToken: options.barberToken || null,
+    assinaturaId: options.assinaturaId || null,
+  });
+}
+
+function getContextoSessao(sessionKey) {
+  return contextosPorSessao.get(sessionKey) || {};
 }
 
 function normalizarTexto(texto = '') {
@@ -67,7 +80,42 @@ function runAsync(sql, params = []) {
   });
 }
 
-async function carregarServicos(assinaturaId) {
+function usarApiRemota(sessionKey) {
+  const contexto = getContextoSessao(sessionKey);
+  return Boolean(contexto.apiBaseUrl && contexto.barberToken);
+}
+
+async function buscarApi(sessionKey, path, options = {}) {
+  const contexto = getContextoSessao(sessionKey);
+
+  if (!contexto.apiBaseUrl || !contexto.barberToken) {
+    throw new Error('Bot local sem conexao autorizada com a API publicada.');
+  }
+
+  const response = await fetch(`${String(contexto.apiBaseUrl).replace(/\/$/, '')}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-barbeiro-token': contexto.barberToken,
+      ...(options.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(payload?.error || `Falha ao acessar ${path}`);
+  }
+
+  return payload;
+}
+
+async function carregarServicos(assinaturaId, sessionKey) {
+  if (usarApiRemota(sessionKey) && assinaturaId) {
+    const assinatura = await buscarApi(sessionKey, `/api/publico/assinaturas/${assinaturaId}`);
+    return assinatura.servicos || [];
+  }
+
   if (assinaturaId) {
     const servicosAssinatura = await allAsync(
       `SELECT id, nome, preco
@@ -85,7 +133,19 @@ async function carregarServicos(assinaturaId) {
   return allAsync('SELECT id, nome, preco FROM servicos ORDER BY id ASC');
 }
 
-async function carregarConfiguracaoAgenda(assinaturaId) {
+async function carregarConfiguracaoAgenda(assinaturaId, sessionKey) {
+  if (usarApiRemota(sessionKey) && assinaturaId) {
+    const assinatura = await buscarApi(sessionKey, `/api/publico/assinaturas/${assinaturaId}`);
+
+    return {
+      diasFuncionamento: assinatura.dias_funcionamento || [1, 2, 3, 4, 5, 6],
+      horarioAbertura: assinatura.horario_abertura || '08:00',
+      horarioAlmocoInicio: assinatura.horario_almoco_inicio || '12:00',
+      horarioAlmocoFim: assinatura.horario_almoco_fim || '13:00',
+      horarioFechamento: assinatura.horario_fechamento || '18:00',
+    };
+  }
+
   if (!assinaturaId) {
     return {
       diasFuncionamento: [1, 2, 3, 4, 5, 6],
@@ -117,7 +177,11 @@ async function carregarConfiguracaoAgenda(assinaturaId) {
   };
 }
 
-async function carregarAcessoAssinatura(assinaturaId) {
+async function carregarAcessoAssinatura(assinaturaId, sessionKey) {
+  if (usarApiRemota(sessionKey) && assinaturaId) {
+    return buscarApi(sessionKey, `/api/publico/assinaturas/${assinaturaId}/acesso`);
+  }
+
   if (!assinaturaId) {
     return {
       liberado: true,
@@ -254,7 +318,21 @@ function horariosPadrao(configuracaoAgenda) {
   return horarios;
 }
 
-async function buscarHorariosLivres(data, configuracaoAgenda) {
+async function buscarHorariosLivres(data, configuracaoAgenda, sessionKey) {
+  if (usarApiRemota(sessionKey)) {
+    const [agendamentos, bloqueios] = await Promise.all([
+      buscarApi(sessionKey, '/api/agendamentos'),
+      buscarApi(sessionKey, '/api/bloqueios'),
+    ]);
+
+    const ocupados = [
+      ...agendamentos.filter((item) => item.data === data && item.status === 'confirmado').map((item) => item.hora),
+      ...bloqueios.filter((item) => item.data === data).map((item) => item.hora),
+    ];
+
+    return horariosPadrao(configuracaoAgenda).filter((hora) => !ocupados.includes(hora));
+  }
+
   const agendamentos = await allAsync(
     'SELECT hora FROM agendamentos WHERE data = ? AND status = "confirmado"',
     [data]
@@ -265,11 +343,11 @@ async function buscarHorariosLivres(data, configuracaoAgenda) {
   return horariosPadrao(configuracaoAgenda).filter((hora) => !ocupados.includes(hora));
 }
 
-async function buscarDatasDisponiveis(configuracaoAgenda) {
+async function buscarDatasDisponiveis(configuracaoAgenda, sessionKey) {
   const datas = proximasDatas(configuracaoAgenda);
   const disponibilidade = await Promise.all(
     datas.map(async (data) => {
-      const horariosLivres = await buscarHorariosLivres(data.valor, configuracaoAgenda);
+      const horariosLivres = await buscarHorariosLivres(data.valor, configuracaoAgenda, sessionKey);
       return horariosLivres.length > 0 ? data : null;
     })
   );
@@ -277,7 +355,23 @@ async function buscarDatasDisponiveis(configuracaoAgenda) {
   return disponibilidade.filter(Boolean);
 }
 
-async function salvarAgendamento(user, estado) {
+async function salvarAgendamento(user, estado, sessionKey) {
+  if (usarApiRemota(sessionKey)) {
+    await buscarApi(sessionKey, '/api/agendamentos', {
+      method: 'POST',
+      body: JSON.stringify({
+        cliente: user,
+        telefone: user,
+        servicoId: estado.servico.id,
+        servicoNome: estado.servico.nome,
+        servicoPreco: estado.servico.preco,
+        data: estado.data,
+        hora: estado.hora,
+      }),
+    });
+    return;
+  }
+
   await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [user, user]);
   const cliente = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [user]);
   await runAsync(
@@ -286,7 +380,19 @@ async function salvarAgendamento(user, estado) {
   );
 }
 
-async function buscarUltimoAgendamentoConfirmado(user) {
+async function buscarUltimoAgendamentoConfirmado(user, sessionKey) {
+  if (usarApiRemota(sessionKey)) {
+    const agendamentos = await buscarApi(sessionKey, '/api/agendamentos');
+
+    return agendamentos
+      .filter((item) => item.telefone === user && item.status === 'confirmado')
+      .sort((a, b) => {
+        const chaveA = `${a.data || ''} ${a.hora || ''} ${String(a.id || 0).padStart(10, '0')}`;
+        const chaveB = `${b.data || ''} ${b.hora || ''} ${String(b.id || 0).padStart(10, '0')}`;
+        return chaveA < chaveB ? 1 : -1;
+      })[0];
+  }
+
   return getAsync(
     `SELECT
        a.id,
@@ -304,11 +410,18 @@ async function buscarUltimoAgendamentoConfirmado(user) {
   );
 }
 
-async function cancelarAgendamentoDoCliente(user) {
-  const agendamento = await buscarUltimoAgendamentoConfirmado(user);
+async function cancelarAgendamentoDoCliente(user, sessionKey) {
+  const agendamento = await buscarUltimoAgendamentoConfirmado(user, sessionKey);
 
   if (!agendamento) {
     return null;
+  }
+
+  if (usarApiRemota(sessionKey)) {
+    await buscarApi(sessionKey, `/api/agendamentos/${agendamento.id}`, {
+      method: 'DELETE',
+    });
+    return agendamento;
   }
 
   await runAsync(
@@ -516,8 +629,8 @@ async function enviarListaServicos(client, user, estado, servicos) {
   }
 }
 
-async function enviarListaDatas(client, user, estado, configuracaoAgenda) {
-  const datas = await buscarDatasDisponiveis(configuracaoAgenda);
+async function enviarListaDatas(client, user, estado, configuracaoAgenda, sessionKey) {
+  const datas = await buscarDatasDisponiveis(configuracaoAgenda, sessionKey);
   estado.etapa = 'data';
   estado.datasDisponiveis = datas;
 
@@ -677,6 +790,7 @@ function ehComandoCancelarAgendamento(normalizado) {
 function attachBotHandlers(client, options = {}) {
   const sessionKey = options.sessionKey || 'default';
   const assinaturaId = options.assinaturaId || null;
+  definirContextoSessao(sessionKey, options);
 
   client.onMessage(async (message) => {
     if (foiEnviadaPeloBot(message)) return;
@@ -701,7 +815,7 @@ function attachBotHandlers(client, options = {}) {
     const estado = estados[user];
 
     try {
-      const acesso = await carregarAcessoAssinatura(assinaturaId);
+      const acesso = await carregarAcessoAssinatura(assinaturaId, sessionKey);
 
       if (!acesso.liberado) {
         await enviarTexto(client, user, acesso.mensagem);
@@ -709,8 +823,8 @@ function attachBotHandlers(client, options = {}) {
         return;
       }
 
-      const servicos = await carregarServicos(assinaturaId);
-      const configuracaoAgenda = await carregarConfiguracaoAgenda(assinaturaId);
+      const servicos = await carregarServicos(assinaturaId, sessionKey);
+      const configuracaoAgenda = await carregarConfiguracaoAgenda(assinaturaId, sessionKey);
 
       if (ehComandoMenu(normalizado, payload)) {
         await enviarMenuPrincipal(client, user, sessionKey);
@@ -718,7 +832,7 @@ function attachBotHandlers(client, options = {}) {
       }
 
       if (ehComandoCancelarAgendamento(normalizado) && estado.etapa !== 'confirmar') {
-        const agendamentoCancelado = await cancelarAgendamentoDoCliente(user);
+        const agendamentoCancelado = await cancelarAgendamentoDoCliente(user, sessionKey);
 
         if (!agendamentoCancelado) {
           await enviarTexto(
@@ -764,7 +878,7 @@ function attachBotHandlers(client, options = {}) {
         }
 
         estado.servico = servico;
-        await enviarListaDatas(client, user, estado, configuracaoAgenda);
+        await enviarListaDatas(client, user, estado, configuracaoAgenda, sessionKey);
         return;
       }
 
@@ -777,11 +891,11 @@ function attachBotHandlers(client, options = {}) {
         }
 
         estado.data = dataSelecionada.valor;
-        estado.horariosLivres = await buscarHorariosLivres(estado.data, configuracaoAgenda);
+        estado.horariosLivres = await buscarHorariosLivres(estado.data, configuracaoAgenda, sessionKey);
 
         if (!estado.horariosLivres.length) {
           await enviarTexto(client, user, 'Nao ha horarios livres nesse dia. Vamos escolher outra data.');
-          await enviarListaDatas(client, user, estado, configuracaoAgenda);
+          await enviarListaDatas(client, user, estado, configuracaoAgenda, sessionKey);
           return;
         }
 
@@ -804,7 +918,7 @@ function attachBotHandlers(client, options = {}) {
 
       if (estado.etapa === 'confirmar') {
         if (payload === 'confirmar:sim' || normalizado === '1' || normalizado === 'confirmar') {
-          await salvarAgendamento(user, estado);
+          await salvarAgendamento(user, estado, sessionKey);
           await enviarTexto(
             client,
             user,

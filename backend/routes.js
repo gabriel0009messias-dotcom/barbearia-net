@@ -323,6 +323,31 @@ async function montarRespostaAssinatura(assinaturaId) {
   };
 }
 
+async function obterOuCriarServicoPadrao(nome, preco) {
+  const nomeNormalizado = String(nome || '').trim();
+  const precoNormalizado = Number(preco);
+
+  if (!nomeNormalizado || !Number.isFinite(precoNormalizado) || precoNormalizado <= 0) {
+    throw new Error('Servico invalido para criar o agendamento.');
+  }
+
+  const servicoExistente = await getAsync(
+    'SELECT id FROM servicos WHERE nome = ? AND preco = ? ORDER BY id ASC LIMIT 1',
+    [nomeNormalizado, precoNormalizado]
+  );
+
+  if (servicoExistente?.id) {
+    return servicoExistente.id;
+  }
+
+  const proximo = await getAsync('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM servicos');
+  const novoId = Number(proximo?.id || 1);
+
+  await runAsync('INSERT INTO servicos (id, nome, preco) VALUES (?, ?, ?)', [novoId, nomeNormalizado, precoNormalizado]);
+
+  return novoId;
+}
+
 function criarSessaoBarbeiro(assinaturaId) {
   const token = crypto.randomBytes(24).toString('hex');
   barberSessions.set(token, {
@@ -385,6 +410,52 @@ router.get('/agendamentos', requireBarbeiro, (req, res) => {
 
     res.json(rows);
   });
+});
+
+router.post('/agendamentos', requireBarbeiro, async (req, res) => {
+  const { cliente, telefone, servicoId, servicoNome, servicoPreco, data, hora } = req.body;
+
+  if (!telefone || !data || !hora || (!servicoId && !servicoNome)) {
+    res.status(400).json({ error: 'Cliente, telefone, servico, data e hora sao obrigatorios.' });
+    return;
+  }
+
+  try {
+    await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [cliente || telefone, telefone]);
+    const clienteRow = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [telefone]);
+
+    if (!clienteRow?.id) {
+      res.status(500).json({ error: 'Nao consegui localizar o cliente para salvar o agendamento.' });
+      return;
+    }
+
+    const servicoIdFinal =
+      servicoNome && Number.isFinite(Number(servicoPreco))
+        ? await obterOuCriarServicoPadrao(servicoNome, servicoPreco)
+        : Number(servicoId);
+
+    if (!Number.isInteger(servicoIdFinal) || servicoIdFinal <= 0) {
+      res.status(400).json({ error: 'Servico invalido para salvar o agendamento.' });
+      return;
+    }
+
+    const resultado = await runAsync(
+      'INSERT INTO agendamentos (cliente_id, servico_id, data, hora, status) VALUES (?, ?, ?, ?, ?)',
+      [clienteRow.id, servicoIdFinal, data, hora, 'confirmado']
+    );
+
+    res.status(201).json({
+      id: resultado.lastID,
+      cliente: cliente || telefone,
+      telefone,
+      servicoId: servicoIdFinal,
+      data,
+      hora,
+      status: 'confirmado',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 router.delete('/agendamentos/:id', requireBarbeiro, (req, res) => {
@@ -483,6 +554,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
     res.json({
       suporteNumero,
       valorMensal: 1,
+      whatsappBridgeUrl: process.env.WHATSAPP_BRIDGE_URL_PUBLIC || 'http://127.0.0.1:3010',
       pix: {
         chave: '119.063.635.28',
         favorecido: 'Gabriel Messias Rios',
