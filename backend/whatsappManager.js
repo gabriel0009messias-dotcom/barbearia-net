@@ -3,6 +3,12 @@ const { attachBotHandlers } = require('./botFlow');
 const sessoes = new Map();
 let wppconnectInstance = null;
 
+function ambienteSuportaWhatsappWeb() {
+  // Em hospedagens como Render Web Service, o WPPConnect costuma falhar
+  // por depender de navegador/ambiente grafico mais completo.
+  return !process.env.RENDER && !process.env.RENDER_SERVICE_ID;
+}
+
 function obterWppconnect() {
   if (!wppconnectInstance) {
     // Carrega o WPPConnect somente quando alguem realmente iniciar uma sessao.
@@ -35,6 +41,13 @@ async function iniciarSessao(assinaturaId) {
 
   sessao.status = 'iniciando';
   sessao.ultimoErro = null;
+
+  if (!ambienteSuportaWhatsappWeb()) {
+    sessao.status = 'erro';
+    sessao.ultimoErro =
+      'O QR Code do WhatsApp nao pode ser gerado neste servidor hospedado. Rode o bot em uma maquina local ou VPS com navegador instalado.';
+    return null;
+  }
 
   const wppconnect = obterWppconnect();
 
