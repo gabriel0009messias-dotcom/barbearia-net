@@ -737,6 +737,20 @@ select {
   color: var(--muted);
 }
 
+.pix-qr-panel {
+  margin-top: 14px;
+  display: grid;
+  justify-items: center;
+}
+
+.pix-qr-panel img {
+  width: 220px;
+  max-width: 100%;
+  padding: 10px;
+  border-radius: 18px;
+  background: #fff;
+}
+
 .inline-input,
 .status-select {
   min-width: 140px;

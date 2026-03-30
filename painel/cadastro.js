@@ -15,6 +15,8 @@ const metodoPagamentoInput = document.getElementById('metodoPagamentoInput');
 const pixInfoCard = document.getElementById('pixInfoCard');
 const pixFavorecidoLabel = document.getElementById('pixFavorecidoLabel');
 const pixChaveLabel = document.getElementById('pixChaveLabel');
+const pixQrPanel = document.getElementById('pixQrPanel');
+const pixQrImage = document.getElementById('pixQrImage');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const diasFuncionamentoInput = document.getElementById('diasFuncionamentoInput');
 const horarioAberturaInput = document.getElementById('horarioAberturaInput');
@@ -36,6 +38,7 @@ let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let assinaturaAtualId = null;
 let whatsappPolling = null;
 let pixConfig = null;
+let valorMensalAtual = 60;
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -138,16 +141,40 @@ function atualizarStatusWhatsapp(status, qrCode) {
   qrCodeImage.hidden = true;
 }
 
-function atualizarPixInfo() {
+async function atualizarPixInfo() {
   const mostrarPix = metodoPagamentoInput.value === 'pix' && pixConfig;
   pixInfoCard.hidden = !mostrarPix;
 
   if (!mostrarPix) {
+    pixQrPanel.hidden = true;
+    pixQrImage.hidden = true;
+    pixQrImage.removeAttribute('src');
     return;
   }
 
   pixFavorecidoLabel.textContent = `Favorecido: ${pixConfig.favorecido}`;
   pixChaveLabel.textContent = `Chave Pix: ${pixConfig.chave}`;
+
+  try {
+    const pagamentoPix = await buscarJson('/api/publico/pix/qrcode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        valor: valorMensalAtual,
+        descricao: 'Assinatura mensal Barberflix',
+      }),
+    });
+
+    pixQrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
+      pagamentoPix.payload
+    )}`;
+    pixQrPanel.hidden = false;
+    pixQrImage.hidden = false;
+  } catch (error) {
+    console.error(error);
+    pixQrPanel.hidden = true;
+    pixQrImage.hidden = true;
+  }
 }
 
 async function consultarStatusWhatsapp() {
@@ -198,6 +225,7 @@ async function carregarConfiguracao() {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
+    valorMensalAtual = Number(config.valorMensal || 60);
     metodoPagamentoInput.innerHTML = config.metodosPagamento
       .map((metodo) => `<option value="${metodo}">${metodo.toUpperCase()}</option>`)
       .join('');
