@@ -15,6 +15,11 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -1044,13 +1049,17 @@ code {
 }
 
 @media (max-width: 520px) {
+  body {
+    font-size: 14px;
+  }
+
   .auth-landing {
-    padding: 18px 12px 32px;
+    padding: 14px 10px 24px;
   }
 
   .content,
   .sidebar {
-    padding: 14px;
+    padding: 12px;
   }
 
   .hero,
@@ -1059,21 +1068,40 @@ code {
   .landing-panel,
   .admin-login-card,
   .modal-card {
-    padding: 16px;
-    border-radius: 18px;
+    padding: 14px;
+    border-radius: 16px;
   }
 
   .landing-copy h1 {
-    font-size: 1.75rem;
+    font-size: 1.55rem;
+    line-height: 1.08;
   }
 
   .landing-panel h2,
   .content h2 {
-    font-size: 1.35rem;
+    font-size: 1.2rem;
   }
 
   .content h3 {
-    font-size: 1rem;
+    font-size: 0.96rem;
+  }
+
+  .landing-kicker,
+  .eyebrow {
+    font-size: 0.62rem;
+  }
+
+  .landing-subcopy,
+  .sidebar-copy,
+  .landing-panel-copy,
+  .table-subcopy,
+  .hero p,
+  label,
+  .support-note p,
+  .status-card p,
+  .help-card p {
+    font-size: 0.9rem;
+    line-height: 1.45;
   }
 
   .landing-login-button,
@@ -1082,13 +1110,16 @@ code {
   .landing-topbar-button,
   .table-action {
     width: 100%;
-    padding: 14px 16px;
+    padding: 12px 14px;
+    font-size: 0.95rem;
   }
 
   .landing-login-form input,
   input,
   select {
-    padding: 11px 12px;
+    padding: 10px 11px;
+    border-radius: 12px;
+    font-size: 0.95rem;
   }
 
   .password-field input {
@@ -1103,7 +1134,7 @@ code {
   .card-header,
   .hero-actions,
   .landing-cta-row {
-    gap: 10px;
+    gap: 8px;
   }
 
   .page-shell {
@@ -1134,16 +1165,96 @@ code {
 
   th,
   td {
-    padding: 10px 8px;
-    font-size: 0.86rem;
+    padding: 8px 7px;
+    font-size: 0.8rem;
   }
 
   .modal-shell {
-    padding: 12px;
+    padding: 10px;
   }
 
   .qr-panel img,
   .pix-qr-panel img {
-    max-width: 170px;
+    max-width: 150px;
+  }
+
+  .metric-card strong {
+    font-size: 1.35rem;
+  }
+
+  .status-card,
+  .help-card,
+  .support-note,
+  .embedded-card,
+  .qr-panel {
+    padding: 12px;
+    border-radius: 14px;
+  }
+}
+
+@media (max-width: 420px) {
+  body {
+    font-size: 13px;
+  }
+
+  .auth-landing {
+    padding: 12px 8px 20px;
+  }
+
+  .content,
+  .sidebar,
+  .hero,
+  .panel-card,
+  .metric-card,
+  .landing-panel,
+  .admin-login-card,
+  .modal-card {
+    padding: 12px;
+  }
+
+  .landing-copy h1 {
+    font-size: 1.4rem;
+  }
+
+  .landing-panel h2,
+  .content h2 {
+    font-size: 1.08rem;
+  }
+
+  .landing-subcopy,
+  .sidebar-copy,
+  .landing-panel-copy,
+  .hero p,
+  label,
+  .support-note p {
+    font-size: 0.86rem;
+  }
+
+  .landing-login-button,
+  .primary-button,
+  .secondary-pill-button,
+  .landing-topbar-button,
+  .table-action,
+  .day-pill {
+    padding: 10px 12px;
+  }
+
+  .landing-login-form input,
+  input,
+  select {
+    padding: 9px 10px;
+    font-size: 0.9rem;
+  }
+
+  .password-field input {
+    padding-right: 74px;
+  }
+
+  .password-toggle {
+    font-size: 0.8rem;
+  }
+
+  table {
+    min-width: 480px;
   }
 }
