@@ -88,6 +88,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  flex-wrap: wrap;
 }
 
 .landing-brand {
@@ -130,6 +131,7 @@ a {
   gap: 36px;
   align-items: center;
   min-height: calc(100vh - 80px);
+  width: 100%;
 }
 
 .landing-copy {
@@ -323,6 +325,7 @@ a {
   gap: 36px;
   align-items: start;
   padding-top: 38px;
+  width: 100%;
 }
 
 .cadastro-copy {
@@ -553,6 +556,7 @@ a {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
+  flex-wrap: wrap;
 }
 
 .card-header.compact {
@@ -570,6 +574,8 @@ a {
 .table-wrap {
   overflow-x: auto;
   max-width: 100%;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 
 table {
@@ -625,6 +631,7 @@ th {
   display: grid;
   grid-template-columns: 1.4fr 0.8fr auto;
   gap: 10px;
+  align-items: end;
 }
 
 .schedule-grid {
@@ -834,6 +841,17 @@ select {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.landing-topbar-actions,
+.cadastro-actions,
+.service-rows,
+.service-builder,
+.form-grid,
+.subscription-grid,
+.grid,
+.metrics {
+  min-width: 0;
+}
+
 .status-dot {
   width: 12px;
   height: 12px;
@@ -904,5 +922,228 @@ code {
   .hero {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .content,
+  .sidebar {
+    padding: 20px;
+  }
+
+  .hero,
+  .panel-card,
+  .metric-card,
+  .landing-panel,
+  .admin-login-card {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .hero-actions {
+    width: 100%;
+  }
+
+  .hero-actions .primary-button,
+  .hero-actions .secondary-pill-button,
+  .hero-actions .table-action,
+  .landing-topbar-actions .landing-topbar-button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .table-wrap {
+    margin: 0 -6px;
+  }
+}
+
+@media (max-width: 720px) {
+  .landing-topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .landing-topbar-actions {
+    width: 100%;
+  }
+
+  .landing-brand {
+    font-size: clamp(1.5rem, 8vw, 2.4rem);
+  }
+
+  .landing-copy h1 {
+    font-size: 2.1rem;
+    line-height: 1.05;
+  }
+
+  .landing-subcopy,
+  .sidebar-copy,
+  .landing-panel-copy,
+  .table-subcopy,
+  .hero p {
+    font-size: 0.98rem;
+    line-height: 1.55;
+  }
+
+  .landing-panel h2,
+  .content h2 {
+    font-size: 1.55rem;
+  }
+
+  .content h3 {
+    font-size: 1.1rem;
+  }
+
+  .badge {
+    font-size: 0.78rem;
+  }
+
+  .metric-card strong {
+    font-size: 1.6rem;
+  }
+
+  .whatsapp-connect-grid {
+    gap: 14px;
+  }
+
+  .qr-panel img,
+  .pix-qr-panel img {
+    max-width: 190px;
+  }
+
+  .service-builder-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .service-row {
+    grid-template-columns: 1fr;
+  }
+
+  .status-card,
+  .help-card {
+    flex-direction: column;
+  }
+
+  .badge,
+  .inline-input,
+  .status-select {
+    width: 100%;
+  }
+
+  .service-builder-header .table-action,
+  .cadastro-actions .landing-login-button,
+  .cadastro-actions .landing-secondary-button,
+  .login-payment-card .landing-login-button {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (max-width: 520px) {
+  .auth-landing {
+    padding: 18px 12px 32px;
+  }
+
+  .content,
+  .sidebar {
+    padding: 14px;
+  }
+
+  .hero,
+  .panel-card,
+  .metric-card,
+  .landing-panel,
+  .admin-login-card,
+  .modal-card {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .landing-copy h1 {
+    font-size: 1.75rem;
+  }
+
+  .landing-panel h2,
+  .content h2 {
+    font-size: 1.35rem;
+  }
+
+  .content h3 {
+    font-size: 1rem;
+  }
+
+  .landing-login-button,
+  .primary-button,
+  .secondary-pill-button,
+  .landing-topbar-button,
+  .table-action {
+    width: 100%;
+    padding: 14px 16px;
+  }
+
+  .landing-login-form input,
+  input,
+  select {
+    padding: 11px 12px;
+  }
+
+  .password-field input {
+    padding-right: 82px;
+  }
+
+  .password-toggle {
+    right: 10px;
+    font-size: 0.86rem;
+  }
+
+  .card-header,
+  .hero-actions,
+  .landing-cta-row {
+    gap: 10px;
+  }
+
+  .page-shell {
+    min-width: 0;
+  }
+
+  .sidebar,
+  .content,
+  .landing-copy,
+  .cadastro-copy,
+  .cadastro-panels {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .eyebrow {
+    letter-spacing: 0.12em;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    min-width: 520px;
+  }
+
+  th,
+  td {
+    padding: 10px 8px;
+    font-size: 0.86rem;
+  }
+
+  .modal-shell {
+    padding: 12px;
+  }
+
+  .qr-panel img,
+  .pix-qr-panel img {
+    max-width: 170px;
   }
 }
