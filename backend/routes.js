@@ -54,16 +54,6 @@ function calcularProximoVencimento(diaVencimento) {
   return vencimento.toISOString().slice(0, 10);
 }
 
-function calcularPeriodoTeste() {
-  const inicio = new Date();
-  const fim = new Date(inicio.getTime() + 2 * 60 * 1000);
-
-  return {
-    inicio: inicio.toISOString(),
-    fim: fim.toISOString(),
-  };
-}
-
 function diasFuncionamentoPadrao() {
   return [1, 2, 3, 4, 5, 6];
 }
@@ -120,29 +110,11 @@ function avaliarAcessoAssinatura(assinatura) {
     };
   }
 
-  if (assinatura.status === 'teste') {
-    const expiracao = assinatura.trial_expires_at ? new Date(assinatura.trial_expires_at).getTime() : 0;
-
-    if (expiracao > Date.now()) {
-      return {
-        liberado: true,
-        motivo: 'periodo_teste',
-        mensagem: 'Periodo de teste em andamento.',
-      };
-    }
-
-    return {
-      liberado: false,
-      motivo: 'teste_expirado',
-      mensagem: 'Seu teste de 2 minutos terminou. Agora aguarde a liberacao do pagamento.',
-    };
-  }
-
-  if (assinatura.status === 'pendente') {
+  if (assinatura.status === 'teste' || assinatura.status === 'pendente') {
     return {
       liberado: false,
       motivo: 'pagamento_pendente',
-      mensagem: 'Assinatura pendente. Regularize o pagamento para liberar o sistema.',
+      mensagem: 'Pagamento pendente. Regularize sua assinatura para liberar o sistema.',
     };
   }
 
@@ -281,16 +253,6 @@ async function carregarAssinaturaPorToken(token) {
   if (!acesso.liberado) {
     barberSessions.delete(token);
 
-    if (acesso.motivo === 'teste_expirado' && assinatura.status === 'teste') {
-      await runAsync(
-        `UPDATE assinaturas
-         SET status = 'bloqueado',
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [assinatura.id]
-      );
-    }
-
     const error = new Error(acesso.mensagem);
     error.statusCode = 403;
     throw error;
@@ -331,11 +293,11 @@ async function listarAssinaturasComServicos() {
   const assinaturas = await allAsync(
     `SELECT *
      FROM assinaturas
-     ORDER BY
+      ORDER BY
        CASE status
          WHEN 'bloqueado' THEN 0
          WHEN 'pendente' THEN 1
-         WHEN 'teste' THEN 2
+         WHEN 'teste' THEN 1
          ELSE 3
        END,
        proximo_vencimento ASC,
@@ -586,16 +548,6 @@ router.post('/barbeiro/login', async (req, res) => {
     const acesso = avaliarAcessoAssinatura(assinatura);
 
     if (!acesso.liberado) {
-      if (acesso.motivo === 'teste_expirado' && assinatura.status === 'teste') {
-        await runAsync(
-          `UPDATE assinaturas
-           SET status = 'bloqueado',
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`,
-          [assinatura.id]
-        );
-      }
-
       res.status(403).json({ error: acesso.mensagem });
       return;
     }
@@ -851,6 +803,7 @@ router.post('/publico/assinaturas', async (req, res) => {
                horario_almoco_inicio = ?,
                horario_almoco_fim = ?,
                horario_fechamento = ?,
+               status = CASE WHEN status = 'ativo' THEN 'ativo' ELSE 'pendente' END,
                senha_hash = ?,
                senha_salt = ?,
                updated_at = CURRENT_TIMESTAMP
@@ -883,19 +836,15 @@ router.post('/publico/assinaturas', async (req, res) => {
           );
         }
 
-        const token = criarSessaoBarbeiro(assinaturaExistente.id);
-
         res.status(200).json({
-          token,
-          expiresInDays: 7,
+          mensagem: 'Cadastro atualizado. Agora finalize o pagamento para liberar seu login.',
           assinatura: await montarRespostaAssinatura(assinaturaExistente.id),
         });
         return;
       }
 
       res.status(409).json({
-        error:
-          'Essa barbearia ja usou o cadastro inicial ou ja possui assinatura registrada. O teste de 2 minutos acontece apenas uma vez.',
+        error: 'Essa barbearia ja possui assinatura registrada. Regularize o pagamento para liberar o acesso.',
       });
       return;
     }
@@ -903,7 +852,6 @@ router.post('/publico/assinaturas', async (req, res) => {
     const suporteNumero = await getConfiguracao('suporte_numero');
     const proximoVencimento = calcularProximoVencimento(dia);
     const whatsappSession = `assinatura-${Date.now()}`;
-    const teste = calcularPeriodoTeste();
     const diasSerializados = serializarDiasFuncionamento(diasFuncionamento);
     const credenciais = criarCredenciaisSenha(senha);
 
@@ -941,15 +889,15 @@ router.post('/publico/assinaturas', async (req, res) => {
         metodoPagamento,
         dia,
         1,
-        'teste',
+        'pendente',
         suporteNumero,
         proximoVencimento,
         whatsappNumero || telefone,
         'nao_configurado',
         whatsappSession,
-        1,
-        teste.inicio,
-        teste.fim,
+        0,
+        null,
+        null,
         diasSerializados,
         horarioAbertura || '08:00',
         horarioAlmocoInicio || '12:00',
@@ -967,11 +915,8 @@ router.post('/publico/assinaturas', async (req, res) => {
       );
     }
 
-    const token = criarSessaoBarbeiro(result.lastID);
-
     res.status(201).json({
-      token,
-      expiresInDays: 7,
+      mensagem: 'Cadastro concluido. Agora faça o pagamento para liberar seu login no sistema.',
       assinatura: await montarRespostaAssinatura(result.lastID),
     });
   } catch (error) {
@@ -997,16 +942,6 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
     const acesso = avaliarAcessoAssinatura(assinatura);
 
     if (!acesso.liberado) {
-      if (acesso.motivo === 'teste_expirado' && assinatura.status === 'teste') {
-        await runAsync(
-          `UPDATE assinaturas
-           SET status = 'bloqueado',
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`,
-          [id]
-        );
-      }
-
       res.status(403).json({ error: acesso.mensagem });
       return;
     }
@@ -1046,23 +981,11 @@ router.get('/publico/assinaturas/:id/acesso', requireBarbeiro, async (req, res) 
 
     const acesso = avaliarAcessoAssinatura(assinatura);
 
-    if (acesso.motivo === 'teste_expirado' && assinatura.status === 'teste') {
-      await runAsync(
-        `UPDATE assinaturas
-         SET status = 'bloqueado',
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [id]
-      );
-    }
-
-    const assinaturaAtualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
-
     res.json({
       liberado: acesso.liberado,
       motivo: acesso.motivo,
       mensagem: acesso.mensagem,
-      assinatura: mapearAssinatura(assinaturaAtualizada),
+      assinatura: mapearAssinatura(assinatura),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });

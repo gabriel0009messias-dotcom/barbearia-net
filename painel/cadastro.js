@@ -221,7 +221,7 @@ async function carregarSessaoAtual() {
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
     generateQrButton.disabled = false;
-    whatsappHelpText.textContent = 'Seu cadastro ja esta ativo. Gere o QR Code ou abra seu painel normalmente.';
+    whatsappHelpText.textContent = 'Seu acesso esta liberado. Gere o QR Code ou abra seu painel normalmente.';
     abrirPainelButton.hidden = false;
   } catch (error) {
     console.error(error);
@@ -296,13 +296,15 @@ assinaturaForm.addEventListener('submit', async (event) => {
       }),
     });
 
-    authToken = resposta.token;
     assinaturaAtualId = resposta.assinatura.id;
-    localStorage.setItem(TOKEN_STORAGE_KEY, authToken);
-    generateQrButton.disabled = false;
-    abrirPainelButton.hidden = false;
-    assinaturaFormMessage.textContent = 'Cadastro concluido. Agora gere o QR Code e conecte o WhatsApp da barbearia.';
-    whatsappHelpText.textContent = 'Seu teste de 2 minutos esta ativo. Gere o QR Code para iniciar os agendamentos.';
+    authToken = null;
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    generateQrButton.disabled = true;
+    abrirPainelButton.hidden = true;
+    assinaturaFormMessage.textContent =
+      resposta.mensagem || 'Cadastro concluido. Agora faça o pagamento para liberar seu login.';
+    whatsappHelpText.textContent =
+      'Pagamento aguardando confirmacao. Assim que sua assinatura for liberada, o WhatsApp e o painel ficam disponiveis.';
     atualizarStatusWhatsapp(resposta.assinatura.whatsapp_status);
   } catch (error) {
     console.error(error);
