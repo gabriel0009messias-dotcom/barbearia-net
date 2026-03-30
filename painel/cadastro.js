@@ -294,7 +294,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
     generateQrButton.disabled = false;
     abrirPainelButton.hidden = false;
     assinaturaFormMessage.textContent = 'Cadastro concluido. Agora gere o QR Code e conecte o WhatsApp da barbearia.';
-    whatsappHelpText.textContent = 'Seu teste de 24 horas esta ativo. Gere o QR Code para iniciar os agendamentos.';
+    whatsappHelpText.textContent = 'Seu teste de 2 minutos esta ativo. Gere o QR Code para iniciar os agendamentos.';
     atualizarStatusWhatsapp(resposta.assinatura.whatsapp_status);
   } catch (error) {
     console.error(error);

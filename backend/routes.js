@@ -56,7 +56,7 @@ function calcularProximoVencimento(diaVencimento) {
 
 function calcularPeriodoTeste() {
   const inicio = new Date();
-  const fim = new Date(inicio.getTime() + 24 * 60 * 60 * 1000);
+  const fim = new Date(inicio.getTime() + 2 * 60 * 1000);
 
   return {
     inicio: inicio.toISOString(),
@@ -134,7 +134,7 @@ function avaliarAcessoAssinatura(assinatura) {
     return {
       liberado: false,
       motivo: 'teste_expirado',
-      mensagem: 'Seu teste de 24 horas terminou. Agora aguarde a liberacao do pagamento.',
+      mensagem: 'Seu teste de 2 minutos terminou. Agora aguarde a liberacao do pagamento.',
     };
   }
 
@@ -895,7 +895,7 @@ router.post('/publico/assinaturas', async (req, res) => {
 
       res.status(409).json({
         error:
-          'Essa barbearia ja usou o cadastro inicial ou ja possui assinatura registrada. O teste de 24 horas acontece apenas uma vez.',
+          'Essa barbearia ja usou o cadastro inicial ou ja possui assinatura registrada. O teste de 2 minutos acontece apenas uma vez.',
       });
       return;
     }
