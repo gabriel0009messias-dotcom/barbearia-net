@@ -1,0 +1,45 @@
+2026/03/29-17:38:04.713 f5c Reusing MANIFEST C:\Users\User\Desktop\barbearia\backend\tokens\assinatura-1\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/03/29-17:38:04.714 f5c Recovering log #153
+2026/03/29-17:38:04.749 f5c Reusing old log C:\Users\User\Desktop\barbearia\backend\tokens\assinatura-1\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000153.log 
+2026/03/29-17:38:12.895 f5c Level-0 table #164: started
+2026/03/29-17:38:12.948 f5c Level-0 table #164: 1194579 bytes OK
+2026/03/29-17:38:12.950 f5c Delete type=0 #153
+2026/03/29-17:38:13.216 2318 Compacting 1@1 + 7@2 files
+2026/03/29-17:38:13.396 2318 Generated table #165@1: 55062 keys, 2235391 bytes
+2026/03/29-17:38:13.449 2318 Generated table #166@1: 3170 keys, 2158061 bytes
+2026/03/29-17:38:13.536 2318 Generated table #167@1: 3036 keys, 2148220 bytes
+2026/03/29-17:38:13.624 2318 Generated table #168@1: 19776 keys, 2191365 bytes
+2026/03/29-17:38:13.722 2318 Generated table #169@1: 28272 keys, 2195021 bytes
+2026/03/29-17:38:13.888 2318 Generated table #170@1: 101293 keys, 2252055 bytes
+2026/03/29-17:38:13.915 2318 Generated table #171@1: 14040 keys, 372449 bytes
+2026/03/29-17:38:13.915 2318 Compacted 1@1 + 7@2 files => 13552562 bytes
+2026/03/29-17:38:13.916 2318 compacted to: files[ 0 0 7 0 0 0 0 ]
+2026/03/29-17:39:54.141 2318 Level-0 table #173: started
+2026/03/29-17:39:54.186 2318 Level-0 table #173: 1188089 bytes OK
+2026/03/29-17:39:54.187 2318 Delete type=2 #155
+2026/03/29-17:39:54.187 2318 Delete type=2 #156
+2026/03/29-17:39:54.187 2318 Delete type=2 #157
+2026/03/29-17:39:54.187 2318 Delete type=2 #158
+2026/03/29-17:39:54.188 2318 Delete type=2 #159
+2026/03/29-17:39:54.188 2318 Delete type=2 #160
+2026/03/29-17:39:54.188 2318 Delete type=2 #161
+2026/03/29-17:39:54.188 2318 Delete type=0 #163
+2026/03/29-17:39:54.188 2318 Delete type=2 #164
+2026/03/29-17:39:54.400 f5c Compacting 1@1 + 7@2 files
+2026/03/29-17:39:54.530 f5c Generated table #174@1: 58288 keys, 2247610 bytes
+2026/03/29-17:39:54.586 f5c Generated table #175@1: 3155 keys, 2158022 bytes
+2026/03/29-17:39:54.639 f5c Generated table #176@1: 2989 keys, 2147984 bytes
+2026/03/29-17:39:54.722 f5c Generated table #177@1: 18420 keys, 2185840 bytes
+2026/03/29-17:39:54.809 f5c Generated table #178@1: 29277 keys, 2203392 bytes
+2026/03/29-17:39:54.948 f5c Generated table #179@1: 95345 keys, 2243440 bytes
+2026/03/29-17:39:54.976 f5c Generated table #180@1: 21824 keys, 540382 bytes
+2026/03/29-17:39:54.976 f5c Compacted 1@1 + 7@2 files => 13726670 bytes
+2026/03/29-17:39:54.977 f5c compacted to: files[ 0 0 7 0 0 0 0 ]
+2026/03/29-17:39:54.977 f5c Delete type=2 #165
+2026/03/29-17:39:54.977 f5c Delete type=2 #166
+2026/03/29-17:39:54.978 f5c Delete type=2 #167
+2026/03/29-17:39:54.978 f5c Delete type=2 #168
+2026/03/29-17:39:54.978 f5c Delete type=2 #169
+2026/03/29-17:39:54.978 f5c Delete type=2 #170
+2026/03/29-17:39:54.978 f5c Delete type=2 #171
+2026/03/29-17:39:54.978 f5c Delete type=2 #173

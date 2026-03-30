@@ -1,0 +1,11 @@
+[
+  { "id": 1, "nome": "Corte Degradê", "preco": 30 },
+  { "id": 2, "nome": "Corte Degradê + Barba", "preco": 45 },
+  { "id": 3, "nome": "Pezinho", "preco": 15 },
+  { "id": 4, "nome": "Pezinho + Barba", "preco": 25 },
+  { "id": 5, "nome": "Sobrancelha", "preco": 10 },
+  { "id": 6, "nome": "Corte social", "preco": 30 },
+  { "id": 7, "nome": "Corte social + Barba", "preco": 45 },
+  { "id": 8, "nome": "Corte 100% na Tesoura", "preco": 40 },
+  { "id": 9, "nome": "Corte + pigmentação", "preco": 60 }
+]
