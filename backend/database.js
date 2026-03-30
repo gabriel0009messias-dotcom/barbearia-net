@@ -82,7 +82,7 @@ db.serialize(() => {
     email TEXT,
     metodo_pagamento TEXT NOT NULL,
     dia_vencimento INTEGER NOT NULL,
-    valor_mensal REAL NOT NULL DEFAULT 50,
+    valor_mensal REAL NOT NULL DEFAULT 55,
     status TEXT NOT NULL DEFAULT 'pendente',
     suporte_numero TEXT NOT NULL,
     ultimo_pagamento TEXT,
