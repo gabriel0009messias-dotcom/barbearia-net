@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: barbearia-net
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATABASE_PATH
+        value: /var/data/barbearia.db
+    disk:
+      name: barbearia-data
+      mountPath: /var/data
+      sizeGB: 1

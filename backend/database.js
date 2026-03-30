@@ -2,7 +2,39 @@ const path = require('path');
 const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 
-const db = new sqlite3.Database(path.join(__dirname, 'barbearia.db'));
+const legacyDbPath = path.join(__dirname, 'barbearia.db');
+const configuredDbPath =
+  process.env.DATABASE_PATH ||
+  (process.env.RENDER || process.env.RENDER_SERVICE_ID ? '/var/data/barbearia.db' : legacyDbPath);
+const dbPath = path.resolve(configuredDbPath);
+
+function garantirDiretorioDoBanco() {
+  const dbDir = path.dirname(dbPath);
+
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+}
+
+function migrarBancoLegadoSeNecessario() {
+  if (dbPath === legacyDbPath) {
+    return;
+  }
+
+  if (fs.existsSync(dbPath) || !fs.existsSync(legacyDbPath)) {
+    return;
+  }
+
+  fs.copyFileSync(legacyDbPath, dbPath);
+  console.log(`Banco legado copiado para ${dbPath}`);
+}
+
+garantirDiretorioDoBanco();
+migrarBancoLegadoSeNecessario();
+
+console.log(`Usando banco em: ${dbPath}`);
+
+const db = new sqlite3.Database(dbPath);
 
 function carregarServicos() {
   const servicosPath = path.join(__dirname, 'servicos.json');
