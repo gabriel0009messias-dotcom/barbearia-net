@@ -35,6 +35,11 @@ const painelOperacional = document.getElementById('painelOperacional');
 const painelLiberadoMessage = document.getElementById('painelLiberadoMessage');
 const painelBloqueadoMessage = document.getElementById('painelBloqueadoMessage');
 const blockedMessageText = document.getElementById('blockedMessageText');
+const blockedPixCard = document.getElementById('blockedPixCard');
+const blockedPixFavorecidoLabel = document.getElementById('blockedPixFavorecidoLabel');
+const blockedPixQrPanel = document.getElementById('blockedPixQrPanel');
+const blockedPixQrImage = document.getElementById('blockedPixQrImage');
+const blockedPixChaveLabel = document.getElementById('blockedPixChaveLabel');
 const configuracoesBarbeiroForm = document.getElementById('configuracoesBarbeiroForm');
 const configuracoesMessage = document.getElementById('configuracoesMessage');
 const diasFuncionamentoPainel = document.getElementById('diasFuncionamentoPainel');
@@ -48,6 +53,8 @@ const painelServiceRows = document.getElementById('painelServiceRows');
 let assinaturaAtualId = null;
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let whatsappPolling = null;
+let pixConfig = null;
+let valorMensalAtual = 60;
 
 function formatarData(data) {
   if (!data) return '-';
@@ -228,12 +235,49 @@ function atualizarStatusWhatsapp(status, qrCode) {
   qrCodeImage.hidden = true;
 }
 
-function mostrarPainelBloqueado(mensagem) {
+async function atualizarPixBloqueado() {
+  const mostrarPix = Boolean(pixConfig?.chave);
+  blockedPixCard.hidden = !mostrarPix;
+
+  if (!mostrarPix) {
+    blockedPixQrPanel.hidden = true;
+    blockedPixQrImage.hidden = true;
+    blockedPixQrImage.removeAttribute('src');
+    return;
+  }
+
+  blockedPixFavorecidoLabel.textContent = `Favorecido: ${pixConfig.favorecido}`;
+  blockedPixChaveLabel.textContent = `Chave Pix: ${pixConfig.chave}`;
+
+  try {
+    const pagamentoPix = await buscarJson('/api/publico/pix/qrcode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        valor: valorMensalAtual,
+        descricao: 'Assinatura mensal Barberflix',
+      }),
+    });
+
+    blockedPixQrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
+      pagamentoPix.payload
+    )}`;
+    blockedPixQrPanel.hidden = false;
+    blockedPixQrImage.hidden = false;
+  } catch (error) {
+    console.error(error);
+    blockedPixQrPanel.hidden = true;
+    blockedPixQrImage.hidden = true;
+  }
+}
+
+async function mostrarPainelBloqueado(mensagem) {
   painelOperacional.hidden = true;
   painelLiberadoMessage.hidden = true;
   painelBloqueadoMessage.hidden = false;
   blockedMessageText.textContent = mensagem;
   generateQrButton.disabled = true;
+  await atualizarPixBloqueado();
 }
 
 function tratarErroSessao(error) {
@@ -244,7 +288,7 @@ function tratarErroSessao(error) {
   }
 
   if (error.status === 403) {
-    mostrarPainelBloqueado(error.message);
+    void mostrarPainelBloqueado(error.message);
     return true;
   }
 
@@ -260,6 +304,8 @@ async function carregarPainelBarbeiro() {
   try {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
+    pixConfig = config.pix || null;
+    valorMensalAtual = Number(config.valorMensal || 60);
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
