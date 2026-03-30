@@ -126,6 +126,19 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'senha_hash', 'TEXT');
   garantirColuna('assinaturas', 'senha_salt', 'TEXT');
 
+  db.run(`UPDATE assinaturas
+          SET metodo_pagamento = 'pix'
+          WHERE metodo_pagamento IS NULL
+             OR lower(metodo_pagamento) <> 'pix'`);
+
+  db.run(`UPDATE assinaturas
+          SET dia_vencimento = CASE
+            WHEN dia_vencimento = 19 THEN 12
+            WHEN dia_vencimento = 26 THEN 24
+            ELSE dia_vencimento
+          END
+          WHERE dia_vencimento NOT IN (5, 12, 24)`);
+
   popularServicos();
 });
 

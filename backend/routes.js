@@ -5,9 +5,9 @@ const db = require('./database');
 const { iniciarSessao, statusSessao, clienteSessao } = require('./whatsappManager');
 
 const router = express.Router();
-const DIAS_VENCIMENTO = [5, 19, 26];
-const METODOS_PAGAMENTO = ['pix', 'boleto'];
-const STATUS_ASSINATURA = ['teste', 'pendente', 'ativo', 'bloqueado'];
+const DIAS_VENCIMENTO = [5, 12, 24];
+const METODOS_PAGAMENTO = ['pix'];
+const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const adminSessions = new Map();
@@ -41,13 +41,36 @@ router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
   }
 });
 
-function calcularProximoVencimento(diaVencimento) {
-  const hoje = new Date();
-  const ano = hoje.getFullYear();
-  const mes = hoje.getMonth();
+function criarDataLocal(data) {
+  if (!data) {
+    return null;
+  }
+
+  const [ano, mes, dia] = String(data)
+    .slice(0, 10)
+    .split('-')
+    .map((item) => Number.parseInt(item, 10));
+
+  if (!ano || !mes || !dia) {
+    return null;
+  }
+
+  return new Date(ano, mes - 1, dia);
+}
+
+function calcularDiferencaEmDias(dataInicial, dataFinal) {
+  const inicio = new Date(dataInicial.getFullYear(), dataInicial.getMonth(), dataInicial.getDate());
+  const fim = new Date(dataFinal.getFullYear(), dataFinal.getMonth(), dataFinal.getDate());
+  return Math.round((fim.getTime() - inicio.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function calcularProximoVencimento(diaVencimento, dataReferencia = new Date()) {
+  const referencia = dataReferencia instanceof Date ? dataReferencia : criarDataLocal(dataReferencia) || new Date();
+  const ano = referencia.getFullYear();
+  const mes = referencia.getMonth();
   let vencimento = new Date(ano, mes, diaVencimento);
 
-  if (hoje.getDate() > diaVencimento) {
+  if (referencia.getDate() >= diaVencimento) {
     vencimento = new Date(ano, mes + 1, diaVencimento);
   }
 
@@ -93,6 +116,96 @@ function mapearAssinatura(assinatura) {
   };
 }
 
+function criarLembretePagamento(assinatura) {
+  if (!assinatura?.proximo_vencimento) {
+    return null;
+  }
+
+  const hoje = new Date();
+  const vencimento = criarDataLocal(assinatura.proximo_vencimento);
+
+  if (!vencimento) {
+    return null;
+  }
+
+  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
+
+  if (diasParaVencer < 0) {
+    return {
+      tipo: 'atrasado',
+      diasParaVencer,
+      mensagem: `Seu Pix venceu em ${assinatura.proximo_vencimento}. Regularize o pagamento para desbloquear o sistema.`,
+    };
+  }
+
+  if (diasParaVencer === 0) {
+    return {
+      tipo: 'hoje',
+      diasParaVencer,
+      mensagem: `Seu Pix vence hoje, dia ${String(assinatura.dia_vencimento).padStart(2, '0')}. Pague hoje para nao bloquear o acesso.`,
+    };
+  }
+
+  if (diasParaVencer <= 3) {
+    return {
+      tipo: 'proximo',
+      diasParaVencer,
+      mensagem: `Seu Pix vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}, no dia ${String(
+        assinatura.dia_vencimento
+      ).padStart(2, '0')}.`,
+    };
+  }
+
+  return null;
+}
+
+async function sincronizarStatusPorVencimento(assinatura) {
+  if (!assinatura || assinatura.status !== 'ativo' || !assinatura.proximo_vencimento) {
+    return assinatura;
+  }
+
+  const hoje = new Date();
+  const vencimento = criarDataLocal(assinatura.proximo_vencimento);
+
+  if (!vencimento) {
+    return assinatura;
+  }
+
+  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
+
+  if (diasParaVencer <= 0) {
+    await runAsync(
+      `UPDATE assinaturas
+       SET status = 'bloqueado',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [assinatura.id]
+    );
+
+    return getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinatura.id]);
+  }
+
+  return assinatura;
+}
+
+async function enriquecerAssinatura(assinatura) {
+  const sincronizada = await sincronizarStatusPorVencimento(assinatura);
+
+  if (!sincronizada) {
+    return sincronizada;
+  }
+
+  return {
+    ...mapearAssinatura(sincronizada),
+    lembrete_pagamento: criarLembretePagamento(sincronizada),
+  };
+}
+
+async function carregarAssinaturaAtualizada(id) {
+  const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+  return sincronizarStatusPorVencimento(assinatura);
+}
+
 function avaliarAcessoAssinatura(assinatura) {
   if (!assinatura) {
     return {
@@ -114,14 +227,14 @@ function avaliarAcessoAssinatura(assinatura) {
     return {
       liberado: false,
       motivo: 'pagamento_pendente',
-      mensagem: 'Pagamento pendente. Regularize sua assinatura para liberar o sistema.',
+      mensagem: 'Pagamento pendente. Regularize seu Pix para liberar o sistema.',
     };
   }
 
   return {
     liberado: false,
     motivo: 'bloqueado',
-    mensagem: 'Sistema bloqueado. Entre em contato para regularizar sua assinatura.',
+    mensagem: 'Sistema bloqueado. Regularize seu Pix para voltar a usar o sistema.',
   };
 }
 
@@ -241,7 +354,8 @@ async function carregarAssinaturaPorToken(token) {
   }
 
   const session = barberSessions.get(token);
-  const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [session.assinaturaId]);
+  const assinaturaOriginal = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [session.assinaturaId]);
+  const assinatura = await sincronizarStatusPorVencimento(assinaturaOriginal);
 
   if (!assinatura) {
     barberSessions.delete(token);
@@ -305,10 +419,14 @@ async function listarAssinaturasComServicos() {
   );
 
   const detalhadas = await Promise.all(
-    assinaturas.map(async (assinatura) => ({
-      ...mapearAssinatura(assinatura),
-      servicos: await listarServicosDaAssinatura(assinatura.id),
-    }))
+    assinaturas.map(async (assinatura) => {
+      const enriquecida = await enriquecerAssinatura(assinatura);
+
+      return {
+        ...enriquecida,
+        servicos: await listarServicosDaAssinatura(assinatura.id),
+      };
+    })
   );
 
   return detalhadas;
@@ -318,7 +436,7 @@ async function montarRespostaAssinatura(assinaturaId) {
   const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinaturaId]);
 
   return {
-    ...mapearAssinatura(assinatura),
+    ...(await enriquecerAssinatura(assinatura)),
     servicos: await listarServicosDaAssinatura(assinaturaId),
   };
 }
@@ -601,7 +719,7 @@ router.post('/barbeiro/login', async (req, res) => {
   }
 
   try {
-    const assinatura = await getAsync(
+    const assinaturaEncontrada = await getAsync(
       `SELECT *
        FROM assinaturas
        WHERE telefone = ?
@@ -611,6 +729,7 @@ router.post('/barbeiro/login', async (req, res) => {
        LIMIT 1`,
       [identificador, identificador, identificador]
     );
+    const assinatura = await sincronizarStatusPorVencimento(assinaturaEncontrada);
 
     if (!assinatura || !verificarSenha(senha, assinatura)) {
       res.status(401).json({ error: 'Login invalido.' });
@@ -916,7 +1035,7 @@ router.post('/publico/assinaturas', async (req, res) => {
       }
 
       res.status(409).json({
-        error: 'Essa barbearia ja possui assinatura registrada. Regularize o pagamento para liberar o acesso.',
+        error: 'Essa barbearia ja possui assinatura registrada. Regularize o Pix para liberar o acesso.',
       });
       return;
     }
@@ -988,7 +1107,7 @@ router.post('/publico/assinaturas', async (req, res) => {
     }
 
     res.status(201).json({
-      mensagem: 'Cadastro concluido. Agora faça o pagamento para liberar seu login no sistema.',
+      mensagem: 'Cadastro concluido. Agora faça o pagamento via Pix para liberar seu login no sistema.',
       assinatura: await montarRespostaAssinatura(result.lastID),
     });
   } catch (error) {
@@ -1004,7 +1123,7 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await carregarAssinaturaAtualizada(id);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -1044,7 +1163,7 @@ router.get('/publico/assinaturas/:id/acesso', requireBarbeiro, async (req, res) 
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await carregarAssinaturaAtualizada(id);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -1072,7 +1191,7 @@ router.get('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await carregarAssinaturaAtualizada(id);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -1104,7 +1223,7 @@ router.patch('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await carregarAssinaturaAtualizada(id);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -1153,12 +1272,7 @@ router.patch('/publico/assinaturas/:id', requireBarbeiro, async (req, res) => {
       }
     }
 
-    const atualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
-
-    res.json({
-      ...mapearAssinatura(atualizada),
-      servicos: await listarServicosDaAssinatura(id),
-    });
+    res.json(await montarRespostaAssinatura(id));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1172,7 +1286,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await carregarAssinaturaAtualizada(id);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -1285,9 +1399,10 @@ router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
       return;
     }
 
+    const referenciaPagamento = ultimoPagamento ? criarDataLocal(ultimoPagamento) : new Date();
     const proximoVencimento =
       status === 'ativo'
-        ? calcularProximoVencimento(assinatura.dia_vencimento)
+        ? calcularProximoVencimento(assinatura.dia_vencimento, referenciaPagamento)
         : assinatura.proximo_vencimento;
 
     await runAsync(
@@ -1307,12 +1422,7 @@ router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
       ]
     );
 
-    const atualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
-
-    res.json({
-      ...atualizada,
-      servicos: await listarServicosDaAssinatura(id),
-    });
+    res.json(await montarRespostaAssinatura(id));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

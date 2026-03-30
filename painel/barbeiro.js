@@ -33,6 +33,8 @@ const whatsappStatusBadge = document.getElementById('whatsappStatusBadge');
 const whatsappHelpText = document.getElementById('whatsappHelpText');
 const painelOperacional = document.getElementById('painelOperacional');
 const painelLiberadoMessage = document.getElementById('painelLiberadoMessage');
+const paymentReminderCard = document.getElementById('paymentReminderCard');
+const paymentReminderText = document.getElementById('paymentReminderText');
 const painelBloqueadoMessage = document.getElementById('painelBloqueadoMessage');
 const blockedMessageText = document.getElementById('blockedMessageText');
 const blockedPixCard = document.getElementById('blockedPixCard');
@@ -304,10 +306,23 @@ async function atualizarPixBloqueado() {
 async function mostrarPainelBloqueado(mensagem) {
   painelOperacional.hidden = true;
   painelLiberadoMessage.hidden = true;
+  paymentReminderCard.hidden = true;
   painelBloqueadoMessage.hidden = false;
   blockedMessageText.textContent = mensagem;
   generateQrButton.disabled = true;
   await atualizarPixBloqueado();
+}
+
+function atualizarLembretePagamento(assinatura) {
+  const lembrete = assinatura?.lembrete_pagamento;
+
+  if (!lembrete?.mensagem) {
+    paymentReminderCard.hidden = true;
+    return;
+  }
+
+  paymentReminderText.textContent = lembrete.mensagem;
+  paymentReminderCard.hidden = false;
 }
 
 function tratarErroSessao(error) {
@@ -354,6 +369,7 @@ async function carregarPainelBarbeiro() {
 
     painelOperacional.hidden = false;
     painelLiberadoMessage.hidden = false;
+    atualizarLembretePagamento(assinatura);
     painelBloqueadoMessage.hidden = true;
     renderizarAgendamentos(agendamentos);
     renderizarFaturamento([dia, mes, ano]);

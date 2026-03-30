@@ -210,28 +210,9 @@ async function carregarAcessoAssinatura(assinaturaId, sessionKey) {
     };
   }
 
-  if (assinatura.status === 'teste') {
-    const expiracao = assinatura.trial_expires_at ? new Date(assinatura.trial_expires_at).getTime() : 0;
-
-    if (expiracao > Date.now()) {
-      return {
-        liberado: true,
-        mensagem: '',
-      };
-    }
-
-    await runAsync(
-      `UPDATE assinaturas
-       SET status = 'bloqueado',
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [assinaturaId]
-    );
-  }
-
   return {
     liberado: false,
-    mensagem: 'Atendimento temporariamente bloqueado. Regularize a assinatura da barbearia para voltar a agendar.',
+    mensagem: 'Atendimento temporariamente bloqueado. Regularize o Pix da barbearia para voltar a agendar.',
   };
 }
 

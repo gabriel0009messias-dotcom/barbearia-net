@@ -70,17 +70,16 @@ function renderizarResumo(assinaturas) {
   const ativas = assinaturas.filter((item) => item.status === 'ativo').length;
   const pendentes = assinaturas.filter((item) => item.status === 'pendente').length;
   const pix = assinaturas.filter((item) => item.metodo_pagamento === 'pix').length;
-  const boleto = assinaturas.filter((item) => item.metodo_pagamento === 'boleto').length;
   const dia5 = assinaturas.filter((item) => Number(item.dia_vencimento) === 5).length;
-  const dia19 = assinaturas.filter((item) => Number(item.dia_vencimento) === 19).length;
-  const dia26 = assinaturas.filter((item) => Number(item.dia_vencimento) === 26).length;
+  const dia12 = assinaturas.filter((item) => Number(item.dia_vencimento) === 12).length;
+  const dia24 = assinaturas.filter((item) => Number(item.dia_vencimento) === 24).length;
 
   totalAssinaturas.textContent = String(total);
   assinaturasAtivas.textContent = String(ativas);
   assinaturasPendentes.textContent = String(pendentes);
   assinaturaCount.textContent = `${total} cadastros`;
-  pagamentoResumo.textContent = `PIX: ${pix} | BOLETO: ${boleto}`;
-  vencimentoResumo.textContent = `Vencimentos 5: ${dia5} | 19: ${dia19} | 26: ${dia26}`;
+  pagamentoResumo.textContent = `PIX: ${pix}`;
+  vencimentoResumo.textContent = `Vencimentos 5: ${dia5} | 12: ${dia12} | 24: ${dia24}`;
 }
 
 function montarOpcoesStatus(statusAtual) {
@@ -125,8 +124,7 @@ function renderizarAssinaturas(assinaturas) {
             <small>R$ ${Number(item.valor_mensal || 0).toFixed(2).replace('.', ',')}</small>
           </td>
           <td>
-            <small>Inicio: ${formatarData(item.trial_started_at?.slice(0, 10))}</small><br />
-            <small>Fim: ${formatarData(item.trial_expires_at?.slice(0, 10))}</small>
+            <small>${escaparHtml(item.lembrete_pagamento?.mensagem || 'Pagamento em dia.')}</small>
           </td>
           <td>
             Dia ${escaparHtml(String(item.dia_vencimento || '-'))}<br />

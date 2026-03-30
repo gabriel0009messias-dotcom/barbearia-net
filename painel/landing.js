@@ -142,7 +142,7 @@ loginBarbeiroForm.addEventListener('submit', async (event) => {
   } catch (error) {
     console.error(error);
     loginBarbeiroMessage.textContent =
-      error.status === 403 ? 'Sistema bloqueado. Regularize sua assinatura.' : error.message;
+      error.status === 403 ? 'Sistema bloqueado. Regularize seu Pix.' : error.message;
 
     if (error.status === 403) {
       await mostrarPixBloqueado();
