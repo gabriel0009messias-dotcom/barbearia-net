@@ -1,4 +1,6 @@
 tokens/
 node_modules/
+backend/node_modules/
+backend/tokens/
 *.log
 .env
