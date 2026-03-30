@@ -24,18 +24,7 @@ if (!adminToken) {
 
 // Exibir o link correto de cadastro conforme ambiente
 const renderLink = 'https://barbearia-net.onrender.com/';
-const hostname = window.location.hostname;
-const usandoServidorLocal =
-  hostname === 'localhost' ||
-  hostname === '127.0.0.1' ||
-  hostname === '::1' ||
-  hostname.endsWith('.local');
-
-if (window.location.hostname.includes('onrender.com') || usandoServidorLocal) {
-  cadastroLinkInput.value = renderLink;
-} else {
-  cadastroLinkInput.value = `${window.location.origin}/`;
-}
+cadastroLinkInput.value = renderLink;
 
 function formatarData(data) {
   if (!data) return '-';
