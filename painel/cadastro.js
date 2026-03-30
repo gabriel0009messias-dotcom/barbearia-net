@@ -40,6 +40,7 @@ let whatsappPolling = null;
 let pixConfig = null;
 let valorMensalAtual = 1;
 let whatsappBridgeUrl = null;
+const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -69,20 +70,51 @@ async function buscarJson(url, options = {}) {
 }
 
 async function buscarJsonBridge(url, options = {}) {
-  const response = await fetch(url, options);
-  const payload = await response.json().catch(() => ({}));
+  try {
+    const response = await fetch(url, options);
+    const payload = await response.json().catch(() => ({}));
 
-  if (!response.ok) {
-    const erro = new Error(payload?.error || 'Nao consegui falar com o bot local do WhatsApp.');
-    erro.status = response.status;
-    throw erro;
+    if (!response.ok) {
+      const erro = new Error(payload?.error || 'Nao consegui falar com o bot local do WhatsApp.');
+      erro.status = response.status;
+      throw erro;
+    }
+
+    return payload;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      const erroRede = new Error(
+        'Nao consegui falar com o bot local do WhatsApp. Abra o arquivo backend\\iniciar-whatsapp.bat e deixe a janela aberta.'
+      );
+      erroRede.status = 0;
+      throw erroRede;
+    }
+
+    throw error;
   }
-
-  return payload;
 }
 
 function getWhatsappBridgeBase() {
-  return String(whatsappBridgeUrl || 'http://127.0.0.1:3010').replace(/\/$/, '');
+  return String(whatsappBridgeUrl || WHATSAPP_BRIDGE_FALLBACKS[0]).replace(/\/$/, '');
+}
+
+function listarBridgeBases() {
+  const bases = [getWhatsappBridgeBase(), ...WHATSAPP_BRIDGE_FALLBACKS];
+  return Array.from(new Set(bases.map((item) => String(item).replace(/\/$/, ''))));
+}
+
+async function buscarJsonBridgeComFallback(path, options = {}) {
+  let ultimoErro = null;
+
+  for (const base of listarBridgeBases()) {
+    try {
+      return await buscarJsonBridge(`${base}${path}`, options);
+    } catch (error) {
+      ultimoErro = error;
+    }
+  }
+
+  throw ultimoErro || new Error('Nao consegui falar com o bot local do WhatsApp.');
 }
 
 function renderizarDiasFuncionamento(container, selecionados = [1, 2, 3, 4, 5, 6]) {
@@ -205,7 +237,7 @@ async function consultarStatusWhatsapp() {
   }
 
   try {
-    const status = await buscarJsonBridge(`${getWhatsappBridgeBase()}/sessions/${assinaturaAtualId}/status`);
+    const status = await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
 
     if (status.status === 'erro') {
@@ -218,8 +250,7 @@ async function consultarStatusWhatsapp() {
     }
   } catch (error) {
     console.error(error);
-    qrStatusMessage.textContent =
-      'Nao consegui falar com o bot local do WhatsApp. Abra a pasta do projeto e rode backend\\iniciar-whatsapp.bat ou npm run bot dentro de backend.';
+    qrStatusMessage.textContent = error.message;
   }
 }
 
@@ -340,7 +371,7 @@ generateQrButton.addEventListener('click', async () => {
 
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
-    await buscarJsonBridge(`${getWhatsappBridgeBase()}/sessions/${assinaturaAtualId}/start`, {
+    await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -353,6 +384,7 @@ generateQrButton.addEventListener('click', async () => {
   } catch (error) {
     console.error(error);
     qrStatusMessage.textContent = error.message;
+    whatsappStatusBadge.textContent = 'Erro local';
   }
 });
 
