@@ -7,10 +7,11 @@ const { iniciarSessao, statusSessao } = require('./whatsappManager');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
-const METODOS_PAGAMENTO = ['pix'];
+const METODOS_PAGAMENTO = ['cartao', 'pix'];
 const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
 const adminSessions = new Map();
 const barberSessions = new Map();
 const passwordRecoveryRequests = new Map();
@@ -135,7 +136,7 @@ function criarLembretePagamento(assinatura) {
     return {
       tipo: 'atrasado',
       diasParaVencer,
-      mensagem: `Seu Pix venceu em ${assinatura.proximo_vencimento}. Regularize o pagamento para desbloquear o sistema.`,
+      mensagem: `Seu pagamento venceu em ${assinatura.proximo_vencimento}. Regularize a assinatura para desbloquear o sistema.`,
     };
   }
 
@@ -143,7 +144,7 @@ function criarLembretePagamento(assinatura) {
     return {
       tipo: 'hoje',
       diasParaVencer,
-      mensagem: `Seu Pix vence hoje, dia ${String(assinatura.dia_vencimento).padStart(2, '0')}. Pague hoje para nao bloquear o acesso.`,
+      mensagem: `Sua assinatura vence hoje, dia ${String(assinatura.dia_vencimento).padStart(2, '0')}. Pague hoje para nao bloquear o acesso.`,
     };
   }
 
@@ -151,7 +152,7 @@ function criarLembretePagamento(assinatura) {
     return {
       tipo: 'proximo',
       diasParaVencer,
-      mensagem: `Seu Pix vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}, no dia ${String(
+      mensagem: `Sua assinatura vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}, no dia ${String(
         assinatura.dia_vencimento
       ).padStart(2, '0')}.`,
     };
@@ -228,14 +229,14 @@ function avaliarAcessoAssinatura(assinatura) {
     return {
       liberado: false,
       motivo: 'pagamento_pendente',
-      mensagem: 'Pagamento pendente. Regularize seu Pix para liberar o sistema.',
+      mensagem: 'Pagamento pendente. Regularize sua assinatura para liberar o sistema.',
     };
   }
 
   return {
     liberado: false,
     motivo: 'bloqueado',
-    mensagem: 'Sistema bloqueado. Regularize seu Pix para voltar a usar o sistema.',
+    mensagem: 'Sistema bloqueado. Regularize sua assinatura para voltar a usar o sistema.',
   };
 }
 
@@ -592,6 +593,147 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   });
 }
 
+function getMercadoPagoAccessToken() {
+  return String(process.env.MP_ACCESS_TOKEN || process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim();
+}
+
+function getPublicAppUrl(req) {
+  return (
+    String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim() ||
+    `${req.protocol}://${req.get('host')}`
+  ).replace(/\/$/, '');
+}
+
+async function requestMercadoPago(path, options = {}) {
+  const accessToken = getMercadoPagoAccessToken();
+
+  if (!accessToken) {
+    const error = new Error('Mercado Pago ainda nao configurado. Adicione MP_ACCESS_TOKEN no servidor.');
+    error.statusCode = 503;
+    throw error;
+  }
+
+  const response = await fetch(`${MERCADO_PAGO_API_BASE_URL}${path}`, {
+    method: options.method || 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const detail = payload?.message || payload?.error || 'Falha ao falar com o Mercado Pago.';
+    const error = new Error(detail);
+    error.statusCode = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return payload;
+}
+
+function mapearStatusMercadoPagoParaAssinatura(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'authorized':
+      return 'ativo';
+    case 'pending':
+    case 'in_process':
+      return 'pendente';
+    case 'paused':
+    case 'cancelled':
+      return 'bloqueado';
+    default:
+      return 'pendente';
+  }
+}
+
+async function salvarRetornoMercadoPago(assinaturaId, preapproval) {
+  const gatewayStatus = String(preapproval?.status || 'pending');
+  const assinaturaStatus = mapearStatusMercadoPagoParaAssinatura(gatewayStatus);
+  const proximoVencimento = String(preapproval?.next_payment_date || '').slice(0, 10) || null;
+  const ultimoPagamento =
+    assinaturaStatus === 'ativo' ? new Date().toISOString().slice(0, 10) : null;
+
+  await runAsync(
+    `UPDATE assinaturas
+     SET status = ?,
+         gateway_provider = 'mercado_pago',
+         gateway_status = ?,
+         gateway_external_reference = ?,
+         gateway_checkout_url = ?,
+         mercado_preapproval_id = ?,
+         mercado_payer_email = ?,
+         mercado_next_payment_date = ?,
+         mercado_last_payload = ?,
+         ultimo_pagamento = COALESCE(?, ultimo_pagamento),
+         proximo_vencimento = COALESCE(?, proximo_vencimento),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [
+      assinaturaStatus,
+      gatewayStatus,
+      preapproval?.external_reference || null,
+      preapproval?.init_point || preapproval?.sandbox_init_point || null,
+      preapproval?.id || null,
+      preapproval?.payer_email || null,
+      preapproval?.next_payment_date || null,
+      JSON.stringify(preapproval || {}),
+      ultimoPagamento,
+      proximoVencimento,
+      assinaturaId,
+    ]
+  );
+}
+
+function calcularStartDateAssinatura(diaVencimento) {
+  const agora = new Date();
+  const inicio = new Date(agora.getFullYear(), agora.getMonth(), Number(diaVencimento), 12, 0, 0);
+
+  if (inicio.getTime() <= agora.getTime()) {
+    inicio.setMonth(inicio.getMonth() + 1);
+  }
+
+  return inicio.toISOString();
+}
+
+async function criarCheckoutMercadoPagoParaAssinatura(assinatura, req) {
+  if (!assinatura?.email) {
+    const error = new Error('Informe um Gmail valido para gerar a assinatura no Mercado Pago.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const appUrl = getPublicAppUrl(req);
+  const externalReference = assinatura.gateway_external_reference || `assinatura-${assinatura.id}`;
+  const preapproval = await requestMercadoPago('/preapproval', {
+    method: 'POST',
+    body: {
+      reason: `Assinatura mensal Barberflix - ${assinatura.barbearia_nome}`,
+      payer_email: assinatura.email,
+      external_reference: externalReference,
+      back_url: `${appUrl}/cadastro.html?assinatura=${assinatura.id}&gateway=mercado_pago`,
+      notification_url: `${appUrl}/api/mercadopago/webhook`,
+      status: 'pending',
+      auto_recurring: {
+        frequency: 1,
+        frequency_type: 'months',
+        transaction_amount: Number(assinatura.valor_mensal || 1),
+        currency_id: 'BRL',
+        billing_day: Number(assinatura.dia_vencimento || 5),
+        billing_day_proportional: false,
+        start_date: calcularStartDateAssinatura(assinatura.dia_vencimento || 5),
+      },
+    },
+  });
+
+  await salvarRetornoMercadoPago(assinatura.id, preapproval);
+  return preapproval;
+}
+
 function erroHorarioJaOcupado(error) {
   return error?.code === 'SQLITE_CONSTRAINT' || /unique|constraint/i.test(String(error?.message || ''));
 }
@@ -805,6 +947,11 @@ router.get('/publico/assinatura-config', async (req, res) => {
       suporteNumero,
       valorMensal: 1,
       whatsappBridgeUrl: process.env.WHATSAPP_BRIDGE_URL_PUBLIC || 'http://127.0.0.1:3010',
+      gateway: {
+        provider: 'mercado_pago',
+        enabled: Boolean(getMercadoPagoAccessToken()),
+        label: 'Mercado Pago',
+      },
       pix: {
         chave: '119.063.635.28',
         favorecido: 'Gabriel Messias Rios',
@@ -840,6 +987,55 @@ router.post('/publico/pix/qrcode', async (req, res) => {
   const payload = `00020126360014BR.GOV.BCB.PIX0111${chavePix}520400005303986540${valorFormatado}5802BR5915${nomeRecebedor}6009${cidade}62070503${txid}6304`;
 
   res.json({ payload, txid, valor, descricao });
+});
+
+router.post('/mercadopago/webhook', async (req, res) => {
+  try {
+    const resourceId = req.body?.data?.id || req.query['data.id'] || req.body?.id || req.query.id || null;
+
+    if (!resourceId) {
+      res.status(200).json({ ok: true, ignored: true });
+      return;
+    }
+
+    const preapproval = await requestMercadoPago(`/preapproval/${resourceId}`);
+    const externalReference = String(preapproval?.external_reference || '');
+    const assinaturaId = Number.parseInt(externalReference.replace('assinatura-', ''), 10);
+
+    if (!assinaturaId) {
+      res.status(200).json({ ok: true, ignored: true });
+      return;
+    }
+
+    await salvarRetornoMercadoPago(assinaturaId, preapproval);
+    res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('Webhook Mercado Pago:', error.message);
+    res.status(200).json({ ok: true });
+  }
+});
+
+router.post('/publico/assinaturas/:id/checkout', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const preapproval = await criarCheckoutMercadoPagoParaAssinatura(assinatura, req);
+
+    res.json({
+      checkoutUrl: preapproval.init_point || preapproval.sandbox_init_point || null,
+      gatewayStatus: preapproval.status || 'pending',
+      provider: 'mercado_pago',
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
 });
 
 router.post('/barbeiro/login', async (req, res) => {
@@ -1039,6 +1235,11 @@ router.post('/publico/assinaturas', async (req, res) => {
     return;
   }
 
+  if (!email) {
+    res.status(400).json({ error: 'Informe um Gmail valido para liberar a assinatura no Mercado Pago.' });
+    return;
+  }
+
   if (String(senha).length < 4) {
     res.status(400).json({ error: 'A senha precisa ter pelo menos 4 caracteres.' });
     return;
@@ -1136,8 +1337,13 @@ router.post('/publico/assinaturas', async (req, res) => {
           );
         }
 
+        const assinaturaAtualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinaturaExistente.id]);
+        const checkout = await criarCheckoutMercadoPagoParaAssinatura(assinaturaAtualizada, req);
+
         res.status(200).json({
-          mensagem: 'Cadastro atualizado. Agora finalize o pagamento para liberar seu login.',
+          mensagem: 'Cadastro atualizado. Agora finalize seu pagamento no Mercado Pago para liberar o login.',
+          checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
+          gatewayStatus: checkout.status || 'pending',
           assinatura: await montarRespostaAssinatura(assinaturaExistente.id),
         });
         return;
@@ -1215,12 +1421,17 @@ router.post('/publico/assinaturas', async (req, res) => {
       );
     }
 
+    const assinaturaCriada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [result.lastID]);
+    const checkout = await criarCheckoutMercadoPagoParaAssinatura(assinaturaCriada, req);
+
     res.status(201).json({
-      mensagem: 'Cadastro concluido. Agora faça o pagamento via Pix para liberar seu login no sistema.',
+      mensagem: 'Cadastro concluido. Agora finalize o pagamento no Mercado Pago para liberar seu login.',
+      checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
+      gatewayStatus: checkout.status || 'pending',
       assinatura: await montarRespostaAssinatura(result.lastID),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 
@@ -1485,6 +1696,11 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
     res.json({
       suporteNumero,
       valorMensal: 1,
+      gateway: {
+        provider: 'mercado_pago',
+        enabled: Boolean(getMercadoPagoAccessToken()),
+        label: 'Mercado Pago',
+      },
       diasVencimento: DIAS_VENCIMENTO,
       metodosPagamento: METODOS_PAGAMENTO,
       statusDisponiveis: STATUS_ASSINATURA,

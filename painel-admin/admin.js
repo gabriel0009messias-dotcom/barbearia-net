@@ -69,6 +69,7 @@ function renderizarResumo(assinaturas) {
   const total = assinaturas.length;
   const ativas = assinaturas.filter((item) => item.status === 'ativo').length;
   const pendentes = assinaturas.filter((item) => item.status === 'pendente').length;
+  const cartao = assinaturas.filter((item) => item.metodo_pagamento === 'cartao').length;
   const pix = assinaturas.filter((item) => item.metodo_pagamento === 'pix').length;
   const dia5 = assinaturas.filter((item) => Number(item.dia_vencimento) === 5).length;
   const dia12 = assinaturas.filter((item) => Number(item.dia_vencimento) === 12).length;
@@ -78,7 +79,7 @@ function renderizarResumo(assinaturas) {
   assinaturasAtivas.textContent = String(ativas);
   assinaturasPendentes.textContent = String(pendentes);
   assinaturaCount.textContent = `${total} cadastros`;
-  pagamentoResumo.textContent = `PIX: ${pix}`;
+  pagamentoResumo.textContent = `Cartao: ${cartao} | Pix: ${pix}`;
   vencimentoResumo.textContent = `Vencimentos 5: ${dia5} | 12: ${dia12} | 24: ${dia24}`;
 }
 

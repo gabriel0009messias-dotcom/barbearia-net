@@ -17,6 +17,7 @@ function definirCabecalhoSemCache(res) {
 }
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use('/api', routes);
 app.use(
   express.static(barberPanelPath, {

@@ -100,6 +100,10 @@ db.serialize(() => {
     FOREIGN KEY(servico_id) REFERENCES servicos(id)
   )`);
 
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agendamentos_confirmados_data_hora
+          ON agendamentos (data, hora)
+          WHERE status = 'confirmado'`);
+
   db.run(`CREATE TABLE IF NOT EXISTS bloqueios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data TEXT,
@@ -158,6 +162,14 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'senha_hash', 'TEXT');
   garantirColuna('assinaturas', 'senha_salt', 'TEXT');
   garantirColuna('assinaturas', 'whatsapp_bridge_token', 'TEXT');
+  garantirColuna('assinaturas', 'gateway_provider', 'TEXT');
+  garantirColuna('assinaturas', 'gateway_status', 'TEXT');
+  garantirColuna('assinaturas', 'gateway_external_reference', 'TEXT');
+  garantirColuna('assinaturas', 'gateway_checkout_url', 'TEXT');
+  garantirColuna('assinaturas', 'mercado_preapproval_id', 'TEXT');
+  garantirColuna('assinaturas', 'mercado_payer_email', 'TEXT');
+  garantirColuna('assinaturas', 'mercado_next_payment_date', 'TEXT');
+  garantirColuna('assinaturas', 'mercado_last_payload', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_15_enviado_em', 'TEXT');
 
   db.run(`UPDATE assinaturas

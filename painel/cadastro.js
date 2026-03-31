@@ -12,11 +12,10 @@ const TOKEN_STORAGE_KEY = 'barbearia_auth_token';
 
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const metodoPagamentoInput = document.getElementById('metodoPagamentoInput');
-const pixInfoCard = document.getElementById('pixInfoCard');
-const pixFavorecidoLabel = document.getElementById('pixFavorecidoLabel');
-const pixChaveLabel = document.getElementById('pixChaveLabel');
-const pixQrPanel = document.getElementById('pixQrPanel');
-const pixQrImage = document.getElementById('pixQrImage');
+const gatewayInfoCard = document.getElementById('gatewayInfoCard');
+const gatewayMethodLabel = document.getElementById('gatewayMethodLabel');
+const gatewayHelpLabel = document.getElementById('gatewayHelpLabel');
+const gatewayCheckoutButton = document.getElementById('gatewayCheckoutButton');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const diasFuncionamentoInput = document.getElementById('diasFuncionamentoInput');
 const horarioAberturaInput = document.getElementById('horarioAberturaInput');
@@ -37,9 +36,10 @@ const whatsappHelpText = document.getElementById('whatsappHelpText');
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let assinaturaAtualId = null;
 let whatsappPolling = null;
-let pixConfig = null;
 let valorMensalAtual = 1;
 let whatsappBridgeUrl = null;
+let gatewayConfig = null;
+let gatewayCheckoutUrl = null;
 const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function getHeaders(extra = {}) {
@@ -203,40 +203,36 @@ function atualizarStatusWhatsapp(status, qrCode) {
   qrCodeImage.hidden = true;
 }
 
-async function atualizarPixInfo() {
-  const mostrarPix = metodoPagamentoInput.value === 'pix' && pixConfig;
-  pixInfoCard.hidden = !mostrarPix;
+function formatarMetodoPagamento(metodo) {
+  if (metodo === 'cartao') {
+    return 'Cartao de credito recorrente';
+  }
 
-  if (!mostrarPix) {
-    pixQrPanel.hidden = true;
-    pixQrImage.hidden = true;
-    pixQrImage.removeAttribute('src');
+  if (metodo === 'pix') {
+    return 'Pix';
+  }
+
+  return metodo || '-';
+}
+
+function atualizarGatewayInfo() {
+  const metodo = metodoPagamentoInput.value;
+  const mostrar = Boolean(gatewayConfig?.enabled && metodo);
+  gatewayInfoCard.hidden = !mostrar;
+
+  if (!mostrar) {
+    gatewayCheckoutButton.hidden = true;
+    gatewayCheckoutUrl = null;
     return;
   }
 
-  pixFavorecidoLabel.textContent = `Favorecido: ${pixConfig.favorecido}`;
-  pixChaveLabel.textContent = `Chave Pix: ${pixConfig.chave}`;
+  gatewayMethodLabel.textContent = `Metodo selecionado: ${formatarMetodoPagamento(metodo)}`;
+  gatewayHelpLabel.textContent =
+    metodo === 'cartao'
+      ? 'Voce sera levado ao Mercado Pago para autorizar a cobranca mensal recorrente no cartao.'
+      : 'Voce sera levado ao Mercado Pago para concluir o pagamento por Pix com checkout seguro.';
 
-  try {
-    const pagamentoPix = await buscarJson('/api/publico/pix/qrcode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        valor: valorMensalAtual,
-        descricao: 'Assinatura mensal Barberflix',
-      }),
-    });
-
-    pixQrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
-      pagamentoPix.payload
-    )}`;
-    pixQrPanel.hidden = false;
-    pixQrImage.hidden = false;
-  } catch (error) {
-    console.error(error);
-    pixQrPanel.hidden = true;
-    pixQrImage.hidden = true;
-  }
+  gatewayCheckoutButton.hidden = !gatewayCheckoutUrl;
 }
 
 async function consultarStatusWhatsapp() {
@@ -290,11 +286,11 @@ async function carregarConfiguracao() {
   try {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
-    pixConfig = config.pix || null;
     valorMensalAtual = Number(config.valorMensal || 1);
     whatsappBridgeUrl = config.whatsappBridgeUrl || 'http://127.0.0.1:3010';
+    gatewayConfig = config.gateway || null;
     metodoPagamentoInput.innerHTML = config.metodosPagamento
-      .map((metodo) => `<option value="${metodo}">${metodo.toUpperCase()}</option>`)
+      .map((metodo) => `<option value="${metodo}">${formatarMetodoPagamento(metodo)}</option>`)
       .join('');
     diaVencimentoInput.innerHTML = config.diasVencimento
       .map((dia) => `<option value="${dia}">Dia ${dia}</option>`)
@@ -304,7 +300,7 @@ async function carregarConfiguracao() {
     horarioAlmocoInicioInput.value = config.funcionamentoPadrao?.horarioAlmocoInicio || '12:00';
     horarioAlmocoFimInput.value = config.funcionamentoPadrao?.horarioAlmocoFim || '13:00';
     horarioFechamentoInput.value = config.funcionamentoPadrao?.horarioFechamento || '18:00';
-    atualizarPixInfo();
+    atualizarGatewayInfo();
   } catch (error) {
     console.error(error);
     assinaturaFormMessage.textContent = 'Nao consegui carregar a configuracao do cadastro.';
@@ -328,7 +324,12 @@ serviceRows.addEventListener('click', (event) => {
 });
 
 addServiceButton.addEventListener('click', () => criarLinhaServico());
-metodoPagamentoInput.addEventListener('change', atualizarPixInfo);
+metodoPagamentoInput.addEventListener('change', atualizarGatewayInfo);
+gatewayCheckoutButton.addEventListener('click', () => {
+  if (gatewayCheckoutUrl) {
+    window.location.href = gatewayCheckoutUrl;
+  }
+});
 
 assinaturaForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -356,15 +357,21 @@ assinaturaForm.addEventListener('submit', async (event) => {
     });
 
     assinaturaAtualId = resposta.assinatura.id;
+    gatewayCheckoutUrl = resposta.checkoutUrl || null;
     authToken = null;
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     generateQrButton.disabled = true;
     abrirPainelButton.hidden = true;
     assinaturaFormMessage.textContent =
-      resposta.mensagem || 'Cadastro concluido. Agora faça o pagamento para liberar seu login.';
+      resposta.mensagem || 'Cadastro concluido. Agora finalize o pagamento para liberar seu login.';
     whatsappHelpText.textContent =
       'Pagamento aguardando confirmacao. Assim que sua assinatura for liberada, o WhatsApp e o painel ficam disponiveis.';
     atualizarStatusWhatsapp(resposta.assinatura.whatsapp_status);
+    atualizarGatewayInfo();
+
+    if (gatewayCheckoutUrl) {
+      gatewayCheckoutButton.hidden = false;
+    }
   } catch (error) {
     console.error(error);
     assinaturaFormMessage.textContent = error.message;

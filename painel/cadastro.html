@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cadastro da Barbearia</title>
-    <link rel="stylesheet" href="./styles.css?v=20260330c" />
+    <link rel="stylesheet" href="./styles.css?v=20260330f" />
   </head>
   <body>
     <section class="auth-landing cadastro-landing">
@@ -56,8 +56,8 @@
               </label>
 
               <label>
-                E-mail
-                <input id="emailAssinaturaInput" type="email" />
+                Gmail
+                <input id="emailAssinaturaInput" type="email" required />
               </label>
 
               <label>
@@ -73,13 +73,11 @@
                 <select id="metodoPagamentoInput" required></select>
               </label>
 
-              <div id="pixInfoCard" class="support-note" hidden>
-                <strong>Pagamento via Pix</strong>
-                <p id="pixFavorecidoLabel">Favorecido: --</p>
-                <div id="pixQrPanel" class="pix-qr-panel" hidden>
-                  <img id="pixQrImage" alt="QR Code do pagamento Pix" hidden />
-                </div>
-                <p id="pixChaveLabel">Chave Pix: --</p>
+              <div id="gatewayInfoCard" class="support-note" hidden>
+                <strong>Pagamento seguro com Mercado Pago</strong>
+                <p id="gatewayMethodLabel">Metodo selecionado: --</p>
+                <p id="gatewayHelpLabel">Finalize pelo checkout seguro para liberar sua assinatura.</p>
+                <button id="gatewayCheckoutButton" type="button" class="landing-login-button" hidden>Ir para o pagamento</button>
               </div>
 
               <label>
@@ -166,6 +164,6 @@
       </div>
     </section>
 
-    <script src="./cadastro.js?v=20260330c"></script>
+    <script src="./cadastro.js?v=20260330f"></script>
   </body>
 </html>
