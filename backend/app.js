@@ -125,6 +125,21 @@ function precoDoServico(nomeServico = '') {
   return Number(servico?.preco || 0);
 }
 
+function encontrarServicoPorIdOuNome(servicoId, servicoNome) {
+  const porId = Number(servicoId);
+
+  if (Number.isInteger(porId) && porId > 0) {
+    const encontradoPorId = ACESSO_VITALICIO.servicos.find((item) => Number(item.id) === porId);
+    if (encontradoPorId) {
+      return encontradoPorId;
+    }
+  }
+
+  return ACESSO_VITALICIO.servicos.find(
+    (item) => String(item.nome || '').trim().toLowerCase() === String(servicoNome || '').trim().toLowerCase()
+  );
+}
+
 function filtrarAgendamentosConfirmados() {
   return demoAgendamentos.filter((item) => String(item.status || '').toLowerCase() === 'confirmado');
 }
@@ -995,6 +1010,39 @@ app.get('/api/publico/assinaturas/:id', requireBarbeiro, (req, res) => {
   });
 });
 
+app.get('/api/publico/assinaturas/:id/acesso', (req, res) => {
+  const id = Number(req.params.id);
+
+  if (id === ACESSO_VITALICIO.id) {
+    res.json({
+      liberado: ACESSO_VITALICIO.status === 'ativo',
+      mensagem:
+        ACESSO_VITALICIO.status === 'ativo'
+          ? ''
+          : 'Atendimento temporariamente bloqueado. Regularize a assinatura para voltar a agendar.',
+    });
+    return;
+  }
+
+  const assinatura = assinaturasCadastradas.find((item) => item.id === id);
+
+  if (!assinatura) {
+    res.status(404).json({
+      liberado: false,
+      mensagem: 'Essa assinatura nao foi encontrada. Entre em contato com o suporte.',
+    });
+    return;
+  }
+
+  res.json({
+    liberado: assinatura.status === 'ativo',
+    mensagem:
+      assinatura.status === 'ativo'
+        ? ''
+        : 'Atendimento temporariamente bloqueado. Regularize a assinatura para voltar a agendar.',
+  });
+});
+
 app.patch('/api/publico/assinaturas/:id', requireBarbeiro, (req, res) => {
   const {
     diasFuncionamento,
@@ -1032,8 +1080,76 @@ app.patch('/api/publico/assinaturas/:id', requireBarbeiro, (req, res) => {
   });
 });
 
+app.post('/api/agendamentos', requireBarbeiro, (req, res) => {
+  const { cliente, telefone, servicoId, servicoNome, data, hora } = req.body;
+
+  if (!cliente || !telefone || !data || !hora) {
+    res.status(400).json({ error: 'Informe cliente, telefone, data e hora.' });
+    return;
+  }
+
+  const servico = encontrarServicoPorIdOuNome(servicoId, servicoNome);
+
+  if (!servico) {
+    res.status(400).json({ error: 'Servico nao encontrado para este agendamento.' });
+    return;
+  }
+
+  const conflito = demoAgendamentos.some(
+    (item) => item.data === data && item.hora === hora && String(item.status || '').toLowerCase() === 'confirmado'
+  );
+
+  if (conflito) {
+    res.status(409).json({ error: 'Esse horario acabou de ser reservado por outro cliente.' });
+    return;
+  }
+
+  const agendamento = {
+    id: Date.now(),
+    cliente,
+    telefone,
+    servico: servico.nome,
+    servico_id: servico.id,
+    servico_preco: Number(servico.preco || 0),
+    data,
+    hora,
+    status: 'confirmado',
+    lembrete_15_enviado_em: null,
+    lembrete_7_enviado_em: null,
+  };
+
+  demoAgendamentos.push(agendamento);
+  res.status(201).json(agendamento);
+});
+
 app.post('/api/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, (req, res) => {
   res.json({ token: 'demo-bridge-token' });
+});
+
+app.post('/api/agendamentos/:id/lembrete-15', (req, res) => {
+  const id = Number(req.params.id);
+  const agendamento = demoAgendamentos.find((item) => item.id === id);
+
+  if (!agendamento) {
+    res.status(404).json({ error: 'Agendamento nao encontrado.' });
+    return;
+  }
+
+  agendamento.lembrete_15_enviado_em = req.body?.enviadoEm || new Date().toISOString();
+  res.json({ ok: true });
+});
+
+app.post('/api/agendamentos/:id/lembrete-7', (req, res) => {
+  const id = Number(req.params.id);
+  const agendamento = demoAgendamentos.find((item) => item.id === id);
+
+  if (!agendamento) {
+    res.status(404).json({ error: 'Agendamento nao encontrado.' });
+    return;
+  }
+
+  agendamento.lembrete_7_enviado_em = req.body?.enviadoEm || new Date().toISOString();
+  res.json({ ok: true });
 });
 
 app.post('/api/barbeiro/logout', (req, res) => {
