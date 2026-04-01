@@ -876,6 +876,8 @@ code {
   display: grid;
   place-items: center;
   padding: 24px;
+  position: relative;
+  z-index: 1;
 }
 
 .admin-login-card {
@@ -886,6 +888,8 @@ code {
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
   color: #fff;
+  position: relative;
+  z-index: 2;
 }
 
 .admin-login-card h1 {
