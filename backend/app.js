@@ -576,6 +576,7 @@ app.get('/controle-interno.html', (req, res) => {
 });
 
 app.get('/api/publico/assinatura-config', (req, res) => {
+  const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
   res.json({
     suporteNumero: '--',
     valorMensal: 65,
@@ -593,7 +594,8 @@ app.get('/api/publico/assinatura-config', (req, res) => {
       horarioAlmocoFim: '13:00',
       horarioFechamento: '18:00',
     },
-    whatsappBridgeUrl: 'http://127.0.0.1:3010',
+    whatsappBridgeUrl: emHospedagem ? null : 'http://127.0.0.1:3010',
+    whatsappLocalOnly: emHospedagem,
   });
 });
 

@@ -58,6 +58,7 @@ let whatsappPolling = null;
 let pixConfig = null;
 let valorMensalAtual = 1;
 let whatsappBridgeUrl = null;
+let whatsappLocalOnly = false;
 const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function formatarData(data) {
@@ -391,13 +392,21 @@ async function carregarPainelBarbeiro() {
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
     valorMensalAtual = Number(config.valorMensal || 1);
-    whatsappBridgeUrl = config.whatsappBridgeUrl || 'http://127.0.0.1:3010';
+    whatsappBridgeUrl = config.whatsappBridgeUrl || null;
+    whatsappLocalOnly = Boolean(config.whatsappLocalOnly);
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generateQrButton.disabled = false;
-    whatsappHelpText.textContent =
-      'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
+    generateQrButton.disabled = whatsappLocalOnly;
+    whatsappHelpText.textContent = whatsappLocalOnly
+      ? 'A conexao do WhatsApp deve ser feita no ambiente local do sistema. No site online, esse QR Code fica desativado para evitar erro.'
+      : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
+    if (whatsappLocalOnly) {
+      whatsappStatusBadge.textContent = 'Configuracao local';
+      qrCodeImage.hidden = true;
+      qrStatusMessage.textContent =
+        'Abra o sistema local e conecte o WhatsApp por la. O painel online nao conversa com o bot local automaticamente.';
+    }
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
       buscarJson('/api/agendamentos'),
@@ -415,7 +424,9 @@ async function carregarPainelBarbeiro() {
     renderizarFaturamento([dia, mes, ano]);
     renderizarBloqueios(bloqueios);
     preencherConfiguracoesPainel(assinatura);
-    await consultarStatusWhatsapp();
+    if (!whatsappLocalOnly) {
+      await consultarStatusWhatsapp();
+    }
   } catch (error) {
     console.error(error);
     if (tratarErroSessao(error)) {
@@ -431,6 +442,10 @@ async function excluirAgendamento(id) {
 
 async function consultarStatusWhatsapp() {
   if (!assinaturaAtualId || !authToken) {
+    return;
+  }
+
+  if (whatsappLocalOnly || !whatsappBridgeUrl) {
     return;
   }
 
@@ -542,6 +557,13 @@ addPainelServiceButton.addEventListener('click', () => criarLinhaServico(painelS
 generateQrButton.addEventListener('click', async () => {
   if (!assinaturaAtualId) {
     qrStatusMessage.textContent = 'Entre no painel antes de gerar o QR Code.';
+    return;
+  }
+
+  if (whatsappLocalOnly || !whatsappBridgeUrl) {
+    qrStatusMessage.textContent =
+      'O QR Code do WhatsApp deve ser gerado no sistema local. No site online essa conexao fica desativada.';
+    whatsappStatusBadge.textContent = 'Configuracao local';
     return;
   }
 
