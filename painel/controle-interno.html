@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Controle Interno | Salãoflix</title>
+    <link rel="stylesheet" href="./styles.css?v=20260401a" />
+  </head>
+  <body>
+    <section class="auth-landing admin-login-shell">
+      <div class="landing-overlay"></div>
+      <div id="adminLoginCard" class="admin-login-card">
+        <p class="eyebrow">Controle interno</p>
+        <h1>Painel administrativo</h1>
+        <p class="landing-panel-copy">Entre com o PIN do admin para gerenciar assinaturas.</p>
+
+        <form id="adminLoginForm" class="form-grid">
+          <label>
+            PIN do admin
+            <input id="adminPinInput" type="password" inputmode="numeric" required />
+          </label>
+
+          <button type="submit" class="landing-login-button">Entrar</button>
+        </form>
+
+        <p id="adminLoginMessage" class="form-message light-message"></p>
+      </div>
+
+      <div id="adminPanel" class="content" hidden>
+        <section class="hero hero-compact">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Assinaturas do sistema</h2>
+            <p id="adminResumo" class="sidebar-copy">Carregando dados...</p>
+          </div>
+          <div class="hero-actions">
+            <button id="recarregarAdminButton" class="secondary-pill-button" type="button">Recarregar</button>
+            <button id="sairAdminButton" class="primary-button" type="button">Sair</button>
+          </div>
+        </section>
+
+        <section class="subscription-grid">
+          <article class="panel-card admin-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Configuração</p>
+                <h3>Assinatura</h3>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>
+                Suporte
+                <input id="adminSuporteInput" type="text" />
+              </label>
+              <button id="salvarSuporteButton" class="landing-login-button" type="button">Salvar suporte</button>
+            </div>
+          </article>
+
+          <article class="panel-card admin-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Visão geral</p>
+                <h3>Status</h3>
+              </div>
+            </div>
+            <ul id="adminResumoLista" class="list"></ul>
+          </article>
+        </section>
+
+        <section class="panel-card admin-card">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Clientes</p>
+              <h3>Assinaturas cadastradas</h3>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Salão</th>
+                  <th>Responsável</th>
+                  <th>Contato</th>
+                  <th>Pagamento</th>
+                  <th>Status</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+              <tbody id="adminAssinaturasBody"></tbody>
+            </table>
+          </div>
+
+          <p id="adminTableMessage" class="form-message"></p>
+        </section>
+      </div>
+    </section>
+
+    <script src="./controle-interno.js?v=20260401a"></script>
+  </body>
+</html>

@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const asaas = require('./asaas');
+const apiRoutes = require('./routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -151,6 +152,14 @@ app.get('/cadastro.html', (req, res) => {
 
 app.get('/barbeiro.html', (req, res) => {
   res.sendFile(path.join(painelPath, 'barbeiro.html'));
+});
+
+app.get('/controle-interno', (req, res) => {
+  res.sendFile(path.join(painelPath, 'controle-interno.html'));
+});
+
+app.get('/controle-interno.html', (req, res) => {
+  res.sendFile(path.join(painelPath, 'controle-interno.html'));
 });
 
 app.get('/api/publico/assinatura-config', (req, res) => {
@@ -582,6 +591,8 @@ app.post('/webhook', (req, res) => {
 
   res.json({ received: true });
 });
+
+app.use('/api', apiRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Erro no servidor:', err);
