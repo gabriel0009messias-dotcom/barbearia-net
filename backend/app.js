@@ -678,7 +678,7 @@ app.get('/api/publico/assinatura-config', (req, res) => {
 
   res.json({
     suporteNumero: '--',
-    valorMensal: 65,
+    valorMensal: 5,
     gateway: {
       provider: 'asaas',
       enabled: true,
@@ -856,7 +856,7 @@ app.post('/api/admin/login', (req, res) => {
 app.get('/api/admin/assinatura-config', requireAdmin, (req, res) => {
   res.json({
     suporteNumero: suporteNumeroAdmin,
-    valorMensal: 65,
+    valorMensal: 5,
     gateway: {
       provider: 'asaas',
       enabled: true,
@@ -1247,7 +1247,7 @@ app.post('/api/publico/assinaturas', async (req, res) => {
       const payloadAssinatura = {
         customer: customerId,
         billingType,
-        value: 65,
+        value: 5,
         cycle: 'MONTHLY',
         nextDueDate,
         creditCard,
@@ -1263,7 +1263,7 @@ app.post('/api/publico/assinaturas', async (req, res) => {
       const paymentResponse = await asaas.post('/payments', {
         customer: customerId,
         billingType: 'PIX',
-        value: 65,
+        value: 5,
         dueDate: nextDueDate,
         description: `Assinatura Salãoflix - ${barbeariaNome}`,
       });
@@ -1340,7 +1340,7 @@ app.post('/criar-assinatura', async (req, res) => {
       const paymentResponse = await asaas.post('/payments', {
         customer: customerId,
         billingType: 'PIX',
-        value: 65,
+        value: 5,
         dueDate: nextDueDate,
       });
 
@@ -1359,7 +1359,7 @@ app.post('/criar-assinatura', async (req, res) => {
     const response = await asaas.post('/subscriptions', {
       customer: customerId,
       billingType,
-      value: 65,
+      value: 5,
       cycle: 'MONTHLY',
       nextDueDate,
       creditCard,
