@@ -80,6 +80,7 @@ a {
   position: absolute;
   inset: 0;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.75));
+  pointer-events: none;
 }
 
 .landing-topbar,
@@ -878,6 +879,10 @@ code {
   padding: 24px;
   position: relative;
   z-index: 1;
+}
+
+.admin-login-shell .landing-overlay {
+  z-index: 0;
 }
 
 .admin-login-card {
