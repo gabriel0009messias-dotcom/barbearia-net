@@ -9,6 +9,7 @@ const DIAS_SEMANA = [
 ];
 
 const TOKEN_STORAGE_KEY = 'barbearia_auth_token';
+const PENDING_SIGNUP_STORAGE_KEY = 'barbearia_pending_signup';
 
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const metodoPagamentoInput = document.getElementById('metodoPagamentoInput');
@@ -38,6 +39,7 @@ let whatsappBridgeUrl = null;
 let gatewayConfig = null;
 let gatewayCheckoutUrl = null;
 let pixQrCodeAtual = null;
+let monitorLiberacao = null;
 const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function getHeaders(extra = {}) {
@@ -181,6 +183,64 @@ function atualizarGatewayInfo() {
   pixCopiaColaLabel.textContent = '';
 }
 
+function limparMonitorLiberacao() {
+  if (monitorLiberacao) {
+    clearInterval(monitorLiberacao);
+    monitorLiberacao = null;
+  }
+}
+
+function salvarCadastroPendente(payload) {
+  localStorage.setItem(PENDING_SIGNUP_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function limparCadastroPendente() {
+  localStorage.removeItem(PENDING_SIGNUP_STORAGE_KEY);
+}
+
+function carregarCadastroPendente() {
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_SIGNUP_STORAGE_KEY) || 'null');
+  } catch (error) {
+    return null;
+  }
+}
+
+async function fazerLoginAutomatico(email, senha) {
+  const payload = await buscarJson('/api/barbeiro/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      identificador: email,
+      senha,
+    }),
+  });
+
+  authToken = payload.token;
+  limparCadastroPendente();
+  localStorage.setItem(TOKEN_STORAGE_KEY, payload.token);
+  window.location.href = '/barbeiro.html';
+}
+
+function iniciarMonitorLiberacao(assinaturaId, email, senha) {
+  limparMonitorLiberacao();
+  salvarCadastroPendente({ assinaturaId, email, senha });
+
+  monitorLiberacao = setInterval(async () => {
+    try {
+      const status = await buscarJson(`/api/publico/assinaturas/${assinaturaId}/status`);
+
+      if (status.liberado) {
+        limparMonitorLiberacao();
+        assinaturaFormMessage.textContent = 'Pagamento confirmado. Liberando seu painel...';
+        await fazerLoginAutomatico(email, senha);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  }, 5000);
+}
+
 async function carregarSessaoAtual() {
   if (!authToken) {
     return;
@@ -245,8 +305,11 @@ gatewayCheckoutButton.addEventListener('click', () => {
 
 assinaturaForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  limparMonitorLiberacao();
 
   try {
+    const emailCadastro = document.getElementById('emailAssinaturaInput').value.trim();
+    const senhaCadastro = document.getElementById('senhaAssinaturaInput').value;
     const resposta = await buscarJson('/api/publico/assinaturas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -254,9 +317,9 @@ assinaturaForm.addEventListener('submit', async (event) => {
         barbeariaNome: document.getElementById('barbeariaNomeInput').value,
         responsavelNome: document.getElementById('responsavelNomeInput').value,
         telefone: document.getElementById('telefoneAssinaturaInput').value,
-        email: document.getElementById('emailAssinaturaInput').value,
+        email: emailCadastro,
         cpfTitular: apenasDigitos(document.getElementById('cpfTitularInput').value),
-        senha: document.getElementById('senhaAssinaturaInput').value,
+        senha: senhaCadastro,
         metodoPagamento: metodoPagamentoInput.value,
         diaVencimento: diaVencimentoInput.value,
         whatsappNumero: document.getElementById('whatsappNumeroInput').value,
@@ -300,6 +363,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
     assinaturaFormMessage.textContent =
       resposta.mensagem || 'Cadastro concluido. Agora finalize o pagamento para liberar seu login.';
     atualizarGatewayInfo();
+    iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
 
     if (gatewayCheckoutUrl) {
       gatewayCheckoutButton.hidden = false;
@@ -314,3 +378,9 @@ criarLinhaServico('Corte degrade', '30');
 criarLinhaServico('Luzes', '80');
 carregarConfiguracao();
 carregarSessaoAtual();
+
+const cadastroPendente = carregarCadastroPendente();
+if (cadastroPendente?.assinaturaId && cadastroPendente?.email && cadastroPendente?.senha) {
+  assinaturaFormMessage.textContent = 'Aguardando confirmacao do pagamento para liberar seu painel automaticamente...';
+  iniciarMonitorLiberacao(cadastroPendente.assinaturaId, cadastroPendente.email, cadastroPendente.senha);
+}

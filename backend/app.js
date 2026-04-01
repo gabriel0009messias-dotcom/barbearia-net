@@ -34,6 +34,112 @@ const ACESSO_VITALICIO = {
 const demoAgendamentos = [];
 const demoBloqueios = [];
 
+function normalizarEmail(email = '') {
+  return String(email || '').trim().toLowerCase();
+}
+
+function normalizarServicosPainel(servicos = []) {
+  return Array.isArray(servicos)
+    ? servicos
+        .filter((item) => item?.nome && Number(item?.preco) > 0)
+        .map((item, index) => ({
+          id: index + 1,
+          nome: String(item.nome).trim(),
+          preco: Number(item.preco),
+        }))
+    : [];
+}
+
+function criarDadosPainelDaAssinatura(assinatura = {}) {
+  return {
+    id: assinatura.id,
+    email: assinatura.email,
+    senha: assinatura.senha,
+    barbeariaNome: assinatura.barbeariaNome,
+    responsavelNome: assinatura.responsavelNome,
+    telefone: assinatura.telefone,
+    status: assinatura.status || 'pendente',
+    whatsapp_status: assinatura.whatsapp_status || 'nao_configurado',
+    dias_funcionamento:
+      Array.isArray(assinatura.dias_funcionamento) && assinatura.dias_funcionamento.length
+        ? assinatura.dias_funcionamento
+        : [1, 2, 3, 4, 5, 6],
+    horario_abertura: assinatura.horario_abertura || '08:00',
+    horario_almoco_inicio: assinatura.horario_almoco_inicio || '12:00',
+    horario_almoco_fim: assinatura.horario_almoco_fim || '13:00',
+    horario_fechamento: assinatura.horario_fechamento || '18:00',
+    servicos:
+      Array.isArray(assinatura.servicos) && assinatura.servicos.length
+        ? assinatura.servicos
+        : [
+            { id: 1, nome: 'Corte degrade', preco: 30 },
+            { id: 2, nome: 'Luzes', preco: 80 },
+          ],
+  };
+}
+
+function obterAssinaturaPorId(id) {
+  if (Number(id) === ACESSO_VITALICIO.id) {
+    return ACESSO_VITALICIO;
+  }
+
+  return assinaturasCadastradas.find((item) => item.id === Number(id)) || null;
+}
+
+function obterAssinaturaPorCredenciais(email, senha) {
+  return (
+    assinaturasCadastradas.find(
+      (item) => normalizarEmail(item.email) === normalizarEmail(email) && String(item.senha || '') === String(senha || '')
+    ) || null
+  );
+}
+
+function atualizarStatusAssinaturaPorEvento(payload = {}) {
+  const evento = String(payload?.event || '').trim().toUpperCase();
+  const payment = payload?.payment || {};
+  const subscriptionId = payment?.subscription || payment?.subscriptionId || payload?.subscription?.id || payload?.subscription;
+  const paymentId = payment?.id || payload?.paymentId || null;
+  const customerId = payment?.customer || payload?.customer?.id || payload?.customer || null;
+
+  let novoStatus = null;
+
+  if (evento === 'PAYMENT_RECEIVED' || evento === 'PAYMENT_CONFIRMED') {
+    novoStatus = 'ativo';
+  }
+
+  if (evento === 'PAYMENT_OVERDUE') {
+    novoStatus = 'bloqueado';
+  }
+
+  if (!novoStatus) {
+    return null;
+  }
+
+  const assinatura =
+    assinaturasCadastradas.find(
+      (item) =>
+        (paymentId && item.asaasPaymentId === paymentId) ||
+        (subscriptionId && item.asaasSubscriptionId === subscriptionId) ||
+        (customerId && item.asaasCustomerId === customerId)
+    ) || null;
+
+  if (!assinatura) {
+    return null;
+  }
+
+  assinatura.status = novoStatus;
+
+  if (paymentId && !assinatura.asaasPaymentId) {
+    assinatura.asaasPaymentId = paymentId;
+  }
+
+  if (subscriptionId && !assinatura.asaasSubscriptionId) {
+    assinatura.asaasSubscriptionId = subscriptionId;
+  }
+
+  return assinatura;
+}
+
 function montarProximaDataVencimento(dia) {
   const hoje = new Date();
   let ano = hoje.getFullYear();
@@ -815,27 +921,42 @@ function listarAssinaturasAdmin() {
 }
 
 app.post('/api/barbeiro/login', (req, res) => {
-  const identificador = String(req.body?.identificador || '').trim().toLowerCase();
+  const identificador = normalizarEmail(req.body?.identificador || '');
   const senha = String(req.body?.senha || '');
 
-  if (identificador !== ACESSO_VITALICIO.email || senha !== ACESSO_VITALICIO.senha) {
+  let assinatura = null;
+  let tipo = 'assinatura';
+
+  if (identificador === normalizarEmail(ACESSO_VITALICIO.email) && senha === ACESSO_VITALICIO.senha) {
+    assinatura = ACESSO_VITALICIO;
+    tipo = 'acesso_vitalicio';
+  } else {
+    assinatura = obterAssinaturaPorCredenciais(identificador, senha);
+  }
+
+  if (!assinatura) {
     res.status(401).json({ error: 'Gmail ou senha invalidos.' });
+    return;
+  }
+
+  if (assinatura.status !== 'ativo') {
+    res.status(403).json({ error: 'Pagamento pendente. Assim que o pagamento for confirmado, o painel sera liberado automaticamente.' });
     return;
   }
 
   const token = crypto.randomBytes(24).toString('hex');
   barbeiroSessions.set(token, {
-    assinaturaId: ACESSO_VITALICIO.id,
-    email: ACESSO_VITALICIO.email,
-    tipo: 'acesso_vitalicio',
+    assinaturaId: assinatura.id,
+    email: assinatura.email,
+    tipo,
   });
 
   res.json({
     token,
     assinatura: {
-      id: ACESSO_VITALICIO.id,
-      email: ACESSO_VITALICIO.email,
-      status: ACESSO_VITALICIO.status,
+      id: assinatura.id,
+      email: assinatura.email,
+      status: assinatura.status,
     },
   });
 });
@@ -951,20 +1072,29 @@ app.get('/api/barbeiro/me', (req, res) => {
     return;
   }
 
+  const assinaturaBase = obterAssinaturaPorId(sessao.assinaturaId);
+
+  if (!assinaturaBase) {
+    res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    return;
+  }
+
+  const assinatura = criarDadosPainelDaAssinatura(assinaturaBase);
+
   res.json({
-    id: ACESSO_VITALICIO.id,
-    email: ACESSO_VITALICIO.email,
-    barbearia_nome: ACESSO_VITALICIO.barbeariaNome,
-    responsavel_nome: ACESSO_VITALICIO.responsavelNome,
-    telefone: ACESSO_VITALICIO.telefone,
-    status: ACESSO_VITALICIO.status,
-    whatsapp_status: ACESSO_VITALICIO.whatsapp_status,
-    dias_funcionamento: ACESSO_VITALICIO.dias_funcionamento,
-    horario_abertura: ACESSO_VITALICIO.horario_abertura,
-    horario_almoco_inicio: ACESSO_VITALICIO.horario_almoco_inicio,
-    horario_almoco_fim: ACESSO_VITALICIO.horario_almoco_fim,
-    horario_fechamento: ACESSO_VITALICIO.horario_fechamento,
-    servicos: ACESSO_VITALICIO.servicos,
+    id: assinatura.id,
+    email: assinatura.email,
+    barbearia_nome: assinatura.barbeariaNome,
+    responsavel_nome: assinatura.responsavelNome,
+    telefone: assinatura.telefone,
+    status: assinatura.status,
+    whatsapp_status: assinatura.whatsapp_status,
+    dias_funcionamento: assinatura.dias_funcionamento,
+    horario_abertura: assinatura.horario_abertura,
+    horario_almoco_inicio: assinatura.horario_almoco_inicio,
+    horario_almoco_fim: assinatura.horario_almoco_fim,
+    horario_fechamento: assinatura.horario_fechamento,
+    servicos: assinatura.servicos,
   });
 });
 
@@ -1023,33 +1153,29 @@ app.delete('/api/agendamentos/:id', requireBarbeiro, (req, res) => {
 });
 
 app.get('/api/publico/assinaturas/:id', requireBarbeiroOuBridge, (req, res) => {
+  const assinaturaBase = obterAssinaturaPorId(req.params.id);
+
+  if (!assinaturaBase) {
+    res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    return;
+  }
+
+  const assinatura = criarDadosPainelDaAssinatura(assinaturaBase);
+
   res.json({
-    id: ACESSO_VITALICIO.id,
-    dias_funcionamento: ACESSO_VITALICIO.dias_funcionamento,
-    horario_abertura: ACESSO_VITALICIO.horario_abertura,
-    horario_almoco_inicio: ACESSO_VITALICIO.horario_almoco_inicio,
-    horario_almoco_fim: ACESSO_VITALICIO.horario_almoco_fim,
-    horario_fechamento: ACESSO_VITALICIO.horario_fechamento,
-    whatsapp_status: ACESSO_VITALICIO.whatsapp_status,
-    servicos: ACESSO_VITALICIO.servicos,
+    id: assinatura.id,
+    dias_funcionamento: assinatura.dias_funcionamento,
+    horario_abertura: assinatura.horario_abertura,
+    horario_almoco_inicio: assinatura.horario_almoco_inicio,
+    horario_almoco_fim: assinatura.horario_almoco_fim,
+    horario_fechamento: assinatura.horario_fechamento,
+    whatsapp_status: assinatura.whatsapp_status,
+    servicos: assinatura.servicos,
   });
 });
 
 app.get('/api/publico/assinaturas/:id/acesso', (req, res) => {
-  const id = Number(req.params.id);
-
-  if (id === ACESSO_VITALICIO.id) {
-    res.json({
-      liberado: ACESSO_VITALICIO.status === 'ativo',
-      mensagem:
-        ACESSO_VITALICIO.status === 'ativo'
-          ? ''
-          : 'Atendimento temporariamente bloqueado. Regularize a assinatura para voltar a agendar.',
-    });
-    return;
-  }
-
-  const assinatura = assinaturasCadastradas.find((item) => item.id === id);
+  const assinatura = obterAssinaturaPorId(req.params.id);
 
   if (!assinatura) {
     res.status(404).json({
@@ -1065,6 +1191,22 @@ app.get('/api/publico/assinaturas/:id/acesso', (req, res) => {
       assinatura.status === 'ativo'
         ? ''
         : 'Atendimento temporariamente bloqueado. Regularize a assinatura para voltar a agendar.',
+  });
+});
+
+app.get('/api/publico/assinaturas/:id/status', (req, res) => {
+  const assinatura = obterAssinaturaPorId(req.params.id);
+
+  if (!assinatura) {
+    res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    return;
+  }
+
+  res.json({
+    id: assinatura.id,
+    status: assinatura.status,
+    liberado: assinatura.status === 'ativo',
+    metodoPagamento: assinatura.metodoPagamento || 'acesso_liberado',
   });
 });
 
@@ -1194,13 +1336,20 @@ app.post('/api/publico/assinaturas', async (req, res) => {
     telefone,
     email,
     cpfTitular,
+    senha,
     metodoPagamento,
     diaVencimento,
     creditCard,
     creditCardHolderInfo,
+    diasFuncionamento,
+    horarioAbertura,
+    horarioAlmocoInicio,
+    horarioAlmocoFim,
+    horarioFechamento,
+    servicos,
   } = req.body;
 
-  if (!barbeariaNome || !responsavelNome || !telefone || !email || !metodoPagamento || !diaVencimento) {
+  if (!barbeariaNome || !responsavelNome || !telefone || !email || !senha || !metodoPagamento || !diaVencimento) {
     res.status(400).json({ error: 'Preencha os campos obrigatorios do cadastro.' });
     return;
   }
@@ -1282,11 +1431,19 @@ app.post('/api/publico/assinaturas', async (req, res) => {
       barbeariaNome,
       responsavelNome,
       telefone,
-      email,
+      email: normalizarEmail(email),
+      senha,
       metodoPagamento,
       diaVencimento: dia,
       status: 'pendente',
       whatsapp_status: 'nao_configurado',
+      dias_funcionamento:
+        Array.isArray(diasFuncionamento) && diasFuncionamento.length ? diasFuncionamento : [1, 2, 3, 4, 5, 6],
+      horario_abertura: horarioAbertura || '08:00',
+      horario_almoco_inicio: horarioAlmocoInicio || '12:00',
+      horario_almoco_fim: horarioAlmocoFim || '13:00',
+      horario_fechamento: horarioFechamento || '18:00',
+      servicos: normalizarServicosPainel(servicos),
       asaasCustomerId: customerId,
       asaasSubscriptionId: assinaturaResponse?.data?.id || null,
       asaasPaymentId: payment?.id || null,
@@ -1377,17 +1534,29 @@ app.post('/criar-assinatura', async (req, res) => {
 });
 
 app.post('/webhook', (req, res) => {
-  const { event } = req.body;
+  const evento = String(req.body?.event || '').trim().toUpperCase();
+  const assinaturaAtualizada = atualizarStatusAssinaturaPorEvento(req.body);
 
-  if (event === 'PAYMENT_RECEIVED') {
+  if (evento === 'PAYMENT_RECEIVED' || evento === 'PAYMENT_CONFIRMED') {
     console.log('pagou');
   }
 
-  if (event === 'PAYMENT_OVERDUE') {
+  if (evento === 'PAYMENT_OVERDUE') {
     console.log('atrasado');
   }
 
-  res.json({ received: true });
+  if (assinaturaAtualizada) {
+    console.log(`[Asaas] Assinatura ${assinaturaAtualizada.id} atualizada para ${assinaturaAtualizada.status}.`);
+  } else {
+    console.log(`[Asaas] Nenhuma assinatura local encontrada para o evento ${evento}.`);
+  }
+
+  res.json({
+    received: true,
+    event: evento,
+    assinaturaId: assinaturaAtualizada?.id || null,
+    status: assinaturaAtualizada?.status || null,
+  });
 });
 
 app.use((err, req, res, next) => {
