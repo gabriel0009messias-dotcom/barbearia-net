@@ -656,7 +656,9 @@ app.get('/controle-interno.html', (req, res) => {
 
 app.get('/api/publico/assinatura-config', (req, res) => {
   const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-  const whatsappBridgeUrlPublic = String(process.env.WHATSAPP_BRIDGE_URL_PUBLIC || '').trim();
+  const whatsappBridgeUrlPublic = String(
+    process.env.WHATSAPP_BRIDGE_URL_PUBLIC || 'https://technician-elect-potential-wheel.trycloudflare.com'
+  ).trim();
   const whatsappBridgeUrl = whatsappBridgeUrlPublic || (emHospedagem ? null : 'http://127.0.0.1:3010');
 
   res.json({
