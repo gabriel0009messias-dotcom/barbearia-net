@@ -157,7 +157,418 @@ app.get('/barbeiro.html', (req, res) => {
 });
 
 app.get('/controle-interno', (req, res) => {
-  res.sendFile(path.join(painelPath, 'controle-interno.html'));
+  res.type('html').send(`<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Controle Interno | Salãoflix</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: Segoe UI, Tahoma, Geneva, Verdana, sans-serif;
+        color: #fff;
+        background:
+          linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.85)),
+          radial-gradient(circle at top right, rgba(229, 9, 20, 0.25), transparent 30%),
+          radial-gradient(circle at bottom left, rgba(36, 36, 36, 0.4), transparent 30%),
+          linear-gradient(120deg, #090909 0%, #1b1b1b 40%, #101010 100%);
+      }
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .card, .panel {
+        width: min(960px, 100%);
+        border-radius: 24px;
+        background: rgba(10, 10, 10, 0.88);
+        border: 1px solid rgba(255,255,255,0.1);
+        box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+      }
+      .card {
+        max-width: 520px;
+        padding: 32px;
+      }
+      .panel {
+        padding: 28px;
+      }
+      .eyebrow {
+        margin: 0 0 10px;
+        text-transform: uppercase;
+        letter-spacing: .18em;
+        font-size: .72rem;
+        color: rgba(255,255,255,.65);
+      }
+      h1, h2, h3, p { margin-top: 0; }
+      .help {
+        margin: 16px 0 18px;
+        padding: 16px 18px;
+        border-radius: 18px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(229, 9, 20, .12);
+      }
+      .grid {
+        display: grid;
+        gap: 14px;
+      }
+      label {
+        display: grid;
+        gap: 8px;
+        color: rgba(255,255,255,.82);
+      }
+      input, select, button {
+        font: inherit;
+      }
+      input, select {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(20,20,20,.92);
+        color: #fff;
+      }
+      button {
+        border: none;
+        border-radius: 12px;
+        padding: 16px 18px;
+        cursor: pointer;
+      }
+      .primary {
+        background: #e50914;
+        color: #fff;
+        font-weight: 700;
+      }
+      .secondary {
+        background: rgba(255,255,255,.12);
+        color: #fff;
+        font-weight: 700;
+      }
+      .message {
+        min-height: 24px;
+        color: #7df0b1;
+      }
+      .error {
+        color: #ffb3b6;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 20px 0;
+      }
+      .pill {
+        padding: 14px;
+        border-radius: 16px;
+        background: rgba(255,255,255,.06);
+        border: 1px solid rgba(255,255,255,.08);
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 12px 10px;
+        border-bottom: 1px solid rgba(255,255,255,.08);
+        text-align: left;
+      }
+      th {
+        color: rgba(255,255,255,.68);
+        font-size: .82rem;
+        text-transform: uppercase;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 720px) {
+        .summary {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+      @media (max-width: 520px) {
+        .summary {
+          grid-template-columns: 1fr;
+        }
+        .card, .panel {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section id="loginCard" class="card">
+        <p class="eyebrow">Controle Interno</p>
+        <h1>Painel administrativo</h1>
+        <p>Entre com o PIN do admin para gerenciar assinaturas.</p>
+        <div class="help">
+          <strong>PIN atual para teste: 5090</strong>
+          <p style="margin:8px 0 0">Se quiser, clique em Entrar rápido.</p>
+        </div>
+        <form id="loginForm" class="grid">
+          <label>
+            PIN do admin
+            <input id="pinInput" type="password" value="5090" placeholder="Digite 5090" required />
+          </label>
+          <button class="primary" type="submit">Entrar</button>
+          <button id="quickButton" class="secondary" type="button">Entrar rápido</button>
+        </form>
+        <p id="loginMessage" class="message"></p>
+      </section>
+
+      <section id="adminPanel" class="panel" hidden>
+        <div class="topbar">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h2>Assinaturas do sistema</h2>
+            <p id="summaryText">Carregando...</p>
+          </div>
+          <div class="topbar">
+            <button id="refreshButton" class="secondary" type="button">Recarregar</button>
+            <button id="logoutButton" class="primary" type="button">Sair</button>
+          </div>
+        </div>
+
+        <div id="summaryGrid" class="summary"></div>
+
+        <div class="grid" style="margin: 18px 0 24px">
+          <label>
+            Número de suporte
+            <input id="supportInput" type="text" />
+          </label>
+          <button id="saveSupportButton" class="secondary" type="button">Salvar suporte</button>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Salão</th>
+                <th>Responsável</th>
+                <th>Contato</th>
+                <th>Pagamento</th>
+                <th>Status</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+        <p id="tableMessage" class="message"></p>
+      </section>
+    </main>
+
+    <script>
+      const tokenKey = 'admin_token_salaoflix_inline';
+      const loginCard = document.getElementById('loginCard');
+      const adminPanel = document.getElementById('adminPanel');
+      const loginForm = document.getElementById('loginForm');
+      const pinInput = document.getElementById('pinInput');
+      const quickButton = document.getElementById('quickButton');
+      const loginMessage = document.getElementById('loginMessage');
+      const summaryText = document.getElementById('summaryText');
+      const summaryGrid = document.getElementById('summaryGrid');
+      const supportInput = document.getElementById('supportInput');
+      const saveSupportButton = document.getElementById('saveSupportButton');
+      const refreshButton = document.getElementById('refreshButton');
+      const logoutButton = document.getElementById('logoutButton');
+      const tableBody = document.getElementById('tableBody');
+      const tableMessage = document.getElementById('tableMessage');
+
+      function getToken() {
+        return localStorage.getItem(tokenKey) || '';
+      }
+
+      function setToken(token) {
+        localStorage.setItem(tokenKey, token);
+      }
+
+      function clearToken() {
+        localStorage.removeItem(tokenKey);
+      }
+
+      async function api(url, options = {}) {
+        const headers = new Headers(options.headers || {});
+        const token = getToken();
+        if (token) headers.set('x-admin-token', token);
+        if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+        const response = await fetch(url, { ...options, headers });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Falha no admin.');
+        return data;
+      }
+
+      function resumoStatus(assinaturas) {
+        const resumo = { total: assinaturas.length, ativo: 0, pendente: 0, bloqueado: 0 };
+        for (const item of assinaturas) {
+          const status = String(item.status || '').toLowerCase();
+          if (status in resumo) resumo[status] += 1;
+        }
+        return resumo;
+      }
+
+      function renderSummary(assinaturas) {
+        const resumo = resumoStatus(assinaturas);
+        summaryText.textContent = resumo.total + ' assinaturas cadastradas no sistema.';
+        summaryGrid.innerHTML = [
+          ['Total', resumo.total],
+          ['Ativos', resumo.ativo],
+          ['Pendentes', resumo.pendente],
+          ['Bloqueados', resumo.bloqueado],
+        ].map(([label, value]) => '<div class="pill"><strong>' + label + ':</strong> ' + value + '</div>').join('');
+      }
+
+      function renderRows(assinaturas) {
+        if (!assinaturas.length) {
+          tableBody.innerHTML = '<tr><td colspan="6">Nenhuma assinatura cadastrada.</td></tr>';
+          return;
+        }
+
+        tableBody.innerHTML = '';
+        assinaturas.forEach((assinatura) => {
+          const tr = document.createElement('tr');
+          const contato = [assinatura.email, assinatura.telefone].filter(Boolean).join(' / ');
+          const pagamento = (assinatura.metodo_pagamento || '--') + ' / dia ' + (assinatura.dia_vencimento || '--');
+
+          tr.innerHTML = '<td>' + (assinatura.barbearia_nome || '--') + '</td>' +
+            '<td>' + (assinatura.responsavel_nome || '--') + '</td>' +
+            '<td>' + (contato || '--') + '</td>' +
+            '<td>' + pagamento + '</td>' +
+            '<td><select><option value="pendente">Pendente</option><option value="ativo">Ativo</option><option value="bloqueado">Bloqueado</option></select></td>' +
+            '<td><button class="secondary" type="button">Salvar</button></td>';
+
+          const select = tr.querySelector('select');
+          select.value = assinatura.status || 'pendente';
+          const button = tr.querySelector('button');
+
+          button.addEventListener('click', async () => {
+            tableMessage.textContent = 'Salvando status...';
+            tableMessage.classList.remove('error');
+            try {
+              await api('/api/admin/assinaturas/' + assinatura.id, {
+                method: 'PATCH',
+                body: JSON.stringify({ status: select.value }),
+              });
+              tableMessage.textContent = 'Status atualizado com sucesso.';
+              await loadPanel();
+            } catch (error) {
+              tableMessage.textContent = error.message;
+              tableMessage.classList.add('error');
+            }
+          });
+
+          tableBody.appendChild(tr);
+        });
+      }
+
+      async function loadPanel() {
+        const [config, assinaturas] = await Promise.all([
+          api('/api/admin/assinatura-config'),
+          api('/api/admin/assinaturas'),
+        ]);
+        supportInput.value = config.suporteNumero || '--';
+        renderSummary(assinaturas);
+        renderRows(assinaturas);
+      }
+
+      async function enterAdmin(pin) {
+        const payload = await api('/api/admin/login', {
+          method: 'POST',
+          body: JSON.stringify({ pin }),
+        });
+        setToken(payload.token);
+        loginCard.hidden = true;
+        adminPanel.hidden = false;
+        await loadPanel();
+      }
+
+      loginForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        loginMessage.textContent = 'Entrando...';
+        loginMessage.classList.remove('error');
+        try {
+          await enterAdmin(pinInput.value.trim());
+          loginMessage.textContent = '';
+        } catch (error) {
+          loginMessage.textContent = error.message;
+          loginMessage.classList.add('error');
+        }
+      });
+
+      quickButton.addEventListener('click', async () => {
+        pinInput.value = '5090';
+        loginMessage.textContent = 'Entrando...';
+        loginMessage.classList.remove('error');
+        try {
+          await enterAdmin('5090');
+          loginMessage.textContent = '';
+        } catch (error) {
+          loginMessage.textContent = error.message;
+          loginMessage.classList.add('error');
+        }
+      });
+
+      saveSupportButton.addEventListener('click', async () => {
+        tableMessage.textContent = 'Salvando suporte...';
+        tableMessage.classList.remove('error');
+        try {
+          await api('/api/admin/assinatura-config', {
+            method: 'PATCH',
+            body: JSON.stringify({ suporteNumero: supportInput.value.trim() }),
+          });
+          tableMessage.textContent = 'Suporte atualizado com sucesso.';
+        } catch (error) {
+          tableMessage.textContent = error.message;
+          tableMessage.classList.add('error');
+        }
+      });
+
+      refreshButton.addEventListener('click', async () => {
+        tableMessage.textContent = 'Atualizando...';
+        tableMessage.classList.remove('error');
+        try {
+          await loadPanel();
+          tableMessage.textContent = 'Painel atualizado.';
+        } catch (error) {
+          tableMessage.textContent = error.message;
+          tableMessage.classList.add('error');
+        }
+      });
+
+      logoutButton.addEventListener('click', () => {
+        clearToken();
+        adminPanel.hidden = true;
+        loginCard.hidden = false;
+        loginMessage.textContent = '';
+      });
+
+      if (getToken()) {
+        loginCard.hidden = true;
+        adminPanel.hidden = false;
+        loadPanel().catch((error) => {
+          clearToken();
+          adminPanel.hidden = true;
+          loginCard.hidden = false;
+          loginMessage.textContent = error.message;
+          loginMessage.classList.add('error');
+        });
+      }
+    </script>
+  </body>
+</html>`);
 });
 
 app.get('/controle-interno.html', (req, res) => {
