@@ -500,7 +500,7 @@ app.get('/controle-interno', (req, res) => {
                 '<button class="secondary" type="button" data-action="save">Salvar</button>' +
                 (assinatura.id !== 1
                   ? '<button class="primary" type="button" data-action="delete" style="background:#6e0b10;">Excluir</button>'
-                  : '<button class="secondary" type="button" disabled title="Acesso protegido">Protegido</button>') +
+                  : '<button class="secondary" type="button" disabled title="Seu acesso principal nao pode ser excluido aqui">Acesso principal</button>') +
               '</div>' +
             '</td>';
 
