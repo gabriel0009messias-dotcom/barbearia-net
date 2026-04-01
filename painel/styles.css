@@ -882,9 +882,46 @@ code {
   width: min(520px, 100%);
   padding: 32px;
   border-radius: 28px;
-  background: var(--surface);
-  border: 1px solid var(--stroke);
-  box-shadow: var(--shadow);
+  background: rgba(12, 12, 12, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+.admin-login-card h1 {
+  color: #fff;
+}
+
+.admin-login-card label {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.admin-login-card input {
+  background: rgba(20, 20, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.admin-login-card input::placeholder {
+  color: rgba(255, 255, 255, 0.56);
+}
+
+.admin-help-note {
+  margin: 16px 0 18px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(229, 9, 20, 0.12);
+}
+
+.admin-help-note strong {
+  color: #fff;
+}
+
+.admin-help-note p {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.admin-login-card .form-message {
+  color: #ffb3b6;
 }
 
 @media (max-width: 980px) {

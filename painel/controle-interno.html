@@ -13,11 +13,15 @@
         <p class="eyebrow">Controle interno</p>
         <h1>Painel administrativo</h1>
         <p class="landing-panel-copy">Entre com o PIN do admin para gerenciar assinaturas.</p>
+        <div class="support-note admin-help-note">
+          <strong>PIN atual para teste: 5090</strong>
+          <p>Digite o PIN e clique em Entrar para abrir o painel do admin.</p>
+        </div>
 
         <form id="adminLoginForm" class="form-grid">
           <label>
             PIN do admin
-            <input id="adminPinInput" type="password" inputmode="numeric" required />
+            <input id="adminPinInput" type="password" inputmode="numeric" placeholder="Digite 5090" required />
           </label>
 
           <button type="submit" class="landing-login-button">Entrar</button>
