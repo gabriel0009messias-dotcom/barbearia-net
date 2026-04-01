@@ -13,6 +13,7 @@ const adminSuporteInput = document.getElementById('adminSuporteInput');
 const salvarSuporteButton = document.getElementById('salvarSuporteButton');
 const recarregarAdminButton = document.getElementById('recarregarAdminButton');
 const sairAdminButton = document.getElementById('sairAdminButton');
+const adminAcessoRapidoButton = document.getElementById('adminAcessoRapidoButton');
 
 function getAdminToken() {
   return window.localStorage.getItem(adminTokenKey) || '';
@@ -160,19 +161,34 @@ async function iniciarSessaoAdmin() {
   }
 }
 
+async function fazerLoginAdmin(pin) {
+  const payload = await buscarJson('/api/admin/login', {
+    method: 'POST',
+    body: JSON.stringify({ pin }),
+  });
+
+  setAdminToken(payload.token);
+  adminLoginMessage.textContent = '';
+  await iniciarSessaoAdmin();
+}
+
 adminLoginForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   adminLoginMessage.textContent = 'Entrando...';
 
   try {
-    const payload = await buscarJson('/api/admin/login', {
-      method: 'POST',
-      body: JSON.stringify({ pin: adminPinInput.value.trim() }),
-    });
+    await fazerLoginAdmin(adminPinInput.value.trim());
+  } catch (error) {
+    adminLoginMessage.textContent = error.message;
+  }
+});
 
-    setAdminToken(payload.token);
-    adminLoginMessage.textContent = '';
-    await iniciarSessaoAdmin();
+adminAcessoRapidoButton?.addEventListener('click', async () => {
+  adminPinInput.value = '5090';
+  adminLoginMessage.textContent = 'Entrando...';
+
+  try {
+    await fazerLoginAdmin('5090');
   } catch (error) {
     adminLoginMessage.textContent = error.message;
   }
