@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cadastro da Barbearia</title>
+    <title>Cadastro de Salao</title>
     <link rel="stylesheet" href="./styles.css?v=20260330f" />
   </head>
   <body>
@@ -18,10 +18,10 @@
 
       <div class="cadastro-grid">
         <div class="landing-copy cadastro-copy">
-          <p class="landing-kicker">Cadastro da barbearia</p>
+          <p class="landing-kicker">Cadastro de salao</p>
           <h1>Crie sua assinatura e conecte o WhatsApp da sua loja</h1>
           <p class="landing-subcopy">
-            Cadastre sua barbearia, defina os servicos, escolha o vencimento e finalize o pagamento para liberar o acesso.
+            Cadastre seu salao, defina os servicos, escolha o vencimento e finalize o pagamento para liberar o acesso.
           </p>
           <div class="cadastro-copy-note">
             <strong id="supportNumberLabel">Suporte: --</strong>
@@ -34,14 +34,14 @@
             <div class="card-header">
               <div>
                 <p class="eyebrow">Assinatura</p>
-                <h2>Cadastro da barbearia</h2>
+                <h2>Cadastro de salao</h2>
               </div>
               <span class="badge">R$ 1,00 / mes</span>
             </div>
 
             <form id="assinaturaForm" class="form-grid">
               <label>
-                Nome da barbearia
+                Nome do salao
                 <input id="barbeariaNomeInput" type="text" required />
               </label>
 
@@ -61,6 +61,11 @@
               </label>
 
               <label>
+                CPF do titular
+                <input id="cpfTitularInput" type="text" inputmode="numeric" required />
+              </label>
+
+              <label>
                 Crie sua senha
                 <div class="password-field">
                   <input id="senhaAssinaturaInput" type="password" minlength="4" required />
@@ -74,10 +79,14 @@
               </label>
 
               <div id="gatewayInfoCard" class="support-note" hidden>
-                <strong>Pagamento seguro com Mercado Pago</strong>
+                <strong>Pagamento seguro com Asaas</strong>
                 <p id="gatewayMethodLabel">Metodo selecionado: --</p>
-                <p id="gatewayHelpLabel">Finalize pelo checkout seguro para liberar sua assinatura.</p>
+                <p id="gatewayHelpLabel">Finalize pelo Asaas para liberar sua assinatura.</p>
                 <button id="gatewayCheckoutButton" type="button" class="landing-login-button" hidden>Ir para o pagamento</button>
+                <div id="pixQrCard" class="pix-qr-panel" hidden>
+                  <img id="pixQrImage" alt="QR Code Pix do pagamento" hidden />
+                  <p id="pixCopiaColaLabel" class="table-subcopy"></p>
+                </div>
               </div>
 
               <label>
@@ -86,9 +95,60 @@
               </label>
 
               <label>
-                WhatsApp da barbearia
+                WhatsApp do salao
                 <input id="whatsappNumeroInput" type="text" required />
               </label>
+
+              <div id="cartaoDadosCard" class="panel-card embedded-card">
+                <div class="card-header compact">
+                  <div>
+                    <p class="eyebrow">Cartao</p>
+                    <h3>Dados do pagamento</h3>
+                  </div>
+                </div>
+
+                <div class="schedule-grid">
+                  <label>
+                    Nome no cartao
+                    <input id="cartaoNomeTitularInput" type="text" required />
+                  </label>
+
+                  <label>
+                    Numero do cartao
+                    <input id="cartaoNumeroInput" type="text" inputmode="numeric" required />
+                  </label>
+
+                  <label>
+                    Mes de validade
+                    <input id="cartaoMesExpiracaoInput" type="text" inputmode="numeric" maxlength="2" placeholder="MM" required />
+                  </label>
+
+                  <label>
+                    Ano de validade
+                    <input id="cartaoAnoExpiracaoInput" type="text" inputmode="numeric" maxlength="4" placeholder="AAAA" required />
+                  </label>
+
+                  <label>
+                    CVV
+                    <input id="cartaoCvvInput" type="text" inputmode="numeric" maxlength="4" required />
+                  </label>
+
+                  <label>
+                    CEP
+                    <input id="cartaoCepInput" type="text" inputmode="numeric" required />
+                  </label>
+
+                  <label>
+                    Numero do endereco
+                    <input id="cartaoNumeroEnderecoInput" type="text" required />
+                  </label>
+
+                  <label>
+                    Complemento
+                    <input id="cartaoComplementoInput" type="text" />
+                  </label>
+                </div>
+              </div>
 
               <div class="panel-card embedded-card">
                 <div class="card-header compact">
@@ -137,29 +197,6 @@
             <p id="assinaturaFormMessage" class="form-message light-message"></p>
           </article>
 
-          <article class="landing-panel cadastro-whatsapp-panel">
-            <div class="card-header">
-              <div>
-                <p class="eyebrow">WhatsApp</p>
-                <h2>Conecte seu numero</h2>
-              </div>
-              <span id="whatsappStatusBadge" class="badge">Aguardando cadastro</span>
-            </div>
-
-            <p id="whatsappHelpText" class="landing-panel-copy">
-              O WhatsApp sera liberado depois da confirmacao do pagamento da assinatura.
-            </p>
-
-            <div class="cadastro-actions">
-              <button id="generateQrButton" class="landing-login-button" type="button" disabled>Gerar QR Code</button>
-                <a id="abrirPainelButton" class="landing-secondary-button strong-link" href="/barbeiro.html" hidden>Abrir painel do barbeiro</a>
-            </div>
-
-            <div class="qr-panel cadastro-qr-panel">
-              <img id="qrCodeImage" alt="QR Code do WhatsApp" hidden />
-              <p id="qrStatusMessage" class="form-message light-message">Nenhum QR Code gerado ainda.</p>
-            </div>
-          </article>
         </div>
       </div>
     </section>

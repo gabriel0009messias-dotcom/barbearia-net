@@ -16,6 +16,10 @@ const gatewayInfoCard = document.getElementById('gatewayInfoCard');
 const gatewayMethodLabel = document.getElementById('gatewayMethodLabel');
 const gatewayHelpLabel = document.getElementById('gatewayHelpLabel');
 const gatewayCheckoutButton = document.getElementById('gatewayCheckoutButton');
+const pixQrCard = document.getElementById('pixQrCard');
+const pixQrImage = document.getElementById('pixQrImage');
+const pixCopiaColaLabel = document.getElementById('pixCopiaColaLabel');
+const cartaoDadosCard = document.getElementById('cartaoDadosCard');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const diasFuncionamentoInput = document.getElementById('diasFuncionamentoInput');
 const horarioAberturaInput = document.getElementById('horarioAberturaInput');
@@ -26,20 +30,14 @@ const addServiceButton = document.getElementById('addServiceButton');
 const serviceRows = document.getElementById('serviceRows');
 const assinaturaForm = document.getElementById('assinaturaForm');
 const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
-const generateQrButton = document.getElementById('generateQrButton');
-const abrirPainelButton = document.getElementById('abrirPainelButton');
-const qrCodeImage = document.getElementById('qrCodeImage');
-const qrStatusMessage = document.getElementById('qrStatusMessage');
-const whatsappStatusBadge = document.getElementById('whatsappStatusBadge');
-const whatsappHelpText = document.getElementById('whatsappHelpText');
 
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let assinaturaAtualId = null;
-let whatsappPolling = null;
 let valorMensalAtual = 1;
 let whatsappBridgeUrl = null;
 let gatewayConfig = null;
 let gatewayCheckoutUrl = null;
+let pixQrCodeAtual = null;
 const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function getHeaders(extra = {}) {
@@ -67,62 +65,6 @@ async function buscarJson(url, options = {}) {
   }
 
   return payload;
-}
-
-async function buscarBridgeToken() {
-  const payload = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/bridge-token`, {
-    method: 'POST',
-  });
-
-  return payload.token;
-}
-
-async function buscarJsonBridge(url, options = {}) {
-  try {
-    const response = await fetch(url, options);
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const erro = new Error(payload?.error || 'Nao consegui falar com o bot local do WhatsApp.');
-      erro.status = response.status;
-      throw erro;
-    }
-
-    return payload;
-  } catch (error) {
-    if (error instanceof TypeError) {
-      const erroRede = new Error(
-        'Nao consegui falar com o bot local do WhatsApp. Abra o arquivo backend\\iniciar-whatsapp.bat e deixe a janela aberta.'
-      );
-      erroRede.status = 0;
-      throw erroRede;
-    }
-
-    throw error;
-  }
-}
-
-function getWhatsappBridgeBase() {
-  return String(whatsappBridgeUrl || WHATSAPP_BRIDGE_FALLBACKS[0]).replace(/\/$/, '');
-}
-
-function listarBridgeBases() {
-  const bases = [getWhatsappBridgeBase(), ...WHATSAPP_BRIDGE_FALLBACKS];
-  return Array.from(new Set(bases.map((item) => String(item).replace(/\/$/, ''))));
-}
-
-async function buscarJsonBridgeComFallback(path, options = {}) {
-  let ultimoErro = null;
-
-  for (const base of listarBridgeBases()) {
-    try {
-      return await buscarJsonBridge(`${base}${path}`, options);
-    } catch (error) {
-      ultimoErro = error;
-    }
-  }
-
-  throw ultimoErro || new Error('Nao consegui falar com o bot local do WhatsApp.');
 }
 
 function renderizarDiasFuncionamento(container, selecionados = [1, 2, 3, 4, 5, 6]) {
@@ -169,43 +111,28 @@ function coletarServicos() {
     .filter((item) => item.nome && Number(item.preco) > 0);
 }
 
-function atualizarStatusWhatsapp(status, qrCode) {
-  const mapa = {
-    nao_configurado: 'Aguardando cadastro',
-    iniciando: 'Preparando QR',
-    qr_pronto: 'QR pronto',
-    conectado: 'Conectado',
-    isLogged: 'Conectado',
-    qrReadSuccess: 'Conectado',
-    erro: 'Erro',
-  };
+function apenasDigitos(valor = '') {
+  return String(valor).replace(/\D/g, '');
+}
 
-  whatsappStatusBadge.textContent = mapa[status] || status || 'Aguardando cadastro';
+function atualizarObrigatoriedadeCartao(usandoCartao) {
+  const camposCartao = cartaoDadosCard.querySelectorAll('input');
 
-  if (qrCode) {
-    qrCodeImage.hidden = false;
-    qrCodeImage.src = qrCode;
-    qrStatusMessage.textContent = 'Escaneie este QR Code com o WhatsApp da barbearia.';
-    return;
-  }
+  camposCartao.forEach((campo) => {
+    if (usandoCartao) {
+      if (campo.id !== 'cartaoComplementoInput') {
+        campo.setAttribute('required', 'required');
+      }
+      return;
+    }
 
-  if (status === 'conectado' || status === 'isLogged' || status === 'qrReadSuccess') {
-    qrCodeImage.hidden = true;
-    qrStatusMessage.textContent = 'WhatsApp conectado com sucesso.';
-    abrirPainelButton.hidden = false;
-    return;
-  }
-
-  if (status === 'erro') {
-    qrCodeImage.hidden = true;
-  }
-
-  qrCodeImage.hidden = true;
+    campo.removeAttribute('required');
+  });
 }
 
 function formatarMetodoPagamento(metodo) {
   if (metodo === 'cartao') {
-    return 'Cartao de credito recorrente';
+    return 'Cartao de credito';
   }
 
   if (metodo === 'pix') {
@@ -218,52 +145,40 @@ function formatarMetodoPagamento(metodo) {
 function atualizarGatewayInfo() {
   const metodo = metodoPagamentoInput.value;
   const mostrar = Boolean(gatewayConfig?.enabled && metodo);
+  const usandoCartao = metodo === 'cartao';
+  const usandoPix = metodo === 'pix';
   gatewayInfoCard.hidden = !mostrar;
+  cartaoDadosCard.hidden = !usandoCartao;
+  atualizarObrigatoriedadeCartao(usandoCartao);
+  pixQrCard.hidden = !usandoPix || !pixQrCodeAtual;
 
   if (!mostrar) {
     gatewayCheckoutButton.hidden = true;
     gatewayCheckoutUrl = null;
+    pixQrCodeAtual = null;
     return;
   }
 
   gatewayMethodLabel.textContent = `Metodo selecionado: ${formatarMetodoPagamento(metodo)}`;
   gatewayHelpLabel.textContent =
     metodo === 'cartao'
-      ? 'Voce sera levado ao Mercado Pago para autorizar a cobranca mensal recorrente no cartao.'
-      : 'Voce sera levado ao Mercado Pago para concluir o pagamento por Pix com checkout seguro.';
+      ? 'Voce sera levado ao Asaas para concluir a assinatura no cartao de credito.'
+      : 'Escaneie o QR Code Pix abaixo para receber o pagamento na sua conta Asaas.';
 
   gatewayCheckoutButton.hidden = !gatewayCheckoutUrl;
-}
 
-async function consultarStatusWhatsapp() {
-  if (!assinaturaAtualId || !authToken) {
+  if (usandoPix && pixQrCodeAtual) {
+    pixQrImage.hidden = !pixQrCodeAtual.imageUrl;
+    pixQrImage.src = pixQrCodeAtual.imageUrl || '';
+    pixCopiaColaLabel.textContent = pixQrCodeAtual.payload
+      ? `Pix copia e cola: ${pixQrCodeAtual.payload}`
+      : 'QR Code Pix gerado com sucesso.';
     return;
   }
 
-  try {
-    const status = await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/status`);
-    atualizarStatusWhatsapp(status.status, status.qrCode);
-
-    if (status.status === 'erro') {
-      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o bot local do WhatsApp.';
-    }
-
-    if (status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
-      clearInterval(whatsappPolling);
-      whatsappPolling = null;
-    }
-  } catch (error) {
-    console.error(error);
-    qrStatusMessage.textContent = error.message;
-  }
-}
-
-function iniciarPollingWhatsapp() {
-  if (whatsappPolling) {
-    clearInterval(whatsappPolling);
-  }
-
-  whatsappPolling = setInterval(consultarStatusWhatsapp, 5000);
+  pixQrImage.hidden = true;
+  pixQrImage.src = '';
+  pixCopiaColaLabel.textContent = '';
 }
 
 async function carregarSessaoAtual() {
@@ -274,9 +189,6 @@ async function carregarSessaoAtual() {
   try {
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generateQrButton.disabled = false;
-    whatsappHelpText.textContent = 'Seu acesso esta liberado. Gere o QR Code ou abra seu painel normalmente.';
-    abrirPainelButton.hidden = false;
   } catch (error) {
     console.error(error);
   }
@@ -343,10 +255,34 @@ assinaturaForm.addEventListener('submit', async (event) => {
         responsavelNome: document.getElementById('responsavelNomeInput').value,
         telefone: document.getElementById('telefoneAssinaturaInput').value,
         email: document.getElementById('emailAssinaturaInput').value,
+        cpfTitular: apenasDigitos(document.getElementById('cpfTitularInput').value),
         senha: document.getElementById('senhaAssinaturaInput').value,
         metodoPagamento: metodoPagamentoInput.value,
         diaVencimento: diaVencimentoInput.value,
         whatsappNumero: document.getElementById('whatsappNumeroInput').value,
+        creditCard:
+          metodoPagamentoInput.value === 'cartao'
+            ? {
+                holderName: document.getElementById('cartaoNomeTitularInput').value,
+                number: apenasDigitos(document.getElementById('cartaoNumeroInput').value),
+                expiryMonth: apenasDigitos(document.getElementById('cartaoMesExpiracaoInput').value),
+                expiryYear: apenasDigitos(document.getElementById('cartaoAnoExpiracaoInput').value),
+                ccv: apenasDigitos(document.getElementById('cartaoCvvInput').value),
+              }
+            : null,
+        creditCardHolderInfo:
+          metodoPagamentoInput.value === 'cartao'
+            ? {
+                name: document.getElementById('responsavelNomeInput').value,
+                email: document.getElementById('emailAssinaturaInput').value,
+                cpfCnpj: apenasDigitos(document.getElementById('cpfTitularInput').value),
+                postalCode: apenasDigitos(document.getElementById('cartaoCepInput').value),
+                addressNumber: document.getElementById('cartaoNumeroEnderecoInput').value,
+                addressComplement: document.getElementById('cartaoComplementoInput').value,
+                phone: apenasDigitos(document.getElementById('telefoneAssinaturaInput').value),
+                mobilePhone: apenasDigitos(document.getElementById('telefoneAssinaturaInput').value),
+              }
+            : null,
         diasFuncionamento: coletarDiasSelecionados(diasFuncionamentoInput),
         horarioAbertura: horarioAberturaInput.value,
         horarioAlmocoInicio: horarioAlmocoInicioInput.value,
@@ -358,15 +294,11 @@ assinaturaForm.addEventListener('submit', async (event) => {
 
     assinaturaAtualId = resposta.assinatura.id;
     gatewayCheckoutUrl = resposta.checkoutUrl || null;
+    pixQrCodeAtual = resposta.pixQrCode || null;
     authToken = null;
     localStorage.removeItem(TOKEN_STORAGE_KEY);
-    generateQrButton.disabled = true;
-    abrirPainelButton.hidden = true;
     assinaturaFormMessage.textContent =
       resposta.mensagem || 'Cadastro concluido. Agora finalize o pagamento para liberar seu login.';
-    whatsappHelpText.textContent =
-      'Pagamento aguardando confirmacao. Assim que sua assinatura for liberada, o WhatsApp e o painel ficam disponiveis.';
-    atualizarStatusWhatsapp(resposta.assinatura.whatsapp_status);
     atualizarGatewayInfo();
 
     if (gatewayCheckoutUrl) {
@@ -375,32 +307,6 @@ assinaturaForm.addEventListener('submit', async (event) => {
   } catch (error) {
     console.error(error);
     assinaturaFormMessage.textContent = error.message;
-  }
-});
-
-generateQrButton.addEventListener('click', async () => {
-  if (!assinaturaAtualId) {
-    qrStatusMessage.textContent = 'Cadastre sua barbearia primeiro.';
-    return;
-  }
-
-  try {
-    qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
-    const bridgeToken = await buscarBridgeToken();
-    await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiBaseUrl: window.location.origin,
-        bridgeToken,
-      }),
-    });
-    await consultarStatusWhatsapp();
-    iniciarPollingWhatsapp();
-  } catch (error) {
-    console.error(error);
-    qrStatusMessage.textContent = error.message;
-    whatsappStatusBadge.textContent = 'Erro local';
   }
 });
 
