@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const asaas = require('./asaas');
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const painelPath = path.join(__dirname, '..', 'painel');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();
