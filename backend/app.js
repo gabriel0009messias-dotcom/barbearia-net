@@ -747,6 +747,31 @@ function requireBarbeiro(req, res, next) {
   next();
 }
 
+function obterTokenBridgeWhatsapp(req) {
+  return String(req.headers['x-whatsapp-bridge-token'] || '').trim();
+}
+
+function requireBarbeiroOuBridge(req, res, next) {
+  const sessao = obterSessaoBarbeiro(req);
+
+  if (sessao) {
+    req.sessaoBarbeiro = sessao;
+    req.autenticadoViaBridge = false;
+    next();
+    return;
+  }
+
+  const bridgeToken = obterTokenBridgeWhatsapp(req);
+
+  if (bridgeToken && bridgeToken === 'demo-bridge-token') {
+    req.autenticadoViaBridge = true;
+    next();
+    return;
+  }
+
+  res.status(401).json({ error: 'Login obrigatorio.' });
+}
+
 function obterTokenAdmin(req) {
   return String(req.headers['x-admin-token'] || '').trim();
 }
@@ -943,7 +968,7 @@ app.get('/api/barbeiro/me', (req, res) => {
   });
 });
 
-app.get('/api/agendamentos', requireBarbeiro, (req, res) => {
+app.get('/api/agendamentos', requireBarbeiroOuBridge, (req, res) => {
   res.json(demoAgendamentos);
 });
 
@@ -964,7 +989,7 @@ app.get('/api/faturamento', requireBarbeiro, (req, res) => {
   res.json({ total: somarPorPeriodo(periodo) });
 });
 
-app.get('/api/bloqueios', requireBarbeiro, (req, res) => {
+app.get('/api/bloqueios', requireBarbeiroOuBridge, (req, res) => {
   res.json(demoBloqueios);
 });
 
@@ -997,7 +1022,7 @@ app.delete('/api/agendamentos/:id', requireBarbeiro, (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/publico/assinaturas/:id', requireBarbeiro, (req, res) => {
+app.get('/api/publico/assinaturas/:id', requireBarbeiroOuBridge, (req, res) => {
   res.json({
     id: ACESSO_VITALICIO.id,
     dias_funcionamento: ACESSO_VITALICIO.dias_funcionamento,
@@ -1080,7 +1105,7 @@ app.patch('/api/publico/assinaturas/:id', requireBarbeiro, (req, res) => {
   });
 });
 
-app.post('/api/agendamentos', requireBarbeiro, (req, res) => {
+app.post('/api/agendamentos', requireBarbeiroOuBridge, (req, res) => {
   const { cliente, telefone, servicoId, servicoNome, data, hora } = req.body;
 
   if (!cliente || !telefone || !data || !hora) {
