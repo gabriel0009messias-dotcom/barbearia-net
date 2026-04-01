@@ -3,13 +3,15 @@ const path = require('path');
 const crypto = require('crypto');
 
 const asaas = require('./asaas');
-const apiRoutes = require('./routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const painelPath = path.join(__dirname, '..', 'painel');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();
+const adminSessions = new Map();
+const ADMIN_PIN = '5090';
+let suporteNumeroAdmin = '--';
 const ACESSO_VITALICIO = {
   id: 1,
   email: 'gabriel0009messias@gmail.com',
@@ -233,6 +235,48 @@ function requireBarbeiro(req, res, next) {
   next();
 }
 
+function obterTokenAdmin(req) {
+  return String(req.headers['x-admin-token'] || '').trim();
+}
+
+function requireAdmin(req, res, next) {
+  const token = obterTokenAdmin(req);
+
+  if (!token || !adminSessions.has(token)) {
+    res.status(401).json({ error: 'Acesso admin nao autorizado.' });
+    return;
+  }
+
+  req.adminToken = token;
+  next();
+}
+
+function listarAssinaturasAdmin() {
+  const acessoVitalicio = {
+    id: ACESSO_VITALICIO.id,
+    barbearia_nome: ACESSO_VITALICIO.barbeariaNome,
+    responsavel_nome: ACESSO_VITALICIO.responsavelNome,
+    telefone: ACESSO_VITALICIO.telefone,
+    email: ACESSO_VITALICIO.email,
+    metodo_pagamento: 'acesso_liberado',
+    dia_vencimento: '-',
+    status: ACESSO_VITALICIO.status,
+  };
+
+  const cadastradas = assinaturasCadastradas.map((assinatura) => ({
+    id: assinatura.id,
+    barbearia_nome: assinatura.barbeariaNome,
+    responsavel_nome: assinatura.responsavelNome,
+    telefone: assinatura.telefone,
+    email: assinatura.email,
+    metodo_pagamento: assinatura.metodoPagamento,
+    dia_vencimento: assinatura.diaVencimento,
+    status: assinatura.status,
+  }));
+
+  return [acessoVitalicio, ...cadastradas];
+}
+
 app.post('/api/barbeiro/login', (req, res) => {
   const identificador = String(req.body?.identificador || '').trim().toLowerCase();
   const senha = String(req.body?.senha || '');
@@ -256,6 +300,82 @@ app.post('/api/barbeiro/login', (req, res) => {
       email: ACESSO_VITALICIO.email,
       status: ACESSO_VITALICIO.status,
     },
+  });
+});
+
+app.post('/api/admin/login', (req, res) => {
+  const pin = String(req.body?.pin || '').trim();
+
+  if (pin !== ADMIN_PIN) {
+    res.status(401).json({ error: 'PIN admin invalido.' });
+    return;
+  }
+
+  const token = crypto.randomBytes(24).toString('hex');
+  adminSessions.set(token, { createdAt: Date.now() });
+  res.json({ token, expiresInHours: 12 });
+});
+
+app.get('/api/admin/assinatura-config', requireAdmin, (req, res) => {
+  res.json({
+    suporteNumero: suporteNumeroAdmin,
+    valorMensal: 65,
+    gateway: {
+      provider: 'asaas',
+      enabled: true,
+      label: 'Asaas',
+    },
+    diasVencimento: [5, 20],
+    metodosPagamento: ['cartao', 'pix'],
+    statusDisponiveis: ['pendente', 'ativo', 'bloqueado'],
+  });
+});
+
+app.patch('/api/admin/assinatura-config', requireAdmin, (req, res) => {
+  const suporteNumero = String(req.body?.suporteNumero || '').trim();
+
+  if (!suporteNumero) {
+    res.status(400).json({ error: 'Numero de suporte e obrigatorio.' });
+    return;
+  }
+
+  suporteNumeroAdmin = suporteNumero;
+  res.json({ suporteNumero: suporteNumeroAdmin });
+});
+
+app.get('/api/admin/assinaturas', requireAdmin, (req, res) => {
+  res.json(listarAssinaturasAdmin());
+});
+
+app.patch('/api/admin/assinaturas/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const status = String(req.body?.status || '').trim().toLowerCase();
+
+  if (!['pendente', 'ativo', 'bloqueado'].includes(status)) {
+    res.status(400).json({ error: 'Status invalido.' });
+    return;
+  }
+
+  if (id === ACESSO_VITALICIO.id) {
+    ACESSO_VITALICIO.status = status;
+    res.json({
+      id: ACESSO_VITALICIO.id,
+      status: ACESSO_VITALICIO.status,
+    });
+    return;
+  }
+
+  const assinatura = assinaturasCadastradas.find((item) => item.id === id);
+
+  if (!assinatura) {
+    res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    return;
+  }
+
+  assinatura.status = status;
+  res.json({
+    id: assinatura.id,
+    status: assinatura.status,
   });
 });
 
@@ -591,8 +711,6 @@ app.post('/webhook', (req, res) => {
 
   res.json({ received: true });
 });
-
-app.use('/api', apiRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Erro no servidor:', err);
