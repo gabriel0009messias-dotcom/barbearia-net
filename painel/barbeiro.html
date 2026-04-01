@@ -176,6 +176,33 @@
               <span>Ano</span>
               <strong id="faturamentoAno">R$ 0,00</strong>
             </article>
+            <article class="metric-card">
+              <span>Mes escolhido</span>
+              <strong id="faturamentoMesEscolhido">R$ 0,00</strong>
+            </article>
+          </section>
+
+          <section class="panel-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Faturamento mensal</p>
+                <h3>Consulte outro mes</h3>
+              </div>
+            </div>
+
+            <div class="schedule-grid">
+              <label>
+                Mes
+                <input id="mesFaturamentoInput" type="month" />
+              </label>
+
+              <label>
+                Total do mes selecionado
+                <input id="mesFaturamentoResultado" type="text" value="R$ 0,00" readonly />
+              </label>
+            </div>
+
+            <p id="mesFaturamentoMensagem" class="form-message"></p>
           </section>
 
           <section class="grid">

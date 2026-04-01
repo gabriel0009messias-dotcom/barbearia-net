@@ -20,6 +20,10 @@ const agendamentoCount = document.getElementById('agendamentoCount');
 const faturamentoDia = document.getElementById('faturamentoDia');
 const faturamentoMes = document.getElementById('faturamentoMes');
 const faturamentoAno = document.getElementById('faturamentoAno');
+const faturamentoMesEscolhido = document.getElementById('faturamentoMesEscolhido');
+const mesFaturamentoInput = document.getElementById('mesFaturamentoInput');
+const mesFaturamentoResultado = document.getElementById('mesFaturamentoResultado');
+const mesFaturamentoMensagem = document.getElementById('mesFaturamentoMensagem');
 const bloqueiosList = document.getElementById('bloqueiosList');
 const formMessage = document.getElementById('formMessage');
 const refreshButton = document.getElementById('refreshButton');
@@ -264,6 +268,28 @@ function renderizarFaturamento([dia, mes, ano]) {
   faturamentoAno.textContent = currency.format(Number(ano.total || 0));
 }
 
+async function carregarFaturamentoMesEscolhido() {
+  const referencia = mesFaturamentoInput?.value;
+
+  if (!referencia) {
+    mesFaturamentoResultado.value = currency.format(0);
+    faturamentoMesEscolhido.textContent = currency.format(0);
+    mesFaturamentoMensagem.textContent = 'Escolha um mes para consultar o faturamento.';
+    return;
+  }
+
+  try {
+    const resultado = await buscarJson(`/api/faturamento?periodo=mes_customizado&mes=${encodeURIComponent(referencia)}`);
+    const total = Number(resultado.total || 0);
+    mesFaturamentoResultado.value = currency.format(total);
+    faturamentoMesEscolhido.textContent = currency.format(total);
+    mesFaturamentoMensagem.textContent = `Faturamento de ${referencia}: ${currency.format(total)}`;
+  } catch (error) {
+    console.error(error);
+    mesFaturamentoMensagem.textContent = error.message || 'Nao consegui carregar o faturamento do mes.';
+  }
+}
+
 function renderizarBloqueios(bloqueios) {
   if (!bloqueios.length) {
     bloqueiosList.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
@@ -424,6 +450,10 @@ async function carregarPainelBarbeiro() {
     renderizarFaturamento([dia, mes, ano]);
     renderizarBloqueios(bloqueios);
     preencherConfiguracoesPainel(assinatura);
+    if (mesFaturamentoInput && !mesFaturamentoInput.value) {
+      mesFaturamentoInput.value = new Date().toISOString().slice(0, 7);
+    }
+    await carregarFaturamentoMesEscolhido();
     if (!whatsappLocalOnly) {
       await consultarStatusWhatsapp();
     }
@@ -632,6 +662,9 @@ logoutBarbeiroButton.addEventListener('click', async () => {
 });
 
 refreshButton.addEventListener('click', carregarPainelBarbeiro);
+mesFaturamentoInput?.addEventListener('change', () => {
+  void carregarFaturamentoMesEscolhido();
+});
 
 renderizarDiasFuncionamento(diasFuncionamentoPainel, [1, 2, 3, 4, 5, 6]);
 carregarPainelBarbeiro();

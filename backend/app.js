@@ -117,6 +117,53 @@ function extrairMensagemErro(error) {
   return mensagemOriginal;
 }
 
+function precoDoServico(nomeServico = '') {
+  const servico = ACESSO_VITALICIO.servicos.find(
+    (item) => String(item.nome || '').trim().toLowerCase() === String(nomeServico || '').trim().toLowerCase()
+  );
+
+  return Number(servico?.preco || 0);
+}
+
+function filtrarAgendamentosConfirmados() {
+  return demoAgendamentos.filter((item) => String(item.status || '').toLowerCase() === 'confirmado');
+}
+
+function somarPorPeriodo(periodo, referenciaMes = '') {
+  const hoje = new Date();
+  const hojeIso = hoje.toISOString().slice(0, 10);
+  const mesAtual = hojeIso.slice(0, 7);
+  const anoAtual = hojeIso.slice(0, 4);
+
+  return filtrarAgendamentosConfirmados()
+    .filter((item) => {
+      const data = String(item.data || '');
+
+      if (!data) {
+        return false;
+      }
+
+      if (periodo === 'dia') {
+        return data === hojeIso;
+      }
+
+      if (periodo === 'mes') {
+        return data.slice(0, 7) === mesAtual;
+      }
+
+      if (periodo === 'ano') {
+        return data.slice(0, 4) === anoAtual;
+      }
+
+      if (periodo === 'mes_customizado') {
+        return referenciaMes && data.slice(0, 7) === referenciaMes;
+      }
+
+      return false;
+    })
+    .reduce((total, item) => total + precoDoServico(item.servico), 0);
+}
+
 async function criarClienteAsaasComFallback({ nome, cpfCnpj, email, telefone }) {
   const payloadBase = {
     name: nome,
@@ -881,7 +928,20 @@ app.get('/api/agendamentos', requireBarbeiro, (req, res) => {
 });
 
 app.get('/api/faturamento', requireBarbeiro, (req, res) => {
-  res.json({ total: 0 });
+  const periodo = String(req.query?.periodo || 'mes').trim().toLowerCase();
+  const mes = String(req.query?.mes || '').trim();
+
+  if (periodo === 'mes_customizado') {
+    if (!/^\d{4}-\d{2}$/.test(mes)) {
+      res.status(400).json({ error: 'Informe o mes no formato YYYY-MM.' });
+      return;
+    }
+
+    res.json({ total: somarPorPeriodo('mes_customizado', mes), referencia: mes });
+    return;
+  }
+
+  res.json({ total: somarPorPeriodo(periodo) });
 });
 
 app.get('/api/bloqueios', requireBarbeiro, (req, res) => {
