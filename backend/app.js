@@ -448,13 +448,21 @@ app.get('/controle-interno', (req, res) => {
             '<td>' + (contato || '--') + '</td>' +
             '<td>' + pagamento + '</td>' +
             '<td><select><option value="pendente">Pendente</option><option value="ativo">Ativo</option><option value="bloqueado">Bloqueado</option></select></td>' +
-            '<td><button class="secondary" type="button">Salvar</button></td>';
+            '<td>' +
+              '<div style="display:grid; gap:8px;">' +
+                '<button class="secondary" type="button" data-action="save">Salvar</button>' +
+                (assinatura.id !== 1
+                  ? '<button class="primary" type="button" data-action="delete" style="background:#6e0b10;">Excluir</button>'
+                  : '<button class="secondary" type="button" disabled title="Acesso protegido">Protegido</button>') +
+              '</div>' +
+            '</td>';
 
           const select = tr.querySelector('select');
           select.value = assinatura.status || 'pendente';
-          const button = tr.querySelector('button');
+          const saveButton = tr.querySelector('[data-action="save"]');
+          const deleteButton = tr.querySelector('[data-action="delete"]');
 
-          button.addEventListener('click', async () => {
+          saveButton.addEventListener('click', async () => {
             tableMessage.textContent = 'Salvando status...';
             tableMessage.classList.remove('error');
             try {
@@ -469,6 +477,30 @@ app.get('/controle-interno', (req, res) => {
               tableMessage.classList.add('error');
             }
           });
+
+          if (deleteButton) {
+            deleteButton.addEventListener('click', async () => {
+              const confirmado = window.confirm('Deseja excluir essa pessoa da plataforma?');
+
+              if (!confirmado) {
+                return;
+              }
+
+              tableMessage.textContent = 'Excluindo assinatura...';
+              tableMessage.classList.remove('error');
+
+              try {
+                await api('/api/admin/assinaturas/' + assinatura.id, {
+                  method: 'DELETE',
+                });
+                tableMessage.textContent = 'Assinatura excluida com sucesso.';
+                await loadPanel();
+              } catch (error) {
+                tableMessage.textContent = error.message;
+                tableMessage.classList.add('error');
+              }
+            });
+          }
 
           tableBody.appendChild(tr);
         });
@@ -789,6 +821,33 @@ app.patch('/api/admin/assinaturas/:id', requireAdmin, (req, res) => {
   res.json({
     id: assinatura.id,
     status: assinatura.status,
+  });
+});
+
+app.delete('/api/admin/assinaturas/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+
+  if (id === ACESSO_VITALICIO.id) {
+    res.status(400).json({ error: 'O acesso vitalicio principal nao pode ser excluido por aqui.' });
+    return;
+  }
+
+  const index = assinaturasCadastradas.findIndex((item) => item.id === id);
+
+  if (index === -1) {
+    res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    return;
+  }
+
+  const [removida] = assinaturasCadastradas.splice(index, 1);
+
+  res.json({
+    ok: true,
+    removida: {
+      id: removida.id,
+      barbearia_nome: removida.barbeariaNome,
+      email: removida.email,
+    },
   });
 });
 
