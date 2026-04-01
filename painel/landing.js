@@ -72,7 +72,7 @@ async function mostrarPixBloqueado() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         valor: valorMensalAtual,
-        descricao: 'Assinatura mensal Salaoflix',
+        descricao: 'Assinatura mensal Salãoflix',
       }),
     });
 

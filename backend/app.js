@@ -13,7 +13,7 @@ const ACESSO_VITALICIO = {
   id: 1,
   email: 'gabriel0009messias@gmail.com',
   senha: 'rios123456',
-  barbeariaNome: 'Salao Demo',
+  barbeariaNome: 'Salão Demo',
   responsavelNome: 'Gabriel',
   telefone: '11999999999',
   status: 'ativo',
@@ -458,7 +458,7 @@ app.post('/api/publico/assinaturas', async (req, res) => {
         billingType: 'PIX',
         value: 65,
         dueDate: nextDueDate,
-        description: `Assinatura Salaoflix - ${barbeariaNome}`,
+        description: `Assinatura Salãoflix - ${barbeariaNome}`,
       });
 
       payment = paymentResponse.data;
