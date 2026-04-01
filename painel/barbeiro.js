@@ -31,6 +31,7 @@ const logoutBarbeiroButton = document.getElementById('logoutBarbeiroButton');
 const bloqueioForm = document.getElementById('bloqueioForm');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const generateQrButton = document.getElementById('generateQrButton');
+const openLocalWhatsappButton = document.getElementById('openLocalWhatsappButton');
 const qrCodeImage = document.getElementById('qrCodeImage');
 const qrStatusMessage = document.getElementById('qrStatusMessage');
 const whatsappStatusBadge = document.getElementById('whatsappStatusBadge');
@@ -424,6 +425,8 @@ async function carregarPainelBarbeiro() {
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
     generateQrButton.disabled = whatsappLocalOnly;
+    generateQrButton.hidden = whatsappLocalOnly;
+    openLocalWhatsappButton.hidden = !whatsappLocalOnly;
     whatsappHelpText.textContent = whatsappLocalOnly
       ? 'A conexao do WhatsApp deve ser feita no ambiente local do sistema. No site online, esse QR Code fica desativado para evitar erro.'
       : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
@@ -662,6 +665,11 @@ logoutBarbeiroButton.addEventListener('click', async () => {
 });
 
 refreshButton.addEventListener('click', carregarPainelBarbeiro);
+openLocalWhatsappButton?.addEventListener('click', () => {
+  qrStatusMessage.textContent =
+    'Abra o backend local e execute o arquivo iniciar-whatsapp.bat para gerar o QR Code do WhatsApp.';
+  whatsappStatusBadge.textContent = 'Configuracao local';
+});
 mesFaturamentoInput?.addEventListener('change', () => {
   void carregarFaturamentoMesEscolhido();
 });
