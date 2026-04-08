@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 
+function garantirDiretorio(caminho) {
+  if (!fs.existsSync(caminho)) {
+    fs.mkdirSync(caminho, { recursive: true });
+  }
+}
+
 function listarCaminhosChromeWindows() {
   return [
     process.env.CHROME_PATH,
@@ -25,7 +31,24 @@ function listarCaminhosChromeWindows() {
 
 function encontrarNavegadorLocal() {
   if (process.platform !== 'win32') {
-    return process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || null;
+    const caminhoConfigurado = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+
+    if (caminhoConfigurado) {
+      return caminhoConfigurado;
+    }
+
+    try {
+      // Quando o Chrome do Puppeteer foi instalado no build, este helper encontra o binario real.
+      // Isso evita depender de configurar manualmente o caminho no Render.
+      // eslint-disable-next-line global-require
+      const puppeteer = require('puppeteer');
+      const executablePath =
+        typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
+
+      return executablePath || null;
+    } catch (error) {
+      return null;
+    }
   }
 
   return listarCaminhosChromeWindows().find((item) => fs.existsSync(item)) || null;
@@ -33,7 +56,13 @@ function encontrarNavegadorLocal() {
 
 function criarOpcoesWppconnect({ session, headless, catchQR, statusFind }) {
   const executablePath = encontrarNavegadorLocal();
-  const userDataDir = path.join(__dirname, 'tokens', session);
+  const tokenDir = path.join(__dirname, 'tokens');
+  const browserProfilesDir = path.join(__dirname, 'browser-data');
+  const userDataDir = path.join(browserProfilesDir, `${session}-${process.pid}`);
+
+  garantirDiretorio(tokenDir);
+  garantirDiretorio(browserProfilesDir);
+  garantirDiretorio(userDataDir);
 
   return {
     session,
@@ -42,7 +71,7 @@ function criarOpcoesWppconnect({ session, headless, catchQR, statusFind }) {
     catchQR,
     statusFind,
     logQR: false,
-    folderNameToken: path.join(__dirname, 'tokens'),
+    folderNameToken: tokenDir,
     browserArgs: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     puppeteerOptions: {
       userDataDir,
