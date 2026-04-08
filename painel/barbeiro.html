@@ -65,6 +65,72 @@
               </div>
             </div>
           </section>
+
+          <section class="grid">
+            <article class="panel-card">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">Agenda</p>
+                  <h3>Agendamentos</h3>
+                </div>
+                <span id="agendamentoCountInicio" class="badge">0 itens</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cliente</th>
+                      <th>Servico</th>
+                      <th>Data</th>
+                      <th>Hora</th>
+                      <th>Status</th>
+                      <th>Acao</th>
+                    </tr>
+                  </thead>
+                  <tbody id="agendamentosTableInicio">
+                    <tr>
+                      <td colspan="6">Nenhum agendamento encontrado.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="panel-card">
+              <div class="card-header">
+                <div>
+                  <p class="eyebrow">Operacao</p>
+                  <h3>Bloquear horario</h3>
+                </div>
+              </div>
+
+              <form id="bloqueioFormInicio" class="form-grid">
+                <label>
+                  Data
+                  <input id="dataInputInicio" type="date" required />
+                </label>
+
+                <label>
+                  Hora
+                  <input id="horaInputInicio" type="time" required />
+                </label>
+
+                <button type="submit" class="primary-button">Salvar bloqueio</button>
+              </form>
+
+              <p id="formMessageInicio" class="form-message"></p>
+
+              <div class="card-header compact">
+                <div>
+                  <p class="eyebrow">Agenda interna</p>
+                  <h3>Bloqueios cadastrados</h3>
+                </div>
+              </div>
+              <ul id="bloqueiosListInicio" class="list">
+                <li>Nenhum bloqueio cadastrado.</li>
+              </ul>
+            </article>
+          </section>
         </section>
 
         <section id="atualizacaoSection" class="panel-view" data-section="atualizacao" hidden>

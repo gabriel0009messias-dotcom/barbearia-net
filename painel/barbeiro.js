@@ -17,6 +17,8 @@ const TOKEN_STORAGE_KEY = 'barbearia_auth_token';
 
 const agendamentosTable = document.getElementById('agendamentosTable');
 const agendamentoCount = document.getElementById('agendamentoCount');
+const agendamentosTableInicio = document.getElementById('agendamentosTableInicio');
+const agendamentoCountInicio = document.getElementById('agendamentoCountInicio');
 const faturamentoDia = document.getElementById('faturamentoDia');
 const faturamentoMes = document.getElementById('faturamentoMes');
 const faturamentoAno = document.getElementById('faturamentoAno');
@@ -26,9 +28,12 @@ const mesFaturamentoResultado = document.getElementById('mesFaturamentoResultado
 const mesFaturamentoMensagem = document.getElementById('mesFaturamentoMensagem');
 const bloqueiosList = document.getElementById('bloqueiosList');
 const formMessage = document.getElementById('formMessage');
+const bloqueiosListInicio = document.getElementById('bloqueiosListInicio');
+const formMessageInicio = document.getElementById('formMessageInicio');
 const refreshButton = document.getElementById('refreshButton');
 const logoutBarbeiroButton = document.getElementById('logoutBarbeiroButton');
 const bloqueioForm = document.getElementById('bloqueioForm');
+const bloqueioFormInicio = document.getElementById('bloqueioFormInicio');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const menuButtons = Array.from(document.querySelectorAll('[data-section-target]'));
 const panelViews = Array.from(document.querySelectorAll('.panel-view'));
@@ -287,29 +292,34 @@ function preencherConfiguracoesPainel(assinatura) {
 }
 
 function renderizarAgendamentos(agendamentos) {
+  const htmlSemItens = '<tr><td colspan="6">Nenhum agendamento encontrado.</td></tr>';
+  const html = !agendamentos.length
+    ? htmlSemItens
+    : agendamentos
+        .map(
+          (item) => `
+            <tr>
+              <td>${escaparHtml(item.cliente || item.telefone || 'Sem nome')}</td>
+              <td>${escaparHtml(item.servico || '-')}</td>
+              <td>${formatarData(item.data)}</td>
+              <td>${escaparHtml(item.hora || '-')}</td>
+              <td>${escaparHtml(item.status || '-')}</td>
+              <td>
+                <button class="table-action danger-button" data-id="${item.id}" type="button">Excluir</button>
+              </td>
+            </tr>
+          `
+        )
+        .join('');
+
   agendamentoCount.textContent = `${agendamentos.length} itens`;
-
-  if (!agendamentos.length) {
-    agendamentosTable.innerHTML = '<tr><td colspan="6">Nenhum agendamento encontrado.</td></tr>';
-    return;
+  if (agendamentoCountInicio) {
+    agendamentoCountInicio.textContent = `${agendamentos.length} itens`;
   }
-
-  agendamentosTable.innerHTML = agendamentos
-    .map(
-      (item) => `
-        <tr>
-          <td>${escaparHtml(item.cliente || item.telefone || 'Sem nome')}</td>
-          <td>${escaparHtml(item.servico || '-')}</td>
-          <td>${formatarData(item.data)}</td>
-          <td>${escaparHtml(item.hora || '-')}</td>
-          <td>${escaparHtml(item.status || '-')}</td>
-          <td>
-            <button class="table-action danger-button" data-id="${item.id}" type="button">Excluir</button>
-          </td>
-        </tr>
-      `
-    )
-    .join('');
+  agendamentosTable.innerHTML = html;
+  if (agendamentosTableInicio) {
+    agendamentosTableInicio.innerHTML = html;
+  }
 }
 
 function renderizarFaturamento([dia, mes, ano]) {
@@ -343,12 +353,19 @@ async function carregarFaturamentoMesEscolhido() {
 function renderizarBloqueios(bloqueios) {
   if (!bloqueios.length) {
     bloqueiosList.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
+    if (bloqueiosListInicio) {
+      bloqueiosListInicio.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
+    }
     return;
   }
 
-  bloqueiosList.innerHTML = bloqueios
+  const html = bloqueios
     .map((item) => `<li>${formatarData(item.data)} as ${escaparHtml(item.hora)}</li>`)
     .join('');
+  bloqueiosList.innerHTML = html;
+  if (bloqueiosListInicio) {
+    bloqueiosListInicio.innerHTML = html;
+  }
 }
 
 function atualizarStatusWhatsapp(status, qrCode) {
@@ -557,30 +574,62 @@ function iniciarPollingWhatsapp() {
   whatsappPolling = setInterval(consultarStatusWhatsapp, 5000);
 }
 
-bloqueioForm.addEventListener('submit', async (event) => {
+async function salvarBloqueio({ data, hora, form, messageNode }) {
+  await buscarJson('/api/bloqueios', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data, hora }),
+  });
+
+  if (messageNode) {
+    messageNode.textContent = 'Horario bloqueado com sucesso.';
+  }
+
+  if (form) {
+    form.reset();
+  }
+
+  await carregarPainelBarbeiro();
+}
+
+async function lidarEnvioBloqueio(event, campos) {
   event.preventDefault();
 
-  const data = document.getElementById('dataInput').value;
-  const hora = document.getElementById('horaInput').value;
-
   try {
-    await buscarJson('/api/bloqueios', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data, hora }),
+    await salvarBloqueio({
+      data: campos.data.value,
+      hora: campos.hora.value,
+      form: campos.form,
+      messageNode: campos.message,
     });
-
-    formMessage.textContent = 'Horario bloqueado com sucesso.';
-    bloqueioForm.reset();
-    await carregarPainelBarbeiro();
   } catch (error) {
     console.error(error);
     if (tratarErroSessao(error)) {
       return;
     }
-    formMessage.textContent = 'Nao consegui salvar o bloqueio.';
+    if (campos.message) {
+      campos.message.textContent = 'Nao consegui salvar o bloqueio.';
+    }
   }
-});
+}
+
+bloqueioForm.addEventListener('submit', (event) =>
+  lidarEnvioBloqueio(event, {
+    data: document.getElementById('dataInput'),
+    hora: document.getElementById('horaInput'),
+    form: bloqueioForm,
+    message: formMessage,
+  })
+);
+
+bloqueioFormInicio?.addEventListener('submit', (event) =>
+  lidarEnvioBloqueio(event, {
+    data: document.getElementById('dataInputInicio'),
+    hora: document.getElementById('horaInputInicio'),
+    form: bloqueioFormInicio,
+    message: formMessageInicio,
+  })
+);
 
 configuracoesBarbeiroForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -709,6 +758,39 @@ agendamentosTable.addEventListener('click', async (event) => {
       return;
     }
     formMessage.textContent = 'Nao consegui excluir o agendamento.';
+    botao.disabled = false;
+  }
+});
+
+agendamentosTableInicio?.addEventListener('click', async (event) => {
+  const botao = event.target.closest('button[data-id]');
+
+  if (!botao) {
+    return;
+  }
+
+  const { id } = botao.dataset;
+  const confirmou = window.confirm('Tem certeza que deseja excluir este agendamento?');
+
+  if (!confirmou) {
+    return;
+  }
+
+  try {
+    botao.disabled = true;
+    await excluirAgendamento(id);
+    if (formMessageInicio) {
+      formMessageInicio.textContent = 'Agendamento excluido com sucesso.';
+    }
+    await carregarPainelBarbeiro();
+  } catch (error) {
+    console.error(error);
+    if (tratarErroSessao(error)) {
+      return;
+    }
+    if (formMessageInicio) {
+      formMessageInicio.textContent = 'Nao consegui excluir o agendamento.';
+    }
     botao.disabled = false;
   }
 });
