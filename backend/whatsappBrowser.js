@@ -45,7 +45,7 @@ function encontrarNavegadorLocal() {
       const executablePath =
         typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
 
-      return executablePath || null;
+      return executablePath && fs.existsSync(executablePath) ? executablePath : null;
     } catch (error) {
       return null;
     }
