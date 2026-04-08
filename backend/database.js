@@ -6,13 +6,30 @@ const legacyDbPath = path.join(__dirname, 'barbearia.db');
 const configuredDbPath =
   process.env.DATABASE_PATH ||
   (process.env.RENDER || process.env.RENDER_SERVICE_ID ? '/var/data/barbearia.db' : legacyDbPath);
-const dbPath = path.resolve(configuredDbPath);
+let dbPath = path.resolve(configuredDbPath);
 
 function garantirDiretorioDoBanco() {
   const dbDir = path.dirname(dbPath);
 
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true });
+  try {
+    if (!fs.existsSync(dbDir)) {
+      fs.mkdirSync(dbDir, { recursive: true });
+    }
+  } catch (error) {
+    const deveUsarFallback = dbPath !== legacyDbPath && ['EACCES', 'EPERM', 'EROFS'].includes(error.code);
+
+    if (!deveUsarFallback) {
+      throw error;
+    }
+
+    dbPath = legacyDbPath;
+    const fallbackDir = path.dirname(dbPath);
+
+    if (!fs.existsSync(fallbackDir)) {
+      fs.mkdirSync(fallbackDir, { recursive: true });
+    }
+
+    console.warn(`Sem permissao para usar ${dbDir}. Fallback para banco local em ${dbPath}.`);
   }
 }
 
@@ -35,6 +52,45 @@ migrarBancoLegadoSeNecessario();
 console.log(`Usando banco em: ${dbPath}`);
 
 const db = new sqlite3.Database(dbPath);
+
+function runAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function onRun(err) {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      resolve(this);
+    });
+  });
+}
+
+function getAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      resolve(row);
+    });
+  });
+}
+
+function allAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      resolve(rows);
+    });
+  });
+}
 
 function carregarServicos() {
   const servicosPath = path.join(__dirname, 'servicos.json');
@@ -131,6 +187,19 @@ db.serialize(() => {
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS clientes_saas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL,
+    cpf TEXT NOT NULL,
+    email TEXT NOT NULL,
+    telefone TEXT NOT NULL,
+    asaas_customer_id TEXT NOT NULL UNIQUE,
+    asaas_subscription_id TEXT UNIQUE,
+    status TEXT NOT NULL DEFAULT 'ativo',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   db.run(`CREATE TABLE IF NOT EXISTS servicos_assinatura (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     assinatura_id INTEGER NOT NULL,
@@ -171,6 +240,7 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'mercado_next_payment_date', 'TEXT');
   garantirColuna('assinaturas', 'mercado_last_payload', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_15_enviado_em', 'TEXT');
+  garantirColuna('agendamentos', 'lembrete_7_enviado_em', 'TEXT');
 
   db.run(`UPDATE assinaturas
           SET metodo_pagamento = 'pix'
@@ -189,3 +259,6 @@ db.serialize(() => {
 });
 
 module.exports = db;
+module.exports.runAsync = runAsync;
+module.exports.getAsync = getAsync;
+module.exports.allAsync = allAsync;
