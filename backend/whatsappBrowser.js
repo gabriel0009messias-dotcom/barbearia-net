@@ -33,7 +33,7 @@ function encontrarNavegadorLocal() {
   if (process.platform !== 'win32') {
     const caminhoConfigurado = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
 
-    if (caminhoConfigurado) {
+    if (caminhoConfigurado && fs.existsSync(caminhoConfigurado)) {
       return caminhoConfigurado;
     }
 
