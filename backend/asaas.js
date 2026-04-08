@@ -9,4 +9,29 @@ const asaas = axios.create({
   },
 });
 
+async function criarCliente({ nome, cpf, email, telefone }) {
+  const response = await asaas.post('/customers', {
+    name: nome,
+    cpfCnpj: cpf,
+    email,
+    mobilePhone: telefone,
+  });
+
+  return response.data;
+}
+
+async function criarAssinatura({ customer, nextDueDate, value = 65 }) {
+  const response = await asaas.post('/subscriptions', {
+    customer,
+    billingType: 'PIX',
+    value,
+    cycle: 'MONTHLY',
+    nextDueDate,
+  });
+
+  return response.data;
+}
+
 module.exports = asaas;
+module.exports.criarCliente = criarCliente;
+module.exports.criarAssinatura = criarAssinatura;
