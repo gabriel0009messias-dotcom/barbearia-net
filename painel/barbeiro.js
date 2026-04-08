@@ -30,13 +30,14 @@ const refreshButton = document.getElementById('refreshButton');
 const logoutBarbeiroButton = document.getElementById('logoutBarbeiroButton');
 const bloqueioForm = document.getElementById('bloqueioForm');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
+const menuButtons = Array.from(document.querySelectorAll('[data-section-target]'));
+const panelViews = Array.from(document.querySelectorAll('.panel-view'));
 const generateQrButton = document.getElementById('generateQrButton');
 const openLocalWhatsappButton = document.getElementById('openLocalWhatsappButton');
 const qrCodeImage = document.getElementById('qrCodeImage');
 const qrStatusMessage = document.getElementById('qrStatusMessage');
 const whatsappStatusBadge = document.getElementById('whatsappStatusBadge');
 const whatsappHelpText = document.getElementById('whatsappHelpText');
-const painelOperacional = document.getElementById('painelOperacional');
 const painelLiberadoMessage = document.getElementById('painelLiberadoMessage');
 const paymentReminderCard = document.getElementById('paymentReminderCard');
 const paymentReminderText = document.getElementById('paymentReminderText');
@@ -56,6 +57,7 @@ const painelHorarioAlmocoFimInput = document.getElementById('painelHorarioAlmoco
 const painelHorarioFechamentoInput = document.getElementById('painelHorarioFechamentoInput');
 const addPainelServiceButton = document.getElementById('addPainelServiceButton');
 const painelServiceRows = document.getElementById('painelServiceRows');
+const precosAtuaisGrid = document.getElementById('precosAtuaisGrid');
 
 let assinaturaAtualId = null;
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
@@ -65,6 +67,7 @@ let valorMensalAtual = 1;
 let whatsappBridgeUrl = null;
 let whatsappLocalOnly = false;
 const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
+let activeSectionId = 'inicio';
 
 function formatarData(data) {
   if (!data) return '-';
@@ -220,6 +223,50 @@ function coletarServicos(container) {
     .filter((item) => item.nome && Number(item.preco) > 0);
 }
 
+function setActiveSection(sectionId) {
+  activeSectionId = sectionId;
+
+  panelViews.forEach((view) => {
+    const isActive = view.dataset.section === sectionId;
+    view.hidden = !isActive;
+    view.classList.toggle('is-active', isActive);
+  });
+
+  menuButtons.forEach((button) => {
+    const isActive = button.dataset.sectionTarget === sectionId;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-current', isActive ? 'page' : 'false');
+  });
+}
+
+function renderizarPrecosAtuais(servicos = []) {
+  if (!precosAtuaisGrid) {
+    return;
+  }
+
+  if (!servicos.length) {
+    precosAtuaisGrid.innerHTML = `
+      <article class="price-card">
+        <strong>Nenhum servico cadastrado.</strong>
+        <p>Cadastre um servico na aba Servicos para ver os precos aqui.</p>
+      </article>
+    `;
+    return;
+  }
+
+  precosAtuaisGrid.innerHTML = servicos
+    .map(
+      (servico) => `
+        <article class="price-card">
+          <span>${escaparHtml(servico.nome || 'Servico')}</span>
+          <strong>${currency.format(Number(servico.preco || 0))}</strong>
+          <p>Preco atual publicado no painel.</p>
+        </article>
+      `
+    )
+    .join('');
+}
+
 function preencherConfiguracoesPainel(assinatura) {
   renderizarDiasFuncionamento(diasFuncionamentoPainel, assinatura.dias_funcionamento || [1, 2, 3, 4, 5, 6]);
   painelHorarioAberturaInput.value = assinatura.horario_abertura || '08:00';
@@ -235,6 +282,8 @@ function preencherConfiguracoesPainel(assinatura) {
   if (!painelServiceRows.children.length) {
     criarLinhaServico(painelServiceRows, 'Corte degrade', '30');
   }
+
+  renderizarPrecosAtuais(assinatura.servicos || []);
 }
 
 function renderizarAgendamentos(agendamentos) {
@@ -372,12 +421,12 @@ async function atualizarPixBloqueado() {
 }
 
 async function mostrarPainelBloqueado(mensagem) {
-  painelOperacional.hidden = true;
   painelLiberadoMessage.hidden = true;
   paymentReminderCard.hidden = true;
   painelBloqueadoMessage.hidden = false;
   blockedMessageText.textContent = mensagem;
   generateQrButton.disabled = true;
+  setActiveSection('atualizacao');
   await atualizarPixBloqueado();
 }
 
@@ -445,7 +494,6 @@ async function carregarPainelBarbeiro() {
       buscarJson('/api/bloqueios'),
     ]);
 
-    painelOperacional.hidden = false;
     painelLiberadoMessage.hidden = false;
     atualizarLembretePagamento(assinatura);
     painelBloqueadoMessage.hidden = true;
@@ -460,6 +508,7 @@ async function carregarPainelBarbeiro() {
     if (!whatsappLocalOnly) {
       await consultarStatusWhatsapp();
     }
+    setActiveSection(activeSectionId || 'inicio');
   } catch (error) {
     console.error(error);
     if (tratarErroSessao(error)) {
@@ -585,7 +634,18 @@ function configurarRemocaoServico(container) {
 }
 
 configurarRemocaoServico(painelServiceRows);
-addPainelServiceButton.addEventListener('click', () => criarLinhaServico(painelServiceRows));
+addPainelServiceButton.addEventListener('click', () => {
+  criarLinhaServico(painelServiceRows);
+  renderizarPrecosAtuais(coletarServicos(painelServiceRows));
+});
+painelServiceRows.addEventListener('input', () => {
+  renderizarPrecosAtuais(coletarServicos(painelServiceRows));
+});
+menuButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    setActiveSection(button.dataset.sectionTarget || 'inicio');
+  });
+});
 
 generateQrButton.addEventListener('click', async () => {
   if (!assinaturaAtualId) {
@@ -675,4 +735,5 @@ mesFaturamentoInput?.addEventListener('change', () => {
 });
 
 renderizarDiasFuncionamento(diasFuncionamentoPainel, [1, 2, 3, 4, 5, 6]);
+setActiveSection('inicio');
 carregarPainelBarbeiro();

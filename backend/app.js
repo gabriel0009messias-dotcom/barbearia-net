@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const asaas = require('./asaas');
+const apiRoutes = require('./routes');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -311,6 +312,8 @@ async function criarClienteAsaasComFallback({ nome, cpfCnpj, email, telefone }) 
 
 app.use(express.json());
 app.use(express.static(painelPath));
+// Prioriza o backend modular persistido antes das rotas legadas em memoria.
+app.use('/api', apiRoutes);
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(painelPath, 'index.html'));
@@ -1559,6 +1562,7 @@ app.post('/webhook', (req, res) => {
   });
 });
 
+// Mantem as rotas legadas acima e expõe os endpoints novos do backend modular.
 app.use((err, req, res, next) => {
   console.error('Erro no servidor:', err);
 

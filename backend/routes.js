@@ -3,6 +3,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 
 const db = require('./database');
+const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas } = require('./asaas');
 const { iniciarSessao, statusSessao } = require('./whatsappManager');
 
 const router = express.Router();
@@ -24,6 +25,161 @@ const DIAS_SEMANA = [
   { value: 5, label: 'Sexta-feira' },
   { value: 6, label: 'Sabado' },
 ];
+
+function formatarDataISO(data) {
+  return data.toISOString().slice(0, 10);
+}
+
+function calcularPrimeiroVencimento() {
+  const hoje = new Date();
+  return formatarDataISO(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1));
+}
+
+function obterClienteSaasId(req) {
+  const headerId = req.headers['x-cliente-id'];
+  const bodyId = req.body?.id || req.body?.clienteId;
+  const queryId = req.query?.id || req.query?.clienteId;
+  const valor = headerId || bodyId || queryId;
+  const id = Number.parseInt(valor, 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function verificarAssinatura(req, res, next) {
+  const clienteId = obterClienteSaasId(req);
+
+  if (!clienteId) {
+    res.status(400).json({ error: 'Informe o id do cliente em x-cliente-id, body.clienteId ou query.clienteId.' });
+    return;
+  }
+
+  try {
+    const cliente = await getAsync('SELECT * FROM clientes_saas WHERE id = ?', [clienteId]);
+
+    if (!cliente) {
+      res.status(404).json({ error: 'Cliente nao encontrado.' });
+      return;
+    }
+
+    if (cliente.status !== 'ativo') {
+      res.status(403).json({ error: 'Sistema bloqueado por falta de pagamento' });
+      return;
+    }
+
+    req.clienteSaas = cliente;
+    next();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+router.post('/criar-cliente', async (req, res) => {
+  const nome = String(req.body?.nome || '').trim();
+  const cpf = String(req.body?.cpf || '').trim();
+  const email = String(req.body?.email || '').trim();
+  const telefone = String(req.body?.telefone || '').trim();
+
+  if (!nome || !cpf || !email || !telefone) {
+    res.status(400).json({ error: 'Informe nome, cpf, email e telefone.' });
+    return;
+  }
+
+  try {
+    const clienteAsaas = await criarClienteAsaas({ nome, cpf, email, telefone });
+
+    const resultado = await db.runAsync(
+      `INSERT INTO clientes_saas (
+        nome,
+        cpf,
+        email,
+        telefone,
+        asaas_customer_id,
+        status
+      ) VALUES (?, ?, ?, ?, ?, 'ativo')`,
+      [nome, cpf, email, telefone, clienteAsaas.id]
+    );
+
+    const clienteSalvo = await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [resultado.lastID]);
+
+    res.status(201).json({
+      message: 'Cliente criado com sucesso no Asaas.',
+      cliente: clienteSalvo,
+      asaas: clienteAsaas,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      error: 'Erro ao criar cliente no Asaas.',
+      details: error.message,
+    });
+  }
+});
+
+router.post('/criar-assinatura', async (req, res) => {
+  const clienteId = Number.parseInt(req.body?.clienteId, 10);
+  const asaasCustomerId = String(req.body?.asaasCustomerId || '').trim();
+  const nextDueDate = String(req.body?.nextDueDate || calcularPrimeiroVencimento()).trim();
+
+  if (!clienteId && !asaasCustomerId) {
+    res.status(400).json({ error: 'Informe clienteId local ou asaasCustomerId.' });
+    return;
+  }
+
+  try {
+    const cliente = clienteId
+      ? await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [clienteId])
+      : await db.getAsync('SELECT * FROM clientes_saas WHERE asaas_customer_id = ?', [asaasCustomerId]);
+
+    if (!cliente) {
+      res.status(404).json({ error: 'Cliente nao encontrado para criar assinatura.' });
+      return;
+    }
+
+    const assinaturaAsaas = await criarAssinaturaAsaas({
+      customer: cliente.asaas_customer_id,
+      nextDueDate,
+    });
+
+    await db.runAsync(
+      `UPDATE clientes_saas
+       SET asaas_subscription_id = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [assinaturaAsaas.id, cliente.id]
+    );
+
+    const clienteAtualizado = await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [cliente.id]);
+
+    console.log('[Pagamento] Assinatura mensal criada no Asaas:', {
+      clienteId: cliente.id,
+      asaasCustomerId: cliente.asaas_customer_id,
+      subscriptionId: assinaturaAsaas.id,
+      valor: 65,
+      ciclo: 'MONTHLY',
+      formaPagamento: 'PIX',
+    });
+
+    res.status(201).json({
+      message: 'Assinatura criada com sucesso.',
+      cliente: clienteAtualizado,
+      assinatura: assinaturaAsaas,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      error: 'Erro ao criar assinatura no Asaas.',
+      details: error.message,
+    });
+  }
+});
+
+router.get('/sistema', verificarAssinatura, (req, res) => {
+  res.json({
+    message: 'Sistema liberado para cliente com assinatura ativa.',
+    cliente: {
+      id: req.clienteSaas.id,
+      nome: req.clienteSaas.nome,
+      status: req.clienteSaas.status,
+    },
+  });
+});
 
 // Endpoint para excluir assinatura (admin)
 router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
@@ -587,9 +743,9 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   await config.transport.sendMail({
     from: config.from,
     to: email,
-    subject: 'Codigo de recuperacao do Barberflix',
-    text: `Codigo de recuperacao do Barberflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
-    html: `<p>Codigo de recuperacao do Barberflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
+    subject: 'Codigo de recuperacao do Salãoflix',
+    text: `Codigo de recuperacao do Salãoflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
+    html: `<p>Codigo de recuperacao do Salãoflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
   });
 }
 
@@ -712,7 +868,7 @@ async function criarCheckoutMercadoPagoParaAssinatura(assinatura, req) {
   const preapproval = await requestMercadoPago('/preapproval', {
     method: 'POST',
     body: {
-      reason: `Assinatura mensal Barberflix - ${assinatura.barbearia_nome}`,
+      reason: `Assinatura mensal Salãoflix - ${assinatura.barbearia_nome}`,
       payer_email: assinatura.email,
       external_reference: externalReference,
       back_url: `${appUrl}/cadastro.html?assinatura=${assinatura.id}&gateway=mercado_pago`,
@@ -758,7 +914,8 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
       a.data,
       a.hora,
       a.status,
-      a.lembrete_15_enviado_em
+      a.lembrete_15_enviado_em,
+      a.lembrete_7_enviado_em
     FROM agendamentos a
     LEFT JOIN clientes c ON c.id = a.cliente_id
     LEFT JOIN servicos s ON s.id = a.servico_id
@@ -868,6 +1025,30 @@ router.post('/agendamentos/:id/lembrete-15', requirePainelOuBridge, async (req, 
   }
 });
 
+router.post('/agendamentos/:id/lembrete-7', requirePainelOuBridge, async (req, res) => {
+  const { id } = req.params;
+  const enviadoEm = String(req.body?.enviadoEm || new Date().toISOString());
+
+  try {
+    const resultado = await runAsync(
+      `UPDATE agendamentos
+       SET lembrete_7_enviado_em = ?
+       WHERE id = ?
+         AND lembrete_7_enviado_em IS NULL`,
+      [enviadoEm, id]
+    );
+
+    if (!resultado.changes) {
+      res.json({ ok: true, atualizado: false });
+      return;
+    }
+
+    res.json({ ok: true, atualizado: true, enviadoEm });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.get('/faturamento', requireBarbeiro, (req, res) => {
   const { periodo } = req.query;
   let query = `
@@ -942,11 +1123,15 @@ router.get('/servicos', (req, res) => {
 router.get('/publico/assinatura-config', async (req, res) => {
   try {
     const suporteNumero = await getConfiguracao('suporte_numero');
+    const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
+    const whatsappBridgeUrlPublic = String(process.env.WHATSAPP_BRIDGE_URL_PUBLIC || '').trim();
+    const whatsappLocalOnly = emHospedagem && !whatsappBridgeUrlPublic;
 
     res.json({
       suporteNumero,
       valorMensal: 1,
-      whatsappBridgeUrl: process.env.WHATSAPP_BRIDGE_URL_PUBLIC || 'http://127.0.0.1:3010',
+      whatsappBridgeUrl: whatsappLocalOnly ? null : whatsappBridgeUrlPublic || 'http://127.0.0.1:3010',
+      whatsappLocalOnly,
       gateway: {
         provider: 'mercado_pago',
         enabled: Boolean(getMercadoPagoAccessToken()),
@@ -1012,6 +1197,33 @@ router.post('/mercadopago/webhook', async (req, res) => {
   } catch (error) {
     console.error('Webhook Mercado Pago:', error.message);
     res.status(200).json({ ok: true });
+  }
+});
+
+router.get('/publico/assinaturas/:id/status', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const assinatura = await carregarAssinaturaAtualizada(id);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const acesso = avaliarAcessoAssinatura(assinatura);
+
+    res.json({
+      id: assinatura.id,
+      status: assinatura.status,
+      liberado: acesso.liberado,
+      motivo: acesso.motivo,
+      mensagem: acesso.mensagem,
+      gatewayStatus: assinatura.gateway_status || null,
+      checkoutUrl: assinatura.gateway_checkout_url || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
