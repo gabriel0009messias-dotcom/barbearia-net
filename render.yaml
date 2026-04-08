@@ -3,13 +3,15 @@ services:
     name: barbearia-net
     runtime: node
     rootDir: backend
-    buildCommand: npm ci
+    buildCommand: npm ci && npx puppeteer browsers install chrome
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 20
       - key: DATABASE_PATH
         value: /var/data/barbearia.db
+      - key: PUPPETEER_CACHE_DIR
+        value: /opt/render/.cache/puppeteer
     disk:
       name: barbearia-data
       mountPath: /var/data
