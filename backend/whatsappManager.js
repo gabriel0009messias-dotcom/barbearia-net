@@ -1,13 +1,8 @@
 const { attachBotHandlers } = require('./botFlow');
+const { criarOpcoesWppconnect } = require('./whatsappBrowser');
 
 const sessoes = new Map();
 let wppconnectInstance = null;
-
-function ambienteSuportaWhatsappWeb() {
-  // Em hospedagens como Render Web Service, o WPPConnect costuma falhar
-  // por depender de navegador/ambiente grafico mais completo.
-  return !process.env.RENDER && !process.env.RENDER_SERVICE_ID;
-}
 
 function obterWppconnect() {
   if (!wppconnectInstance) {
@@ -42,30 +37,23 @@ async function iniciarSessao(assinaturaId) {
   sessao.status = 'iniciando';
   sessao.ultimoErro = null;
 
-  if (!ambienteSuportaWhatsappWeb()) {
-    sessao.status = 'erro';
-    sessao.ultimoErro =
-      'O QR Code do WhatsApp nao pode ser gerado neste servidor hospedado. Rode o bot em uma maquina local ou VPS com navegador instalado.';
-    return null;
-  }
-
   const wppconnect = obterWppconnect();
 
   sessao.startPromise = wppconnect
-    .create({
-      session: `assinatura-${assinaturaId}`,
-      headless: true,
-      autoClose: 0,
-      catchQR: (base64Qrimg) => {
-        sessao.qrCode = base64Qrimg;
-        sessao.status = 'qr_pronto';
-      },
-      statusFind: (statusSession) => {
-        sessao.status = statusSession || sessao.status;
-      },
-      logQR: false,
-      browserArgs: ['--no-sandbox', '--disable-setuid-sandbox'],
-    })
+    .create(
+      criarOpcoesWppconnect({
+        session: `assinatura-${assinaturaId}`,
+        headless: true,
+        catchQR: (base64Qrimg) => {
+          sessao.qrCode = base64Qrimg;
+          sessao.status = 'qr_pronto';
+          sessao.ultimoErro = null;
+        },
+        statusFind: (statusSession) => {
+          sessao.status = statusSession || sessao.status;
+        },
+      })
+    )
     .then((client) => {
       sessao.client = client;
       sessao.status = 'conectado';

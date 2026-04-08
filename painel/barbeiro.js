@@ -172,6 +172,10 @@ function listarBridgeBases() {
   return Array.from(new Set(bases.map((item) => String(item).replace(/\/$/, ''))));
 }
 
+function usaWhatsappHospedado() {
+  return !whatsappBridgeUrl;
+}
+
 async function buscarJsonBridgeComFallback(path, options = {}) {
   let ultimoErro = null;
 
@@ -490,17 +494,16 @@ async function carregarPainelBarbeiro() {
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generateQrButton.disabled = whatsappLocalOnly;
-    generateQrButton.hidden = whatsappLocalOnly;
-    openLocalWhatsappButton.hidden = !whatsappLocalOnly;
-    whatsappHelpText.textContent = whatsappLocalOnly
-      ? 'A conexao do WhatsApp deve ser feita no ambiente local do sistema. No site online, esse QR Code fica desativado para evitar erro.'
+    generateQrButton.disabled = false;
+    generateQrButton.hidden = false;
+    openLocalWhatsappButton.hidden = true;
+    whatsappHelpText.textContent = usaWhatsappHospedado()
+      ? 'Seu acesso esta liberado. Gere o QR Code diretamente pelo painel online para conectar o WhatsApp.'
       : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
-    if (whatsappLocalOnly) {
-      whatsappStatusBadge.textContent = 'Configuracao local';
+    if (usaWhatsappHospedado()) {
+      whatsappStatusBadge.textContent = 'Pronto para conectar';
       qrCodeImage.hidden = true;
-      qrStatusMessage.textContent =
-        'Abra o sistema local e conecte o WhatsApp por la. O painel online nao conversa com o bot local automaticamente.';
+      qrStatusMessage.textContent = 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp pelo painel online.';
     }
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
@@ -522,9 +525,7 @@ async function carregarPainelBarbeiro() {
       mesFaturamentoInput.value = new Date().toISOString().slice(0, 7);
     }
     await carregarFaturamentoMesEscolhido();
-    if (!whatsappLocalOnly) {
-      await consultarStatusWhatsapp();
-    }
+    await consultarStatusWhatsapp();
     setActiveSection(activeSectionId || 'inicio');
   } catch (error) {
     console.error(error);
@@ -544,16 +545,14 @@ async function consultarStatusWhatsapp() {
     return;
   }
 
-  if (whatsappLocalOnly || !whatsappBridgeUrl) {
-    return;
-  }
-
   try {
-    const status = await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/status`);
+    const status = usaWhatsappHospedado()
+      ? await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`)
+      : await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
 
     if (status.status === 'erro') {
-      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o bot local do WhatsApp.';
+      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o WhatsApp.';
     }
 
     if (status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
@@ -702,24 +701,23 @@ generateQrButton.addEventListener('click', async () => {
     return;
   }
 
-  if (whatsappLocalOnly || !whatsappBridgeUrl) {
-    qrStatusMessage.textContent =
-      'O QR Code do WhatsApp deve ser gerado no sistema local. No site online essa conexao fica desativada.';
-    whatsappStatusBadge.textContent = 'Configuracao local';
-    return;
-  }
-
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
-    const bridgeToken = await buscarBridgeToken();
-    await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        apiBaseUrl: window.location.origin,
-        bridgeToken,
-      }),
-    });
+    if (usaWhatsappHospedado()) {
+      await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
+        method: 'POST',
+      });
+    } else {
+      const bridgeToken = await buscarBridgeToken();
+      await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiBaseUrl: window.location.origin,
+          bridgeToken,
+        }),
+      });
+    }
 
     await consultarStatusWhatsapp();
     iniciarPollingWhatsapp();
@@ -729,7 +727,7 @@ generateQrButton.addEventListener('click', async () => {
       return;
     }
     qrStatusMessage.textContent = error.message;
-    whatsappStatusBadge.textContent = 'Erro local';
+    whatsappStatusBadge.textContent = 'Erro';
   }
 });
 
