@@ -748,8 +748,32 @@ function criarTransporteEmail() {
   return null;
 }
 
+function criarProvedorEmailApi() {
+  const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const brevoApiKey = String(process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim();
+  const from = String(
+    process.env.EMAIL_FROM ||
+      process.env.GMAIL_FROM ||
+      process.env.SMTP_FROM ||
+      process.env.GMAIL_USER ||
+      process.env.SMTP_USER ||
+      ''
+  ).trim();
+  const fromName = String(process.env.EMAIL_FROM_NAME || 'Salaoflix').trim();
+
+  if (resendApiKey && from) {
+    return { provider: 'resend', apiKey: resendApiKey, from, fromName };
+  }
+
+  if (brevoApiKey && from) {
+    return { provider: 'brevo', apiKey: brevoApiKey, from, fromName };
+  }
+
+  return null;
+}
+
 function emailRecuperacaoConfigurado() {
-  return Boolean(criarTransporteEmail());
+  return Boolean(criarProvedorEmailApi() || criarTransporteEmail());
 }
 
 function emAmbienteHospedado() {
@@ -776,29 +800,124 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
   });
 }
 
-async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
-  const email = String(destino || '').trim();
-  const config = criarTransporteEmail();
+async function enviarEmailPorApi(config, payload) {
+  if (config.provider === 'resend') {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: `${config.fromName} <${config.from}>`,
+        to: [payload.to],
+        subject: payload.subject,
+        text: payload.text,
+        html: payload.html,
+      }),
+    });
 
-  if (!email) {
-    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = new Error(body?.message || body?.error || 'Falha ao enviar e-mail pela API.');
+      error.statusCode = response.status || 502;
+      throw error;
+    }
+
+    return {
+      messageId: body?.id || null,
+      accepted: [payload.to],
+      rejected: [],
+      response: 'resend',
+    };
   }
 
-  if (!config) {
+  if (config.provider === 'brevo') {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'api-key': config.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        sender: {
+          name: config.fromName,
+          email: config.from,
+        },
+        to: [{ email: payload.to }],
+        subject: payload.subject,
+        textContent: payload.text,
+        htmlContent: payload.html,
+      }),
+    });
+
+    const body = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = new Error(body?.message || body?.code || body?.error || 'Falha ao enviar e-mail pela API.');
+      error.statusCode = response.status || 502;
+      throw error;
+    }
+
+    return {
+      messageId: body?.messageId || null,
+      accepted: [payload.to],
+      rejected: [],
+      response: 'brevo',
+    };
+  }
+
+  throw new Error('Provedor de e-mail por API nao suportado.');
+}
+
+async function enviarEmail(payload) {
+  const apiConfig = criarProvedorEmailApi();
+
+  if (apiConfig) {
+    return withTimeout(
+      enviarEmailPorApi(apiConfig, payload),
+      Number(process.env.EMAIL_SEND_TIMEOUT || 25000),
+      'O servidor demorou demais para enviar o e-mail de recuperacao.'
+    );
+  }
+
+  const smtpConfig = criarTransporteEmail();
+
+  if (!smtpConfig) {
     const error = new Error(
-      'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no Render.'
+      'Recuperacao por e-mail ainda nao esta configurada neste servidor. Adicione RESEND_API_KEY, BREVO_API_KEY ou credenciais SMTP.'
     );
     error.statusCode = 501;
     throw error;
   }
 
-  await withTimeout(config.transport.sendMail({
-    from: config.from,
+  return withTimeout(
+    smtpConfig.transport.sendMail({
+      from: smtpConfig.from,
+      to: payload.to,
+      subject: payload.subject,
+      text: payload.text,
+      html: payload.html,
+    }),
+    Number(process.env.EMAIL_SEND_TIMEOUT || 25000),
+    'O servidor demorou demais para enviar o e-mail de recuperacao.'
+  );
+}
+
+async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
+  const email = String(destino || '').trim();
+
+  if (!email) {
+    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+  }
+
+  await enviarEmail({
     to: email,
     subject: 'Codigo de recuperacao do Salãoflix',
     text: `Codigo de recuperacao do Salãoflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
     html: `<p>Codigo de recuperacao do Salãoflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
-  }), Number(process.env.EMAIL_SEND_TIMEOUT || 25000), 'O servidor demorou demais para enviar o e-mail de recuperacao.');
+  });
 }
 
 function getMercadoPagoAccessToken() {
@@ -891,15 +1010,17 @@ async function carregarTokenRecuperacaoSenha(token) {
 
 async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
   const email = String(destino || '').trim();
-  const config = criarTransporteEmail();
+  const apiConfig = criarProvedorEmailApi();
+  const smtpConfig = criarTransporteEmail();
+  const from = apiConfig?.from || smtpConfig?.from || null;
 
   if (!email) {
     throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
   }
 
-  if (!config) {
+  if (!apiConfig && !smtpConfig) {
     const error = new Error(
-      'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no servidor.'
+      'Recuperacao por e-mail ainda nao esta configurada neste servidor. Adicione RESEND_API_KEY, BREVO_API_KEY ou credenciais SMTP.'
     );
     error.statusCode = 501;
     throw error;
@@ -907,12 +1028,12 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
 
   console.info('[recuperacao-email] iniciando envio', {
     to: email,
-    from: config.from,
+    from,
     hosted: emAmbienteHospedado(),
+    provider: apiConfig?.provider || 'smtp',
   });
 
-  const info = await withTimeout(config.transport.sendMail({
-    from: config.from,
+  const info = await enviarEmail({
     to: email,
     subject: 'Recuperacao de senha do Salaoflix',
     text:
@@ -922,7 +1043,7 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
       `<p>Clique no link abaixo para redefinir sua senha:</p>` +
       `<p><a href="${linkRecuperacao}">${linkRecuperacao}</a></p>` +
       '<p>Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.</p>',
-  }), Number(process.env.EMAIL_SEND_TIMEOUT || 25000), 'O servidor demorou demais para enviar o e-mail de recuperacao.');
+  });
 
   console.info('[recuperacao-email] envio concluido', {
     to: email,
