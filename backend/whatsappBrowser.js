@@ -82,8 +82,11 @@ function encontrarNavegadorLocal() {
 
     const cachesConhecidos = [
       process.env.PUPPETEER_CACHE_DIR,
+      path.join(__dirname, 'puppeteer-cache'),
+      path.join(__dirname, '..', 'puppeteer-cache'),
       path.join(__dirname, '.cache', 'puppeteer'),
       path.join(__dirname, '..', '.cache', 'puppeteer'),
+      '/opt/render/project/src/backend/puppeteer-cache',
       '/opt/render/project/src/backend/.cache/puppeteer',
       '/opt/render/.cache/puppeteer',
     ];
