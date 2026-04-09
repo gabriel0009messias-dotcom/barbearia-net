@@ -3,7 +3,10 @@ const emailInput = document.getElementById('recuperacaoEmailInput');
 const message = document.getElementById('recuperacaoLinkMessage');
 
 async function buscarJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const controller = new AbortController();
+  const timeoutMs = 30000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const response = await fetch(url, { ...options, signal: controller.signal }).finally(() => clearTimeout(timeout));
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
@@ -32,6 +35,9 @@ form.addEventListener('submit', async (event) => {
     form.reset();
   } catch (error) {
     console.error(error);
-    message.textContent = error.message;
+    message.textContent =
+      error.name === 'AbortError'
+        ? 'O servidor demorou demais para responder. Tente novamente em alguns segundos.'
+        : error.message;
   }
 });

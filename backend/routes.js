@@ -702,6 +702,8 @@ function calcularExpiracaoRecuperacao(minutos = 60) {
 function criarTransporteEmail() {
   const gmailUser = String(process.env.GMAIL_USER || '').trim();
   const gmailPassword = String(process.env.GMAIL_APP_PASSWORD || '').trim();
+  const gmailPort = Number(process.env.GMAIL_PORT || 587);
+  const gmailSecure = String(process.env.GMAIL_SECURE || '').trim() === 'true' || gmailPort === 465;
   const smtpHost = String(process.env.SMTP_HOST || '').trim();
   const smtpUser = String(process.env.SMTP_USER || '').trim();
   const smtpPass = String(process.env.SMTP_PASS || '').trim();
@@ -710,7 +712,13 @@ function criarTransporteEmail() {
     return {
       from: String(process.env.GMAIL_FROM || gmailUser).trim(),
       transport: nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: gmailPort,
+        secure: gmailSecure,
+        requireTLS: !gmailSecure,
+        connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT || 15000),
+        greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT || 15000),
+        socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT || 20000),
         auth: {
           user: gmailUser,
           pass: gmailPassword,
@@ -726,6 +734,9 @@ function criarTransporteEmail() {
         host: smtpHost,
         port: Number(process.env.SMTP_PORT || 587),
         secure: String(process.env.SMTP_SECURE || '').trim() === 'true',
+        connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT || 15000),
+        greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT || 15000),
+        socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT || 20000),
         auth: {
           user: smtpUser,
           pass: smtpPass,
@@ -745,6 +756,26 @@ function emAmbienteHospedado() {
   return Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
 }
 
+function withTimeout(promise, timeoutMs, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(timeoutMessage);
+      error.statusCode = 504;
+      reject(error);
+    }, timeoutMs);
+
+    Promise.resolve(promise)
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   const email = String(destino || '').trim();
   const config = criarTransporteEmail();
@@ -761,13 +792,13 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
     throw error;
   }
 
-  await config.transport.sendMail({
+  await withTimeout(config.transport.sendMail({
     from: config.from,
     to: email,
     subject: 'Codigo de recuperacao do Salãoflix',
     text: `Codigo de recuperacao do Salãoflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
     html: `<p>Codigo de recuperacao do Salãoflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
-  });
+  }), Number(process.env.EMAIL_SEND_TIMEOUT || 25000), 'O servidor demorou demais para enviar o e-mail de recuperacao.');
 }
 
 function getMercadoPagoAccessToken() {
@@ -849,7 +880,13 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
     throw error;
   }
 
-  await config.transport.sendMail({
+  console.info('[recuperacao-email] iniciando envio', {
+    to: email,
+    from: config.from,
+    hosted: emAmbienteHospedado(),
+  });
+
+  const info = await withTimeout(config.transport.sendMail({
     from: config.from,
     to: email,
     subject: 'Recuperacao de senha do Salaoflix',
@@ -860,6 +897,14 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
       `<p>Clique no link abaixo para redefinir sua senha:</p>` +
       `<p><a href="${linkRecuperacao}">${linkRecuperacao}</a></p>` +
       '<p>Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.</p>',
+  }), Number(process.env.EMAIL_SEND_TIMEOUT || 25000), 'O servidor demorou demais para enviar o e-mail de recuperacao.');
+
+  console.info('[recuperacao-email] envio concluido', {
+    to: email,
+    messageId: info?.messageId || null,
+    accepted: Array.isArray(info?.accepted) ? info.accepted : [],
+    rejected: Array.isArray(info?.rejected) ? info.rejected : [],
+    response: info?.response || null,
   });
 }
 
@@ -1458,6 +1503,12 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
       mensagem: 'Enviamos um link de recuperacao para o seu Gmail.',
     });
   } catch (error) {
+    console.error('[recuperacao-email] falha ao solicitar link', {
+      email,
+      statusCode: error.statusCode || 500,
+      message: error.message,
+      stack: error.stack,
+    });
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
