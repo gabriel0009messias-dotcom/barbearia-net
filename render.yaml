@@ -3,7 +3,7 @@ services:
     name: barbearia-net
     runtime: node
     rootDir: backend
-    buildCommand: npm ci && npx puppeteer browsers install chrome --path ./puppeteer-cache
+    buildCommand: npm ci
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
