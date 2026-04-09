@@ -29,6 +29,34 @@ function listarCaminhosChromeWindows() {
   ].filter(Boolean);
 }
 
+function encontrarChromeEmCache(caminhoBase) {
+  if (!caminhoBase || !fs.existsSync(caminhoBase)) {
+    return null;
+  }
+
+  const pilha = [caminhoBase];
+
+  while (pilha.length) {
+    const atual = pilha.pop();
+    const stat = fs.statSync(atual);
+
+    if (stat.isFile()) {
+      const normalizado = atual.replace(/\\/g, '/');
+      if (normalizado.endsWith('/chrome') || normalizado.endsWith('/chrome.exe')) {
+        return atual;
+      }
+      continue;
+    }
+
+    const filhos = fs.readdirSync(atual).map((item) => path.join(atual, item));
+    for (const filho of filhos) {
+      pilha.push(filho);
+    }
+  }
+
+  return null;
+}
+
 function encontrarNavegadorLocal() {
   if (process.platform !== 'win32') {
     const caminhoConfigurado = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -45,10 +73,29 @@ function encontrarNavegadorLocal() {
       const executablePath =
         typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
 
-      return executablePath && fs.existsSync(executablePath) ? executablePath : null;
+      if (executablePath && fs.existsSync(executablePath)) {
+        return executablePath;
+      }
     } catch (error) {
-      return null;
+      // Continua procurando nos caches conhecidos abaixo.
     }
+
+    const cachesConhecidos = [
+      process.env.PUPPETEER_CACHE_DIR,
+      path.join(__dirname, '.cache', 'puppeteer'),
+      path.join(__dirname, '..', '.cache', 'puppeteer'),
+      '/opt/render/project/src/backend/.cache/puppeteer',
+      '/opt/render/.cache/puppeteer',
+    ];
+
+    for (const cacheDir of cachesConhecidos) {
+      const chrome = encontrarChromeEmCache(cacheDir);
+      if (chrome) {
+        return chrome;
+      }
+    }
+
+    return null;
   }
 
   return listarCaminhosChromeWindows().find((item) => fs.existsSync(item)) || null;
