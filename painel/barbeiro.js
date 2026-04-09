@@ -61,8 +61,10 @@ const painelHorarioAlmocoInicioInput = document.getElementById('painelHorarioAlm
 const painelHorarioAlmocoFimInput = document.getElementById('painelHorarioAlmocoFimInput');
 const painelHorarioFechamentoInput = document.getElementById('painelHorarioFechamentoInput');
 const addPainelServiceButton = document.getElementById('addPainelServiceButton');
+const savePainelServicesButton = document.getElementById('savePainelServicesButton');
 const painelServiceRows = document.getElementById('painelServiceRows');
 const precosAtuaisGrid = document.getElementById('precosAtuaisGrid');
+const servicesMessage = document.getElementById('servicesMessage');
 
 let assinaturaAtualId = null;
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
@@ -619,6 +621,25 @@ async function salvarBloqueio({ data, hora, form, messageNode }) {
   await carregarPainelBarbeiro();
 }
 
+async function salvarServicosPainel() {
+  if (!assinaturaAtualId) {
+    throw new Error('Entre no painel primeiro.');
+  }
+
+  await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      diasFuncionamento: coletarDiasSelecionados(diasFuncionamentoPainel),
+      horarioAbertura: painelHorarioAberturaInput.value,
+      horarioAlmocoInicio: painelHorarioAlmocoInicioInput.value,
+      horarioAlmocoFim: painelHorarioAlmocoFimInput.value,
+      horarioFechamento: painelHorarioFechamentoInput.value,
+      servicos: coletarServicos(painelServiceRows),
+    }),
+  });
+}
+
 async function lidarEnvioBloqueio(event, campos) {
   event.preventDefault();
 
@@ -667,18 +688,7 @@ configuracoesBarbeiroForm.addEventListener('submit', async (event) => {
   }
 
   try {
-    await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        diasFuncionamento: coletarDiasSelecionados(diasFuncionamentoPainel),
-        horarioAbertura: painelHorarioAberturaInput.value,
-        horarioAlmocoInicio: painelHorarioAlmocoInicioInput.value,
-        horarioAlmocoFim: painelHorarioAlmocoFimInput.value,
-        horarioFechamento: painelHorarioFechamentoInput.value,
-        servicos: coletarServicos(painelServiceRows),
-      }),
-    });
+    await salvarServicosPainel();
 
     configuracoesMessage.textContent = 'Configuracoes atualizadas com sucesso.';
     await carregarPainelBarbeiro();
@@ -716,6 +726,27 @@ addPainelServiceButton.addEventListener('click', () => {
 });
 painelServiceRows.addEventListener('input', () => {
   renderizarPrecosAtuais(coletarServicos(painelServiceRows));
+});
+savePainelServicesButton?.addEventListener('click', async () => {
+  if (servicesMessage) {
+    servicesMessage.textContent = 'Salvando servicos...';
+  }
+
+  try {
+    await salvarServicosPainel();
+    if (servicesMessage) {
+      servicesMessage.textContent = 'Servicos salvos com sucesso. Eles ja ficam disponiveis no painel e no WhatsApp.';
+    }
+    await carregarPainelBarbeiro();
+  } catch (error) {
+    console.error(error);
+    if (tratarErroSessao(error)) {
+      return;
+    }
+    if (servicesMessage) {
+      servicesMessage.textContent = error.message || 'Nao consegui salvar os servicos.';
+    }
+  }
 });
 menuButtons.forEach((button) => {
   button.addEventListener('click', () => {
@@ -880,7 +911,9 @@ logoutBarbeiroButton.addEventListener('click', async () => {
 refreshButton.addEventListener('click', carregarPainelBarbeiro);
 openLocalWhatsappButton?.addEventListener('click', () => {
   qrStatusMessage.textContent =
-    'Abra o backend local e execute o arquivo iniciar-whatsapp.bat para gerar o QR Code do WhatsApp.';
+    window.location.protocol === 'https:'
+      ? 'Abra o backend local e execute o arquivo iniciar-whatsapp-online.bat para expor o bot local com tunnel HTTPS. Depois atualize o painel.'
+      : 'Abra o backend local e execute o arquivo iniciar-whatsapp.bat para gerar o QR Code do WhatsApp.';
   whatsappStatusBadge.textContent = 'Configuracao local';
 });
 mesFaturamentoInput?.addEventListener('change', () => {
