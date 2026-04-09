@@ -8,6 +8,7 @@ const asaas = require('./asaas');
 const apiRoutes = require('./routes');
 
 const app = express();
+app.set('trust proxy', true);
 const PORT = Number(process.env.PORT) || 3000;
 const painelPath = path.join(__dirname, '..', 'painel');
 const assinaturasCadastradas = [];

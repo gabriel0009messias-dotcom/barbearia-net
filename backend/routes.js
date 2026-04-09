@@ -806,10 +806,35 @@ function getMercadoPagoAccessToken() {
 }
 
 function getPublicAppUrl(req) {
-  return (
-    String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim() ||
-    `${req.protocol}://${req.get('host')}`
-  ).replace(/\/$/, '');
+  const configuredUrl = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
+
+  if (configuredUrl) {
+    return configuredUrl.replace(/\/$/, '');
+  }
+
+  const forwardedProto = String(req.get('x-forwarded-proto') || req.protocol || 'https')
+    .split(',')[0]
+    .trim();
+  const forwardedHost = String(req.get('x-forwarded-host') || req.get('host') || '')
+    .split(',')[0]
+    .trim();
+
+  const host = forwardedHost.replace(/\/$/, '');
+  const hostNormalizado = host.toLowerCase();
+  const ehHostLocal =
+    hostNormalizado === 'localhost' ||
+    hostNormalizado.startsWith('localhost:') ||
+    hostNormalizado === '127.0.0.1' ||
+    hostNormalizado.startsWith('127.0.0.1:');
+
+  if (emAmbienteHospedado() && ehHostLocal) {
+    throw Object.assign(
+      new Error('PUBLIC_APP_URL nao configurada no servidor para montar o link de recuperacao.'),
+      { statusCode: 500 }
+    );
+  }
+
+  return `${forwardedProto || 'https'}://${host}`.replace(/\/$/, '');
 }
 
 async function buscarAssinaturaPorEmailRecuperacao(email) {
