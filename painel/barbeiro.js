@@ -173,7 +173,7 @@ function listarBridgeBases() {
 }
 
 function usaWhatsappHospedado() {
-  return !whatsappBridgeUrl;
+  return !whatsappLocalOnly && !whatsappBridgeUrl;
 }
 
 async function buscarJsonBridgeComFallback(path, options = {}) {
@@ -511,14 +511,21 @@ async function carregarPainelBarbeiro() {
     assinaturaAtualId = assinatura.id;
     generateQrButton.disabled = false;
     generateQrButton.hidden = false;
-    openLocalWhatsappButton.hidden = true;
+    openLocalWhatsappButton.hidden = !whatsappLocalOnly;
     whatsappHelpText.textContent = usaWhatsappHospedado()
       ? 'Seu acesso esta liberado. Gere o QR Code diretamente pelo painel online para conectar o WhatsApp.'
-      : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
+      : whatsappLocalOnly
+        ? 'Seu acesso esta liberado. Para o WhatsApp funcionar de forma estavel, gere o QR Code pelo bot local no seu computador.'
+        : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
     if (usaWhatsappHospedado()) {
       whatsappStatusBadge.textContent = 'Pronto para conectar';
       qrCodeImage.hidden = true;
       qrStatusMessage.textContent = 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp pelo painel online.';
+    } else if (whatsappLocalOnly) {
+      whatsappStatusBadge.textContent = 'Configuracao local';
+      qrCodeImage.hidden = true;
+      qrStatusMessage.textContent =
+        'Execute o bot local no seu computador e clique em Gerar QR Code para conectar o WhatsApp com estabilidade.';
     }
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
