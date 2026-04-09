@@ -60,6 +60,9 @@ const painelHorarioAberturaInput = document.getElementById('painelHorarioAbertur
 const painelHorarioAlmocoInicioInput = document.getElementById('painelHorarioAlmocoInicioInput');
 const painelHorarioAlmocoFimInput = document.getElementById('painelHorarioAlmocoFimInput');
 const painelHorarioFechamentoInput = document.getElementById('painelHorarioFechamentoInput');
+const painelLocalizacaoCidadeInput = document.getElementById('painelLocalizacaoCidadeInput');
+const painelLocalizacaoRuaInput = document.getElementById('painelLocalizacaoRuaInput');
+const painelLocalizacaoReferenciaInput = document.getElementById('painelLocalizacaoReferenciaInput');
 const addPainelServiceButton = document.getElementById('addPainelServiceButton');
 const savePainelServicesButton = document.getElementById('savePainelServicesButton');
 const painelServiceRows = document.getElementById('painelServiceRows');
@@ -284,6 +287,15 @@ function preencherConfiguracoesPainel(assinatura) {
   painelHorarioAlmocoInicioInput.value = assinatura.horario_almoco_inicio || '12:00';
   painelHorarioAlmocoFimInput.value = assinatura.horario_almoco_fim || '13:00';
   painelHorarioFechamentoInput.value = assinatura.horario_fechamento || '18:00';
+  if (painelLocalizacaoCidadeInput) {
+    painelLocalizacaoCidadeInput.value = assinatura.localizacao_cidade || '';
+  }
+  if (painelLocalizacaoRuaInput) {
+    painelLocalizacaoRuaInput.value = assinatura.localizacao_rua || '';
+  }
+  if (painelLocalizacaoReferenciaInput) {
+    painelLocalizacaoReferenciaInput.value = assinatura.localizacao_referencia || '';
+  }
   painelServiceRows.innerHTML = '';
 
   (assinatura.servicos || []).forEach((servico) => {
@@ -635,6 +647,9 @@ async function salvarServicosPainel() {
       horarioAlmocoInicio: painelHorarioAlmocoInicioInput.value,
       horarioAlmocoFim: painelHorarioAlmocoFimInput.value,
       horarioFechamento: painelHorarioFechamentoInput.value,
+      localizacaoCidade: painelLocalizacaoCidadeInput?.value.trim() || '',
+      localizacaoRua: painelLocalizacaoRuaInput?.value.trim() || '',
+      localizacaoReferencia: painelLocalizacaoReferenciaInput?.value.trim() || '',
       servicos: coletarServicos(painelServiceRows),
     }),
   });

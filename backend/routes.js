@@ -272,6 +272,9 @@ function mapearAssinatura(assinatura) {
   return {
     ...assinatura,
     dias_funcionamento: desserializarDiasFuncionamento(assinatura.dias_funcionamento),
+    localizacao_cidade: String(assinatura.localizacao_cidade || '').trim(),
+    localizacao_rua: String(assinatura.localizacao_rua || '').trim(),
+    localizacao_referencia: String(assinatura.localizacao_referencia || '').trim(),
   };
 }
 
@@ -2124,6 +2127,9 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
     horarioAlmocoInicio,
     horarioAlmocoFim,
     horarioFechamento,
+    localizacaoCidade,
+    localizacaoRua,
+    localizacaoReferencia,
     servicos,
   } = req.body;
 
@@ -2146,6 +2152,9 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
            horario_almoco_inicio = ?,
            horario_almoco_fim = ?,
            horario_fechamento = ?,
+           localizacao_cidade = ?,
+           localizacao_rua = ?,
+           localizacao_referencia = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [
@@ -2154,6 +2163,9 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
         horarioAlmocoInicio || assinatura.horario_almoco_inicio || '12:00',
         horarioAlmocoFim || assinatura.horario_almoco_fim || '13:00',
         horarioFechamento || assinatura.horario_fechamento || '18:00',
+        String(localizacaoCidade || assinatura.localizacao_cidade || '').trim(),
+        String(localizacaoRua || assinatura.localizacao_rua || '').trim(),
+        String(localizacaoReferencia || assinatura.localizacao_referencia || '').trim(),
         id,
       ]
     );

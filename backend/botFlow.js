@@ -1,4 +1,12 @@
-const db = require('./database');
+let dbInstance = null;
+
+function getDb() {
+  if (!dbInstance) {
+    dbInstance = require('./database');
+  }
+
+  return dbInstance;
+}
 
 const estadosPorSessao = new Map();
 const contextosPorSessao = new Map();
@@ -53,7 +61,7 @@ function erroHorarioJaOcupado(error) {
 
 function getAsync(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
+    getDb().get(sql, params, (err, row) => {
       if (err) {
         reject(err);
         return;
@@ -66,7 +74,7 @@ function getAsync(sql, params = []) {
 
 function allAsync(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
+    getDb().all(sql, params, (err, rows) => {
       if (err) {
         reject(err);
         return;
@@ -79,7 +87,7 @@ function allAsync(sql, params = []) {
 
 function runAsync(sql, params = []) {
   return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(err) {
+    getDb().run(sql, params, function onRun(err) {
       if (err) {
         reject(err);
         return;
@@ -186,6 +194,58 @@ async function carregarConfiguracaoAgenda(assinaturaId, sessionKey) {
     horarioAlmocoFim: assinatura?.horario_almoco_fim || '13:00',
     horarioFechamento: assinatura?.horario_fechamento || '18:00',
   };
+}
+
+async function carregarLocalizacaoSalao(assinaturaId, sessionKey) {
+  if (usarApiRemota(sessionKey) && assinaturaId) {
+    const assinatura = await buscarApi(sessionKey, `/api/publico/assinaturas/${assinaturaId}`);
+
+    return {
+      cidade: assinatura.localizacao_cidade || '',
+      rua: assinatura.localizacao_rua || '',
+      referencia: assinatura.localizacao_referencia || '',
+    };
+  }
+
+  if (!assinaturaId) {
+    return {
+      cidade: '',
+      rua: '',
+      referencia: '',
+    };
+  }
+
+  const assinatura = await getAsync(
+    `SELECT localizacao_cidade, localizacao_rua, localizacao_referencia
+     FROM assinaturas
+     WHERE id = ?`,
+    [assinaturaId]
+  );
+
+  return {
+    cidade: assinatura?.localizacao_cidade || '',
+    rua: assinatura?.localizacao_rua || '',
+    referencia: assinatura?.localizacao_referencia || '',
+  };
+}
+
+function montarTextoLocalizacao(localizacao) {
+  const partes = [
+    String(localizacao?.rua || '').trim(),
+    String(localizacao?.cidade || '').trim(),
+  ].filter(Boolean);
+
+  const linhas = [];
+
+  if (partes.length) {
+    linhas.push(`Local: ${partes.join(' - ')}`);
+  }
+
+  if (String(localizacao?.referencia || '').trim()) {
+    linhas.push(`Referencia: ${String(localizacao.referencia).trim()}`);
+  }
+
+  return linhas.join('\n');
 }
 
 async function carregarAcessoAssinatura(assinaturaId, sessionKey) {
@@ -975,10 +1035,19 @@ function attachBotHandlers(client, options = {}) {
       if (estado.etapa === 'confirmar') {
         if (payload === 'confirmar:sim' || normalizado === '1' || normalizado === 'confirmar') {
           await salvarAgendamento(user, estado, sessionKey);
+          const localizacaoSalao = await carregarLocalizacaoSalao(assinaturaId, sessionKey);
+          const textoLocalizacao = montarTextoLocalizacao(localizacaoSalao);
           await enviarTexto(
             client,
             user,
-            'Obrigado! Seu agendamento foi confirmado com sucesso.\n\nQualquer coisa, digite MENU para fazer outro agendamento ou EXCLUIR se voce quiser cancelar esse horario e marcar outro dia.'
+            [
+              'Obrigado! Seu agendamento foi confirmado com sucesso.',
+              textoLocalizacao,
+              '',
+              'Qualquer coisa, digite MENU para fazer outro agendamento ou EXCLUIR se voce quiser cancelar esse horario e marcar outro dia.',
+            ]
+              .filter((item) => item !== null && item !== undefined && String(item).length > 0)
+              .join('\n\n')
           );
           resetarEstado(sessionKey, user);
           return;

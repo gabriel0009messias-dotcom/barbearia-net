@@ -242,6 +242,9 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'horario_almoco_inicio', "TEXT NOT NULL DEFAULT '12:00'");
   garantirColuna('assinaturas', 'horario_almoco_fim', "TEXT NOT NULL DEFAULT '13:00'");
   garantirColuna('assinaturas', 'horario_fechamento', "TEXT NOT NULL DEFAULT '18:00'");
+  garantirColuna('assinaturas', 'localizacao_cidade', 'TEXT');
+  garantirColuna('assinaturas', 'localizacao_rua', 'TEXT');
+  garantirColuna('assinaturas', 'localizacao_referencia', 'TEXT');
   garantirColuna('assinaturas', 'senha_hash', 'TEXT');
   garantirColuna('assinaturas', 'senha_salt', 'TEXT');
   garantirColuna('assinaturas', 'whatsapp_bridge_token', 'TEXT');
