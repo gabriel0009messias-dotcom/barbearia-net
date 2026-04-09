@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redefinir senha | Salaoflix</title>
+    <link rel="stylesheet" href="./styles.css?v=20260408c" />
+  </head>
+  <body>
+    <section class="auth-landing">
+      <div class="landing-overlay"></div>
+      <header class="landing-topbar">
+        <div class="landing-brand">SALAOFLIX</div>
+        <div class="landing-topbar-actions">
+          <a class="landing-topbar-button link-button" href="/">Voltar ao login</a>
+        </div>
+      </header>
+
+      <div class="landing-grid">
+        <div class="landing-copy">
+          <p class="landing-kicker">Redefinir senha</p>
+          <h1>Crie sua nova senha</h1>
+          <p class="landing-subcopy">
+            Este link e unico, expira automaticamente e so permite redefinir a senha com um token valido.
+          </p>
+        </div>
+
+        <div class="landing-panel">
+          <p class="eyebrow">Nova senha</p>
+          <h2>Atualize seu acesso</h2>
+          <p id="resetPasswordInfo" class="landing-panel-copy">Validando link de recuperacao...</p>
+
+          <form id="resetPasswordForm" class="landing-login-form" hidden>
+            <div class="password-field">
+              <input id="novaSenhaInput" type="password" placeholder="Nova senha" minlength="4" required />
+              <button class="password-toggle" type="button" data-toggle-password="novaSenhaInput">Mostrar</button>
+            </div>
+            <div class="password-field">
+              <input id="confirmarSenhaInput" type="password" placeholder="Confirmar nova senha" minlength="4" required />
+              <button class="password-toggle" type="button" data-toggle-password="confirmarSenhaInput">Mostrar</button>
+            </div>
+            <button type="submit" class="landing-login-button">Salvar nova senha</button>
+          </form>
+
+          <p id="resetPasswordMessage" class="form-message light-message"></p>
+        </div>
+      </div>
+    </section>
+
+    <script src="./redefinir-senha.js?v=20260408c"></script>
+  </body>
+</html>

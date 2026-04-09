@@ -3,7 +3,8 @@ const adminTokenKey = 'admin_token_salaoflix';
 const adminLoginCard = document.getElementById('adminLoginCard');
 const adminPanel = document.getElementById('adminPanel');
 const adminLoginForm = document.getElementById('adminLoginForm');
-const adminPinInput = document.getElementById('adminPinInput');
+const adminEmailInput = document.getElementById('adminEmailInput');
+const adminSenhaInput = document.getElementById('adminSenhaInput');
 const adminLoginMessage = document.getElementById('adminLoginMessage');
 const adminResumo = document.getElementById('adminResumo');
 const adminResumoLista = document.getElementById('adminResumoLista');
@@ -161,10 +162,10 @@ async function iniciarSessaoAdmin() {
   }
 }
 
-async function fazerLoginAdmin(pin) {
+async function fazerLoginAdmin(email, senha) {
   const payload = await buscarJson('/api/admin/login', {
     method: 'POST',
-    body: JSON.stringify({ pin }),
+    body: JSON.stringify({ email, senha }),
   });
 
   setAdminToken(payload.token);
@@ -177,18 +178,19 @@ adminLoginForm?.addEventListener('submit', async (event) => {
   adminLoginMessage.textContent = 'Entrando...';
 
   try {
-    await fazerLoginAdmin(adminPinInput.value.trim());
+    await fazerLoginAdmin(adminEmailInput.value.trim(), adminSenhaInput.value);
   } catch (error) {
     adminLoginMessage.textContent = error.message;
   }
 });
 
 adminAcessoRapidoButton?.addEventListener('click', async () => {
-  adminPinInput.value = '5090';
+  adminEmailInput.value = 'gabriel0009messias@gmail.com';
+  adminSenhaInput.value = 'rios123456';
   adminLoginMessage.textContent = 'Entrando...';
 
   try {
-    await fazerLoginAdmin('5090');
+    await fazerLoginAdmin('gabriel0009messias@gmail.com', 'rios123456');
   } catch (error) {
     adminLoginMessage.textContent = error.message;
   }
@@ -224,7 +226,8 @@ sairAdminButton?.addEventListener('click', () => {
   adminPanel.hidden = true;
   adminLoginCard.hidden = false;
   adminLoginMessage.textContent = '';
-  adminPinInput.value = '';
+  adminEmailInput.value = '';
+  adminSenhaInput.value = '';
 });
 
 if (getAdminToken()) {

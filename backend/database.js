@@ -187,6 +187,20 @@ db.serialize(() => {
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assinatura_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(assinatura_id) REFERENCES assinaturas(id) ON DELETE CASCADE
+  )`);
+
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_password_reset_tokens_uniq
+          ON password_reset_tokens (assinatura_id)
+          WHERE used_at IS NULL`);
+
   db.run(`CREATE TABLE IF NOT EXISTS clientes_saas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT NOT NULL,

@@ -21,7 +21,7 @@
           <p class="landing-kicker">Assinatura mensal com WhatsApp integrado</p>
           <h1>Agendamentos, QR Code e painel do barbeiro em um so lugar</h1>
           <p class="landing-subcopy">
-            Entre no painel da sua barbearia ou clique em fazer cadastro para criar sua assinatura e liberar o acesso apos o pagamento.
+            Entre no seu painel ou clique em fazer cadastro para criar sua assinatura e liberar o acesso apos o pagamento.
           </p>
         </div>
 
@@ -62,57 +62,6 @@
       </div>
     </section>
 
-    <section id="recuperacaoModal" class="modal-shell" hidden>
-      <div
-        id="recuperacaoBackdrop"
-        class="modal-backdrop"
-        onclick="document.getElementById('recuperacaoModal').hidden = true"
-      ></div>
-      <div class="modal-card">
-        <button
-          id="fecharRecuperacaoButton"
-          class="modal-close"
-          type="button"
-          onclick="document.getElementById('recuperacaoModal').hidden = true"
-        >
-          Fechar
-        </button>
-        <p class="eyebrow">Recuperar senha</p>
-        <h2>Recupere sua senha</h2>
-        <p class="landing-panel-copy">
-          Informe seu Gmail cadastrado para receber o codigo e criar uma nova senha.
-        </p>
-
-        <form id="recuperacaoSolicitarForm" class="form-grid">
-          <label>
-            Gmail cadastrado
-            <input id="recuperacaoIdentificadorInput" type="email" required />
-          </label>
-
-          <button type="submit" class="landing-login-button">Enviar codigo</button>
-        </form>
-
-        <form id="recuperacaoRedefinirForm" class="form-grid top-space">
-          <label>
-            Codigo recebido
-            <input id="recuperacaoCodigoInput" type="text" inputmode="numeric" />
-          </label>
-
-          <label>
-            Nova senha
-            <div class="password-field">
-              <input id="recuperacaoNovaSenhaInput" type="password" minlength="4" />
-              <button class="password-toggle" type="button" data-toggle-password="recuperacaoNovaSenhaInput">Mostrar</button>
-            </div>
-          </label>
-
-          <button type="submit" class="landing-login-button">Redefinir senha</button>
-        </form>
-
-        <p id="recuperacaoMessage" class="form-message light-message"></p>
-      </div>
-    </section>
-
-    <script src="./landing.js?v=20260330e"></script>
+    <script src="./landing.js?v=20260408c"></script>
   </body>
 </html>

@@ -316,11 +316,15 @@ function renderizarAgendamentos(agendamentos) {
         )
         .join('');
 
-  agendamentoCount.textContent = `${agendamentos.length} itens`;
+  if (agendamentoCount) {
+    agendamentoCount.textContent = `${agendamentos.length} itens`;
+  }
   if (agendamentoCountInicio) {
     agendamentoCountInicio.textContent = `${agendamentos.length} itens`;
   }
-  agendamentosTable.innerHTML = html;
+  if (agendamentosTable) {
+    agendamentosTable.innerHTML = html;
+  }
   if (agendamentosTableInicio) {
     agendamentosTableInicio.innerHTML = html;
   }
@@ -356,7 +360,9 @@ async function carregarFaturamentoMesEscolhido() {
 
 function renderizarBloqueios(bloqueios) {
   if (!bloqueios.length) {
-    bloqueiosList.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
+    if (bloqueiosList) {
+      bloqueiosList.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
+    }
     if (bloqueiosListInicio) {
       bloqueiosListInicio.innerHTML = '<li>Nenhum bloqueio cadastrado.</li>';
     }
@@ -373,7 +379,9 @@ function renderizarBloqueios(bloqueios) {
       `
     )
     .join('');
-  bloqueiosList.innerHTML = html;
+  if (bloqueiosList) {
+    bloqueiosList.innerHTML = html;
+  }
   if (bloqueiosListInicio) {
     bloqueiosListInicio.innerHTML = html;
   }
@@ -539,7 +547,9 @@ async function carregarPainelBarbeiro() {
     if (tratarErroSessao(error)) {
       return;
     }
-    formMessage.textContent = 'Nao consegui carregar o painel do barbeiro.';
+    if (formMessage) {
+      formMessage.textContent = 'Nao consegui carregar o painel do salao.';
+    }
   }
 }
 
@@ -623,7 +633,7 @@ async function lidarEnvioBloqueio(event, campos) {
   }
 }
 
-bloqueioForm.addEventListener('submit', (event) =>
+bloqueioForm?.addEventListener('submit', (event) =>
   lidarEnvioBloqueio(event, {
     data: document.getElementById('dataInput'),
     hora: document.getElementById('horaInput'),
@@ -742,7 +752,7 @@ generateQrButton.addEventListener('click', async () => {
   }
 });
 
-agendamentosTable.addEventListener('click', async (event) => {
+agendamentosTable?.addEventListener('click', async (event) => {
   const botao = event.target.closest('button[data-id]');
 
   if (!botao) {
@@ -759,14 +769,18 @@ agendamentosTable.addEventListener('click', async (event) => {
   try {
     botao.disabled = true;
     await excluirAgendamento(id);
-    formMessage.textContent = 'Agendamento excluido com sucesso.';
+    if (formMessage) {
+      formMessage.textContent = 'Agendamento excluido com sucesso.';
+    }
     await carregarPainelBarbeiro();
   } catch (error) {
     console.error(error);
     if (tratarErroSessao(error)) {
       return;
     }
-    formMessage.textContent = 'Nao consegui excluir o agendamento.';
+    if (formMessage) {
+      formMessage.textContent = 'Nao consegui excluir o agendamento.';
+    }
     botao.disabled = false;
   }
 });
@@ -837,7 +851,7 @@ async function lidarCliqueExclusaoBloqueio(event, messageNode) {
   }
 }
 
-bloqueiosList.addEventListener('click', (event) => {
+bloqueiosList?.addEventListener('click', (event) => {
   void lidarCliqueExclusaoBloqueio(event, formMessage);
 });
 

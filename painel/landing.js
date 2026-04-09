@@ -9,33 +9,8 @@ const loginBlockedPixQrImage = document.getElementById('loginBlockedPixQrImage')
 const loginBlockedPixChaveLabel = document.getElementById('loginBlockedPixChaveLabel');
 const abrirCadastroButtons = document.querySelectorAll('[data-open-cadastro]');
 const abrirRecuperacaoButton = document.getElementById('abrirRecuperacaoButton');
-const fecharRecuperacaoButton = document.getElementById('fecharRecuperacaoButton');
-const recuperacaoModal = document.getElementById('recuperacaoModal');
-const recuperacaoBackdrop = document.getElementById('recuperacaoBackdrop');
-const recuperacaoSolicitarForm = document.getElementById('recuperacaoSolicitarForm');
-const recuperacaoRedefinirForm = document.getElementById('recuperacaoRedefinirForm');
-const recuperacaoMessage = document.getElementById('recuperacaoMessage');
 let pixConfig = null;
 let valorMensalAtual = 1;
-
-function abrirRecuperacao() {
-  recuperacaoModal.hidden = false;
-  recuperacaoMessage.textContent = '';
-}
-
-function fecharRecuperacao() {
-  recuperacaoModal.hidden = true;
-}
-
-function normalizarMensagemRecuperacao(error) {
-  const mensagem = String(error?.message || '').toLowerCase();
-
-  if (mensagem.includes('gmail ainda nao esta configurada') || mensagem.includes('email ainda nao esta configurada')) {
-    return 'Recuperacao por e-mail ainda nao esta disponivel. Fale com o suporte da barbearia.';
-  }
-
-  return error?.message || 'Nao foi possivel concluir a recuperacao agora.';
-}
 
 function esconderPixBloqueado() {
   loginBlockedPixCard.hidden = true;
@@ -104,19 +79,8 @@ abrirCadastroButtons.forEach((button) => {
   });
 });
 
-abrirRecuperacaoButton.addEventListener('click', abrirRecuperacao);
-fecharRecuperacaoButton.addEventListener('click', fecharRecuperacao);
-recuperacaoBackdrop.addEventListener('click', fecharRecuperacao);
-recuperacaoModal.addEventListener('click', (event) => {
-  if (event.target === recuperacaoModal) {
-    fecharRecuperacao();
-  }
-});
-
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !recuperacaoModal.hidden) {
-    fecharRecuperacao();
-  }
+abrirRecuperacaoButton.addEventListener('click', () => {
+  window.location.href = '/recuperar-senha.html';
 });
 
 document.querySelectorAll('[data-toggle-password]').forEach((button) => {
@@ -157,47 +121,6 @@ loginBarbeiroForm.addEventListener('submit', async (event) => {
     if (error.status === 403) {
       await mostrarPixBloqueado();
     }
-  }
-});
-
-recuperacaoSolicitarForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-
-  try {
-    const payload = await buscarJson('/api/barbeiro/recuperar-senha/solicitar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        metodo: 'email',
-        identificador: document.getElementById('recuperacaoIdentificadorInput').value.trim(),
-      }),
-    });
-
-    recuperacaoMessage.textContent = payload.mensagem;
-  } catch (error) {
-    console.error(error);
-    recuperacaoMessage.textContent = normalizarMensagemRecuperacao(error);
-  }
-});
-
-recuperacaoRedefinirForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-
-  try {
-    const payload = await buscarJson('/api/barbeiro/recuperar-senha/redefinir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        identificador: document.getElementById('recuperacaoIdentificadorInput').value.trim(),
-        codigo: document.getElementById('recuperacaoCodigoInput').value.trim(),
-        novaSenha: document.getElementById('recuperacaoNovaSenhaInput').value,
-      }),
-    });
-
-    recuperacaoMessage.textContent = payload.mensagem;
-  } catch (error) {
-    console.error(error);
-    recuperacaoMessage.textContent = normalizarMensagemRecuperacao(error);
   }
 });
 

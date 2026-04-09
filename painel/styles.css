@@ -1,14 +1,14 @@
 :root {
-  --bg: #0f0f0f;
-  --surface: rgba(255, 250, 241, 0.92);
-  --surface-strong: #fffaf1;
-  --stroke: rgba(74, 53, 37, 0.12);
-  --text: #2e2018;
-  --muted: #746454;
+  --bg: #050505;
+  --surface: rgba(18, 18, 18, 0.94);
+  --surface-strong: #151515;
+  --stroke: rgba(255, 255, 255, 0.08);
+  --text: #f7f3ec;
+  --muted: rgba(247, 243, 236, 0.68);
   --accent: #e50914;
-  --accent-dark: #b20710;
-  --ok: #2c7a52;
-  --shadow: 0 18px 40px rgba(61, 39, 23, 0.12);
+  --accent-dark: #ff424d;
+  --ok: #7df0b1;
+  --shadow: 0 22px 55px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -29,7 +29,8 @@ body {
   min-height: 100vh;
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   color: var(--text);
-  background: linear-gradient(180deg, #111 0%, #181818 100%);
+  background:
+    linear-gradient(180deg, #020202 0%, #090909 100%);
   overflow-x: hidden;
 }
 
@@ -430,8 +431,10 @@ a {
 .content {
   padding: 24px;
   background:
-    radial-gradient(circle at top left, rgba(184, 92, 56, 0.22), transparent 28%),
-    linear-gradient(135deg, #efe3cf, #f7f2e8 45%, #e8dfd0);
+    linear-gradient(180deg, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.6)),
+    radial-gradient(circle at top right, rgba(229, 9, 20, 0.16), transparent 24%),
+    linear-gradient(115deg, transparent 0 12%, rgba(255, 255, 255, 0.05) 12% 17%, transparent 17% 24%, rgba(255, 255, 255, 0.03) 24% 31%, transparent 31% 100%),
+    linear-gradient(135deg, #040404 0%, #101010 48%, #070707 100%);
   min-height: 100vh;
   min-width: 0;
   max-width: 100%;
@@ -450,9 +453,22 @@ a {
   gap: 18px;
   padding: 24px 28px;
   border-radius: 28px;
-  background: rgba(55, 34, 24, 0.94);
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(115deg, transparent 0 14%, rgba(255, 255, 255, 0.06) 14% 18%, transparent 18% 24%, rgba(255, 255, 255, 0.03) 24% 31%, transparent 31% 100%),
+    linear-gradient(135deg, #050505 0%, #141414 58%, #090909 100%);
   color: #f7efdf;
-  box-shadow: 0 20px 38px rgba(34, 18, 10, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.panel-brand {
+  margin: 0 0 8px;
+  font-size: clamp(2.4rem, 5vw, 4rem);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--accent);
 }
 
 .panel-title {
@@ -462,7 +478,7 @@ a {
 .panel-copy {
   margin: 10px 0 0;
   max-width: 760px;
-  color: rgba(247, 239, 223, 0.8);
+  color: rgba(247, 239, 223, 0.74);
   line-height: 1.6;
 }
 
@@ -476,18 +492,18 @@ a {
   gap: 12px;
   padding: 14px;
   border-radius: 24px;
-  background: rgba(255, 250, 241, 0.74);
-  border: 1px solid rgba(74, 53, 37, 0.08);
+  background: rgba(10, 10, 10, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
 }
 
 .panel-menu-button {
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   padding: 12px 18px;
-  background: rgba(229, 9, 20, 0.1);
-  color: var(--accent-dark);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.82);
   font-weight: 700;
   cursor: pointer;
   transition: transform 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
@@ -495,13 +511,14 @@ a {
 
 .panel-menu-button:hover {
   transform: translateY(-1px);
-  background: rgba(229, 9, 20, 0.16);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .panel-menu-button.is-active {
   background: linear-gradient(135deg, var(--accent), #ff5a5f);
   color: #fff;
-  box-shadow: 0 12px 20px rgba(184, 92, 56, 0.22);
+  border-color: transparent;
+  box-shadow: 0 14px 28px rgba(229, 9, 20, 0.28);
 }
 
 .panel-view {
@@ -607,8 +624,8 @@ a {
 
 .blocked-panel {
   margin: 20px 0;
-  border-color: rgba(138, 63, 32, 0.18);
-  background: rgba(184, 92, 56, 0.08);
+  border-color: rgba(229, 9, 20, 0.2);
+  background: rgba(229, 9, 20, 0.08);
 }
 
 .admin-card {
@@ -631,8 +648,8 @@ a {
 .badge {
   padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(184, 92, 56, 0.12);
-  color: var(--accent-dark);
+  background: rgba(229, 9, 20, 0.12);
+  color: #ff7f86;
   font-size: 0.85rem;
 }
 
@@ -652,7 +669,7 @@ table {
 th,
 td {
   padding: 14px 12px;
-  border-bottom: 1px solid rgba(74, 53, 37, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   text-align: left;
 }
 
@@ -677,7 +694,7 @@ th {
 .embedded-card {
   padding: 18px;
   border-radius: 20px;
-  background: rgba(184, 92, 56, 0.05);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .service-builder-header {
@@ -722,8 +739,8 @@ th {
   gap: 8px;
   padding: 10px 12px;
   border-radius: 999px;
-  background: rgba(255, 250, 241, 0.85);
-  border: 1px solid rgba(74, 53, 37, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .day-pill input {
@@ -746,8 +763,8 @@ th {
   text-align: center;
   padding: 16px;
   border-radius: 18px;
-  border: 1px dashed rgba(74, 53, 37, 0.18);
-  background: rgba(255, 250, 241, 0.55);
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.02);
   min-width: 0;
 }
 
@@ -769,7 +786,7 @@ input {
   width: 100%;
   padding: 12px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(74, 53, 37, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: var(--surface-strong);
   color: var(--text);
 }
@@ -778,7 +795,7 @@ select {
   width: 100%;
   padding: 12px 14px;
   border-radius: 14px;
-  border: 1px solid rgba(74, 53, 37, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   background: var(--surface-strong);
   color: var(--text);
 }
@@ -795,14 +812,14 @@ select {
 }
 
 .secondary-pill-button {
-  border: 1px solid rgba(74, 53, 37, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 999px;
   padding: 14px 18px;
-  background: rgba(255, 250, 241, 0.92);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   cursor: pointer;
   transition: transform 160ms ease, box-shadow 160ms ease;
-  box-shadow: 0 10px 20px rgba(61, 39, 23, 0.08);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.22);
 }
 
 .primary-button:hover {
@@ -831,8 +848,8 @@ select {
 }
 
 .danger-button {
-  background: rgba(138, 63, 32, 0.12);
-  color: var(--accent-dark);
+  background: rgba(229, 9, 20, 0.12);
+  color: #ff8c92;
 }
 
 .compact-form {
@@ -842,8 +859,8 @@ select {
 .support-note {
   padding: 16px 18px;
   border-radius: 18px;
-  border: 1px solid rgba(74, 53, 37, 0.08);
-  background: rgba(184, 92, 56, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .support-note p,
@@ -896,8 +913,8 @@ select {
 .list li {
   padding: 12px 14px;
   border-radius: 14px;
-  background: rgba(255, 250, 241, 0.8);
-  border: 1px solid rgba(74, 53, 37, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .list-row {
@@ -927,8 +944,8 @@ select {
 .price-card {
   padding: 20px;
   border-radius: 20px;
-  background: rgba(255, 250, 241, 0.84);
-  border: 1px solid rgba(74, 53, 37, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .price-card span {
@@ -940,7 +957,7 @@ select {
 .price-card strong {
   display: block;
   font-size: 1.5rem;
-  color: var(--accent-dark);
+  color: #ff6b73;
 }
 
 .price-card p {

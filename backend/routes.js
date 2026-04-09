@@ -13,9 +13,10 @@ const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
+const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
+const ADMIN_PASSWORD = 'rios123456';
 const adminSessions = new Map();
 const barberSessions = new Map();
-const passwordRecoveryRequests = new Map();
 const DIAS_SEMANA = [
   { value: 0, label: 'Domingo' },
   { value: 1, label: 'Segunda-feira' },
@@ -682,8 +683,20 @@ function normalizarIdentificador(identificador = '') {
   return String(identificador).trim();
 }
 
-function criarCodigoRecuperacao() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+function normalizarEmail(email = '') {
+  return String(email || '').trim().toLowerCase();
+}
+
+function criarTokenRecuperacao() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function gerarHashTokenRecuperacao(token = '') {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function calcularExpiracaoRecuperacao(minutos = 60) {
+  return new Date(Date.now() + minutos * 60 * 1000).toISOString();
 }
 
 function criarTransporteEmail() {
@@ -724,6 +737,14 @@ function criarTransporteEmail() {
   return null;
 }
 
+function emailRecuperacaoConfigurado() {
+  return Boolean(criarTransporteEmail());
+}
+
+function emAmbienteHospedado() {
+  return Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
+}
+
 async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   const email = String(destino || '').trim();
   const config = criarTransporteEmail();
@@ -758,6 +779,88 @@ function getPublicAppUrl(req) {
     String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim() ||
     `${req.protocol}://${req.get('host')}`
   ).replace(/\/$/, '');
+}
+
+async function buscarAssinaturaPorEmailRecuperacao(email) {
+  return getAsync(
+    `SELECT *
+     FROM assinaturas
+     WHERE lower(email) = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [normalizarEmail(email)]
+  );
+}
+
+function gerarHashTokenRecuperacaoSeguro(token = '') {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+function criarTokenRecuperacaoSeguro() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function calcularExpiracaoRecuperacaoSenha(minutos = 60) {
+  return new Date(Date.now() + minutos * 60 * 1000).toISOString();
+}
+
+async function salvarTokenRecuperacaoSenha(assinaturaId, tokenHash, expiresAt) {
+  await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE assinatura_id = ? AND used_at IS NULL', [
+    assinaturaId,
+  ]);
+
+  await runAsync(
+    `INSERT INTO password_reset_tokens (assinatura_id, token_hash, expires_at)
+     VALUES (?, ?, ?)`,
+    [assinaturaId, tokenHash, expiresAt]
+  );
+}
+
+async function carregarTokenRecuperacaoSenha(token) {
+  return getAsync(
+    `SELECT
+       prt.id,
+       prt.assinatura_id,
+       prt.expires_at,
+       prt.used_at,
+       a.email
+     FROM password_reset_tokens prt
+     JOIN assinaturas a ON a.id = prt.assinatura_id
+     WHERE prt.token_hash = ?
+       AND prt.used_at IS NULL
+     LIMIT 1`,
+    [gerarHashTokenRecuperacaoSeguro(token)]
+  );
+}
+
+async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
+  const email = String(destino || '').trim();
+  const config = criarTransporteEmail();
+
+  if (!email) {
+    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+  }
+
+  if (!config) {
+    const error = new Error(
+      'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no servidor.'
+    );
+    error.statusCode = 501;
+    throw error;
+  }
+
+  await config.transport.sendMail({
+    from: config.from,
+    to: email,
+    subject: 'Recuperacao de senha do Salaoflix',
+    text:
+      `Clique no link abaixo para redefinir sua senha:\n\n${linkRecuperacao}\n\n` +
+      'Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.',
+    html:
+      `<p>Clique no link abaixo para redefinir sua senha:</p>` +
+      `<p><a href="${linkRecuperacao}">${linkRecuperacao}</a></p>` +
+      '<p>Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.</p>',
+  });
 }
 
 async function requestMercadoPago(path, options = {}) {
@@ -1314,62 +1417,90 @@ router.post('/barbeiro/login', async (req, res) => {
 });
 
 router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
-  const identificador = normalizarIdentificador(req.body.identificador);
-  const metodo = String(req.body.metodo || '').trim().toLowerCase();
+  const email = normalizarEmail(req.body.email || req.body.identificador);
 
-  if (!identificador || metodo !== 'email') {
+  if (!email) {
     res.status(400).json({ error: 'Informe seu Gmail cadastrado para recuperar a senha.' });
     return;
   }
 
   try {
-    const assinatura = await getAsync(
-      `SELECT *
-       FROM assinaturas
-       WHERE telefone = ?
-          OR whatsapp_numero = ?
-          OR email = ?
-       ORDER BY id DESC
-       LIMIT 1`,
-      [identificador, identificador, identificador]
-    );
+    const assinatura = await buscarAssinaturaPorEmailRecuperacao(email);
 
     if (!assinatura) {
-      res.status(404).json({ error: 'Nao encontrei uma barbearia com esse contato.' });
+      res.status(404).json({ error: 'Nao encontrei uma conta com esse Gmail.' });
       return;
     }
 
     if (!assinatura.email) {
-      res.status(400).json({ error: 'Essa barbearia nao possui Gmail cadastrado para recuperar a senha.' });
+      res.status(400).json({ error: 'Essa conta nao possui Gmail cadastrado para recuperar a senha.' });
       return;
     }
 
-    const codigo = criarCodigoRecuperacao();
-    passwordRecoveryRequests.set(assinatura.id, {
-      hash: gerarHashSenha(codigo, assinatura.senha_salt),
-      expiresAt: Date.now() + 15 * 60 * 1000,
-      metodo: 'email',
-      identificador: assinatura.email,
-    });
+    if (!emailRecuperacaoConfigurado()) {
+      const error = new Error(
+        'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no servidor.'
+      );
+      error.statusCode = 501;
+      throw error;
+    }
 
-    await enviarCodigoRecuperacaoPorEmail(assinatura.email, codigo);
+    const token = criarTokenRecuperacaoSeguro();
+    const tokenHash = gerarHashTokenRecuperacaoSeguro(token);
+    const expiresAt = calcularExpiracaoRecuperacaoSenha(60);
+    const linkRecuperacao = `${getPublicAppUrl(req)}/redefinir-senha.html?token=${encodeURIComponent(token)}`;
+
+    await salvarTokenRecuperacaoSenha(assinatura.id, tokenHash, expiresAt);
+    await enviarLinkRecuperacaoPorEmailSeguro(assinatura.email, linkRecuperacao);
 
     res.json({
       ok: true,
-      mensagem: 'Enviamos um codigo de recuperacao para o Gmail da barbearia.',
+      mensagem: 'Enviamos um link de recuperacao para o seu Gmail.',
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 
-router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
-  const identificador = normalizarIdentificador(req.body.identificador);
-  const codigo = String(req.body.codigo || '').trim();
-  const novaSenha = String(req.body.novaSenha || '');
+router.get('/barbeiro/recuperar-senha/token-status', async (req, res) => {
+  const token = String(req.query.token || '').trim();
 
-  if (!identificador || !codigo || !novaSenha) {
-    res.status(400).json({ error: 'Informe contato, codigo e a nova senha.' });
+  if (!token) {
+    res.status(400).json({ error: 'Token obrigatorio.' });
+    return;
+  }
+
+  try {
+    const recovery = await carregarTokenRecuperacaoSenha(token);
+
+    if (!recovery) {
+      res.status(404).json({ error: 'Link invalido ou expirado.' });
+      return;
+    }
+
+    if (new Date(recovery.expires_at).getTime() <= Date.now()) {
+      await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
+      res.status(410).json({ error: 'Esse link de recuperacao expirou.' });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      email: recovery.email,
+      expiresAt: recovery.expires_at,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
+  const token = String(req.body.token || '').trim();
+  const novaSenha = String(req.body.novaSenha || '');
+  const confirmarSenha = String(req.body.confirmarSenha || '');
+
+  if (!token || !novaSenha || !confirmarSenha) {
+    res.status(400).json({ error: 'Informe o token e preencha a nova senha duas vezes.' });
     return;
   }
 
@@ -1378,35 +1509,22 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
     return;
   }
 
+  if (novaSenha !== confirmarSenha) {
+    res.status(400).json({ error: 'A confirmacao da senha nao confere.' });
+    return;
+  }
+
   try {
-    const assinatura = await getAsync(
-      `SELECT *
-       FROM assinaturas
-       WHERE telefone = ?
-          OR whatsapp_numero = ?
-          OR email = ?
-       ORDER BY id DESC
-       LIMIT 1`,
-      [identificador, identificador, identificador]
-    );
+    const recovery = await carregarTokenRecuperacaoSenha(token);
 
-    if (!assinatura) {
-      res.status(404).json({ error: 'Nao encontrei uma barbearia com esse contato.' });
+    if (!recovery) {
+      res.status(404).json({ error: 'Link invalido ou expirado.' });
       return;
     }
 
-    const recovery = passwordRecoveryRequests.get(assinatura.id);
-
-    if (!recovery || recovery.expiresAt < Date.now()) {
-      passwordRecoveryRequests.delete(assinatura.id);
-      res.status(410).json({ error: 'Seu codigo expirou. Solicite uma nova recuperacao.' });
-      return;
-    }
-
-    const hashCodigo = gerarHashSenha(codigo, assinatura.senha_salt);
-
-    if (hashCodigo !== recovery.hash) {
-      res.status(401).json({ error: 'Codigo invalido.' });
+    if (new Date(recovery.expires_at).getTime() <= Date.now()) {
+      await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
+      res.status(410).json({ error: 'Esse link de recuperacao expirou.' });
       return;
     }
 
@@ -1418,10 +1536,10 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
            senha_salt = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [credenciais.hash, credenciais.salt, assinatura.id]
+      [credenciais.hash, credenciais.salt, recovery.assinatura_id]
     );
 
-    passwordRecoveryRequests.delete(assinatura.id);
+    await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
 
     res.json({ ok: true, mensagem: 'Senha atualizada com sucesso. Agora voce ja pode entrar no painel.' });
   } catch (error) {
@@ -1895,18 +2013,17 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
 });
 
 router.post('/admin/login', async (req, res) => {
-  const { pin } = req.body;
+  const email = normalizarEmail(req.body?.email || '');
+  const senha = String(req.body?.senha || '');
 
-  if (!pin) {
-    res.status(400).json({ error: 'PIN admin obrigatorio.' });
+  if (!email || !senha) {
+    res.status(400).json({ error: 'Gmail e senha do admin sao obrigatorios.' });
     return;
   }
 
   try {
-    const adminPin = await getConfiguracao('admin_pin');
-
-    if (String(pin) !== String(adminPin)) {
-      res.status(401).json({ error: 'PIN admin invalido.' });
+    if (email !== normalizarEmail(ADMIN_EMAIL) || senha !== ADMIN_PASSWORD) {
+      res.status(401).json({ error: 'Gmail ou senha do admin invalidos.' });
       return;
     }
 
