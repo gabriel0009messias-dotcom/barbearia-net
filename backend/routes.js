@@ -2002,6 +2002,17 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
       return;
     }
 
+    const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
+    const whatsappBridgeUrlPublic = String(process.env.WHATSAPP_BRIDGE_URL_PUBLIC || '').trim();
+
+    if (emHospedagem && !whatsappBridgeUrlPublic) {
+      res.status(409).json({
+        error:
+          'No servidor hospedado, o WhatsApp deve ser conectado pelo bot local para evitar queda por falta de memoria. Abra o backend local e execute o arquivo iniciar-whatsapp.bat.',
+      });
+      return;
+    }
+
     iniciarSessao(id).catch((error) => {
       console.error(`Erro ao iniciar sessao do WhatsApp da assinatura ${id}:`, error.message);
     });
