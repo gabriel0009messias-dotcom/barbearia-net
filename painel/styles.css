@@ -900,6 +900,13 @@ select {
   border: 1px solid rgba(74, 53, 37, 0.08);
 }
 
+.list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .status-card,
 .help-card {
   display: flex;

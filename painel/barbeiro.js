@@ -364,7 +364,14 @@ function renderizarBloqueios(bloqueios) {
   }
 
   const html = bloqueios
-    .map((item) => `<li>${formatarData(item.data)} as ${escaparHtml(item.hora)}</li>`)
+    .map(
+      (item) => `
+        <li class="list-row">
+          <span>${formatarData(item.data)} as ${escaparHtml(item.hora)}</span>
+          <button class="table-action danger-button" data-bloqueio-id="${item.id}" type="button">Excluir</button>
+        </li>
+      `
+    )
     .join('');
   bloqueiosList.innerHTML = html;
   if (bloqueiosListInicio) {
@@ -538,6 +545,10 @@ async function carregarPainelBarbeiro() {
 
 async function excluirAgendamento(id) {
   await buscarJson(`/api/agendamentos/${id}`, { method: 'DELETE' });
+}
+
+async function excluirBloqueio(id) {
+  await buscarJson(`/api/bloqueios/${id}`, { method: 'DELETE' });
 }
 
 async function consultarStatusWhatsapp() {
@@ -791,6 +802,47 @@ agendamentosTableInicio?.addEventListener('click', async (event) => {
     }
     botao.disabled = false;
   }
+});
+
+async function lidarCliqueExclusaoBloqueio(event, messageNode) {
+  const botao = event.target.closest('button[data-bloqueio-id]');
+
+  if (!botao) {
+    return;
+  }
+
+  const { bloqueioId } = botao.dataset;
+  const confirmou = window.confirm('Tem certeza que deseja excluir este bloqueio?');
+
+  if (!confirmou) {
+    return;
+  }
+
+  try {
+    botao.disabled = true;
+    await excluirBloqueio(bloqueioId);
+    if (messageNode) {
+      messageNode.textContent = 'Bloqueio excluido com sucesso.';
+    }
+    await carregarPainelBarbeiro();
+  } catch (error) {
+    console.error(error);
+    if (tratarErroSessao(error)) {
+      return;
+    }
+    if (messageNode) {
+      messageNode.textContent = 'Nao consegui excluir o bloqueio.';
+    }
+    botao.disabled = false;
+  }
+}
+
+bloqueiosList.addEventListener('click', (event) => {
+  void lidarCliqueExclusaoBloqueio(event, formMessage);
+});
+
+bloqueiosListInicio?.addEventListener('click', (event) => {
+  void lidarCliqueExclusaoBloqueio(event, formMessageInicio);
 });
 
 logoutBarbeiroButton.addEventListener('click', async () => {

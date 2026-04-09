@@ -1,13 +1,3 @@
-const DIAS_SEMANA = [
-  { value: 0, label: 'Dom' },
-  { value: 1, label: 'Seg' },
-  { value: 2, label: 'Ter' },
-  { value: 3, label: 'Qua' },
-  { value: 4, label: 'Qui' },
-  { value: 5, label: 'Sex' },
-  { value: 6, label: 'Sab' },
-];
-
 const TOKEN_STORAGE_KEY = 'barbearia_auth_token';
 const PENDING_SIGNUP_STORAGE_KEY = 'barbearia_pending_signup';
 
@@ -22,13 +12,6 @@ const pixQrImage = document.getElementById('pixQrImage');
 const pixCopiaColaLabel = document.getElementById('pixCopiaColaLabel');
 const cartaoDadosCard = document.getElementById('cartaoDadosCard');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
-const diasFuncionamentoInput = document.getElementById('diasFuncionamentoInput');
-const horarioAberturaInput = document.getElementById('horarioAberturaInput');
-const horarioAlmocoInicioInput = document.getElementById('horarioAlmocoInicioInput');
-const horarioAlmocoFimInput = document.getElementById('horarioAlmocoFimInput');
-const horarioFechamentoInput = document.getElementById('horarioFechamentoInput');
-const addServiceButton = document.getElementById('addServiceButton');
-const serviceRows = document.getElementById('serviceRows');
 const assinaturaForm = document.getElementById('assinaturaForm');
 const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
@@ -69,21 +52,6 @@ async function buscarJson(url, options = {}) {
   return payload;
 }
 
-function renderizarDiasFuncionamento(container, selecionados = [1, 2, 3, 4, 5, 6]) {
-  container.innerHTML = DIAS_SEMANA.map(
-    (dia) => `
-      <label class="day-pill">
-        <input type="checkbox" value="${dia.value}" ${selecionados.includes(dia.value) ? 'checked' : ''} />
-        <span>${dia.label}</span>
-      </label>
-    `
-  ).join('');
-}
-
-function coletarDiasSelecionados(container) {
-  return Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map((input) => Number(input.value));
-}
-
 function escaparHtml(texto = '') {
   return String(texto)
     .replaceAll('&', '&amp;')
@@ -91,26 +59,6 @@ function escaparHtml(texto = '') {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
-}
-
-function criarLinhaServico(nome = '', preco = '') {
-  const row = document.createElement('div');
-  row.className = 'service-row';
-  row.innerHTML = `
-    <input class="service-name-input" type="text" placeholder="Ex.: Corte degrade" value="${escaparHtml(nome)}" />
-    <input class="service-price-input" type="number" min="1" step="0.01" placeholder="Preco" value="${escaparHtml(preco)}" />
-    <button type="button" class="table-action danger-button" data-remove-service>Remover</button>
-  `;
-  serviceRows.appendChild(row);
-}
-
-function coletarServicos() {
-  return Array.from(serviceRows.querySelectorAll('.service-row'))
-    .map((row) => ({
-      nome: row.querySelector('.service-name-input')?.value.trim(),
-      preco: row.querySelector('.service-price-input')?.value,
-    }))
-    .filter((item) => item.nome && Number(item.preco) > 0);
 }
 
 function apenasDigitos(valor = '') {
@@ -267,11 +215,6 @@ async function carregarConfiguracao() {
     diaVencimentoInput.innerHTML = config.diasVencimento
       .map((dia) => `<option value="${dia}">Dia ${dia}</option>`)
       .join('');
-    renderizarDiasFuncionamento(diasFuncionamentoInput, config.funcionamentoPadrao?.diasFuncionamento || [1, 2, 3, 4, 5, 6]);
-    horarioAberturaInput.value = config.funcionamentoPadrao?.horarioAbertura || '08:00';
-    horarioAlmocoInicioInput.value = config.funcionamentoPadrao?.horarioAlmocoInicio || '12:00';
-    horarioAlmocoFimInput.value = config.funcionamentoPadrao?.horarioAlmocoFim || '13:00';
-    horarioFechamentoInput.value = config.funcionamentoPadrao?.horarioFechamento || '18:00';
     atualizarGatewayInfo();
   } catch (error) {
     console.error(error);
@@ -279,23 +222,6 @@ async function carregarConfiguracao() {
   }
 }
 
-serviceRows.addEventListener('click', (event) => {
-  const botao = event.target.closest('[data-remove-service]');
-
-  if (!botao) {
-    return;
-  }
-
-  const rows = serviceRows.querySelectorAll('.service-row');
-
-  if (rows.length === 1) {
-    return;
-  }
-
-  botao.closest('.service-row')?.remove();
-});
-
-addServiceButton.addEventListener('click', () => criarLinhaServico());
 metodoPagamentoInput.addEventListener('change', atualizarGatewayInfo);
 gatewayCheckoutButton.addEventListener('click', () => {
   if (gatewayCheckoutUrl) {
@@ -346,12 +272,6 @@ assinaturaForm.addEventListener('submit', async (event) => {
                 mobilePhone: apenasDigitos(document.getElementById('telefoneAssinaturaInput').value),
               }
             : null,
-        diasFuncionamento: coletarDiasSelecionados(diasFuncionamentoInput),
-        horarioAbertura: horarioAberturaInput.value,
-        horarioAlmocoInicio: horarioAlmocoInicioInput.value,
-        horarioAlmocoFim: horarioAlmocoFimInput.value,
-        horarioFechamento: horarioFechamentoInput.value,
-        servicos: coletarServicos(),
       }),
     });
 
@@ -362,7 +282,6 @@ assinaturaForm.addEventListener('submit', async (event) => {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     assinaturaFormMessage.textContent =
       resposta.mensagem || 'Cadastro concluido. Agora finalize o pagamento para liberar seu login.';
-    atualizarGatewayInfo();
     iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
 
     if (gatewayCheckoutUrl) {
@@ -374,8 +293,6 @@ assinaturaForm.addEventListener('submit', async (event) => {
   }
 });
 
-criarLinhaServico('Corte degrade', '30');
-criarLinhaServico('Luzes', '80');
 carregarConfiguracao();
 carregarSessaoAtual();
 

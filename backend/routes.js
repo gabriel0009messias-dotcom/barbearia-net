@@ -1109,6 +1109,24 @@ router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
   });
 });
 
+router.delete('/bloqueios/:id', requirePainelOuBridge, (req, res) => {
+  const { id } = req.params;
+
+  db.run('DELETE FROM bloqueios WHERE id = ?', [id], function onDelete(err) {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+
+    if (this.changes === 0) {
+      res.status(404).json({ error: 'Bloqueio nao encontrado.' });
+      return;
+    }
+
+    res.json({ success: true });
+  });
+});
+
 router.get('/servicos', (req, res) => {
   db.all('SELECT * FROM servicos ORDER BY id ASC', [], (err, rows) => {
     if (err) {
