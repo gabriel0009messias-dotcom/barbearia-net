@@ -4,7 +4,14 @@ const nodemailer = require('nodemailer');
 
 const db = require('./database');
 const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas } = require('./asaas');
-const { iniciarSessao, statusSessao } = require('./whatsappManager');
+const {
+  getEvolutionConfig,
+  gerarNomeInstancia,
+  construirQrCodeUrl,
+  criarInstancia,
+  conectarInstancia,
+  obterEstadoConexao,
+} = require('./evolutionApi');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -1200,6 +1207,135 @@ function assinaturaPertenceAoBarbeiro(req, res) {
   return true;
 }
 
+function mapearStatusWhatsappEvolution(state = '') {
+  const estado = String(state || '').trim().toLowerCase();
+
+  if (['open', 'connected'].includes(estado)) {
+    return 'conectado';
+  }
+
+  if (['connecting', 'pairing', 'syncing'].includes(estado)) {
+    return 'iniciando';
+  }
+
+  if (['close', 'closed', 'disconnected', 'logout'].includes(estado)) {
+    return 'nao_configurado';
+  }
+
+  return estado || 'nao_configurado';
+}
+
+async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
+  const campos = [];
+  const params = [];
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappSession')) {
+    campos.push('whatsapp_session = ?');
+    params.push(valores.whatsappSession || null);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappStatus')) {
+    campos.push('whatsapp_status = ?');
+    params.push(valores.whatsappStatus || 'nao_configurado');
+  }
+
+  if (!campos.length) {
+    return;
+  }
+
+  params.push(assinaturaId);
+
+  await runAsync(
+    `UPDATE assinaturas
+     SET ${campos.join(', ')},
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    params
+  );
+}
+
+async function garantirInstanciaWhatsapp(assinatura) {
+  const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
+
+  try {
+    await criarInstancia(instanceName);
+  } catch (error) {
+    const statusCode = Number(error.statusCode || 0);
+    const mensagem = String(error.message || '');
+
+    if (statusCode !== 409 && !/already|exists|duplicate|duplicada|existe/i.test(mensagem)) {
+      throw error;
+    }
+  }
+
+  if (instanceName !== assinatura?.whatsapp_session) {
+    await persistirSessaoWhatsapp(assinatura.id, {
+      whatsappSession: instanceName,
+    });
+  }
+
+  return instanceName;
+}
+
+async function consultarStatusWhatsappEvolution(assinatura) {
+  const instanceName = String(assinatura?.whatsapp_session || '').trim();
+
+  if (!instanceName) {
+    return {
+      status: 'nao_configurado',
+      qrCode: null,
+      ultimoErro: null,
+      instancia: null,
+    };
+  }
+
+  try {
+    const estado = await obterEstadoConexao(instanceName);
+    const statusMapeado = mapearStatusWhatsappEvolution(estado?.instance?.state);
+    let qrCode = null;
+
+    if (statusMapeado !== 'conectado') {
+      const conexao = await conectarInstancia(instanceName);
+      qrCode = construirQrCodeUrl(conexao?.code);
+
+      if (qrCode) {
+        await persistirSessaoWhatsapp(assinatura.id, {
+          whatsappStatus: 'qr_pronto',
+        });
+
+        return {
+          status: 'qr_pronto',
+          qrCode,
+          ultimoErro: null,
+          instancia: instanceName,
+        };
+      }
+    }
+
+    await persistirSessaoWhatsapp(assinatura.id, {
+      whatsappStatus: statusMapeado,
+    });
+
+    return {
+      status: statusMapeado,
+      qrCode: null,
+      ultimoErro: null,
+      instancia: instanceName,
+    };
+  } catch (error) {
+    await persistirSessaoWhatsapp(assinatura.id, {
+      whatsappStatus: 'erro',
+    });
+
+    return {
+      status: 'erro',
+      qrCode: null,
+      ultimoErro: error.message,
+      instancia: instanceName,
+    };
+  }
+}
+
 router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
   const query = `
     SELECT
@@ -1438,15 +1574,14 @@ router.get('/servicos', (req, res) => {
 router.get('/publico/assinatura-config', async (req, res) => {
   try {
     const suporteNumero = await getConfiguracao('suporte_numero');
-    const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-    const whatsappBridgeUrlPublic = String(process.env.WHATSAPP_BRIDGE_URL_PUBLIC || '').trim();
-    const whatsappLocalOnly = emHospedagem && !whatsappBridgeUrlPublic;
+    const evolution = getEvolutionConfig();
 
     res.json({
       suporteNumero,
       valorMensal: 1,
-      whatsappBridgeUrl: whatsappLocalOnly ? null : whatsappBridgeUrlPublic || 'http://127.0.0.1:3010',
-      whatsappLocalOnly,
+      whatsappBridgeUrl: null,
+      whatsappLocalOnly: false,
+      whatsappProvider: evolution.enabled ? 'evolution_api' : 'indisponivel',
       gateway: {
         provider: 'mercado_pago',
         enabled: Boolean(getMercadoPagoAccessToken()),
@@ -2005,32 +2140,23 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
       return;
     }
 
-    const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-    const whatsappBridgeUrlPublic = String(process.env.WHATSAPP_BRIDGE_URL_PUBLIC || '').trim();
+    const instanceName = await garantirInstanciaWhatsapp(assinatura);
+    const conexao = await conectarInstancia(instanceName);
+    const qrCode = construirQrCodeUrl(conexao?.code);
 
-    if (emHospedagem && !whatsappBridgeUrlPublic) {
-      res.status(409).json({
-        error:
-          'No servidor hospedado, o WhatsApp deve ser conectado pelo bot local para evitar queda por falta de memoria. Abra o backend local e execute o arquivo iniciar-whatsapp.bat.',
-      });
-      return;
-    }
-
-    iniciarSessao(id).catch((error) => {
-      console.error(`Erro ao iniciar sessao do WhatsApp da assinatura ${id}:`, error.message);
+    await persistirSessaoWhatsapp(id, {
+      whatsappSession: instanceName,
+      whatsappStatus: qrCode ? 'qr_pronto' : 'iniciando',
     });
 
-    await runAsync(
-      `UPDATE assinaturas
-       SET whatsapp_status = 'iniciando',
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [id]
-    );
-
-    res.json({ ok: true, status: 'iniciando' });
+    res.json({
+      ok: true,
+      status: qrCode ? 'qr_pronto' : 'iniciando',
+      instancia: instanceName,
+      qrCode,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 
@@ -2214,18 +2340,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
       return;
     }
 
-    const sessao = statusSessao(id);
-
-    if (sessao.status && sessao.status !== assinatura.whatsapp_status) {
-      await runAsync(
-        `UPDATE assinaturas
-         SET whatsapp_status = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [sessao.status, id]
-      );
-    }
-
+    const sessao = await consultarStatusWhatsappEvolution(assinatura);
     res.json(sessao);
   } catch (error) {
     res.status(500).json({ error: error.message });

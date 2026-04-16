@@ -18,12 +18,10 @@ const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let assinaturaAtualId = null;
 let valorMensalAtual = 1;
-let whatsappBridgeUrl = null;
 let gatewayConfig = null;
 let gatewayCheckoutUrl = null;
 let pixQrCodeAtual = null;
 let monitorLiberacao = null;
-const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -207,7 +205,6 @@ async function carregarConfiguracao() {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     valorMensalAtual = Number(config.valorMensal || 1);
-    whatsappBridgeUrl = config.whatsappBridgeUrl || 'http://127.0.0.1:3010';
     gatewayConfig = config.gateway || null;
     metodoPagamentoInput.innerHTML = config.metodosPagamento
       .map((metodo) => `<option value="${metodo}">${formatarMetodoPagamento(metodo)}</option>`)

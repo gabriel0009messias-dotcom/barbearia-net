@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 
 require('./loadEnv');
 
@@ -11,6 +12,7 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = Number(process.env.PORT) || 3000;
 const painelPath = path.join(__dirname, '..', 'painel');
+const runtimeErrorLogPath = path.join(__dirname, 'server-error.log');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();
 const adminSessions = new Map();
@@ -37,6 +39,27 @@ const ACESSO_VITALICIO = {
 };
 const demoAgendamentos = [];
 const demoBloqueios = [];
+
+function registrarErroRuntime(tipo, erro) {
+  const mensagem = erro instanceof Error ? `${erro.stack || erro.message}` : String(erro);
+  const linha = `[${new Date().toISOString()}] ${tipo}\n${mensagem}\n\n`;
+
+  console.error(`${tipo}:`, erro);
+
+  try {
+    fs.appendFileSync(runtimeErrorLogPath, linha, 'utf8');
+  } catch (logError) {
+    console.error('Nao foi possivel gravar em server-error.log:', logError);
+  }
+}
+
+process.on('unhandledRejection', (erro) => {
+  registrarErroRuntime('unhandledRejection', erro);
+});
+
+process.on('uncaughtException', (erro) => {
+  registrarErroRuntime('uncaughtException', erro);
+});
 
 function normalizarEmail(email = '') {
   return String(email || '').trim().toLowerCase();
@@ -320,6 +343,24 @@ app.use('/api', apiRoutes);
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(painelPath, 'index.html'));
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    service: 'barbearia-backend',
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    service: 'barbearia-api',
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.get('/cadastro.html', (req, res) => {
@@ -1584,6 +1625,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
+});
+
+server.on('error', (erro) => {
+  registrarErroRuntime('serverError', erro);
 });

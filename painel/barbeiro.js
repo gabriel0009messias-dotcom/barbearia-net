@@ -32,6 +32,7 @@ const bloqueiosListInicio = document.getElementById('bloqueiosListInicio');
 const formMessageInicio = document.getElementById('formMessageInicio');
 const refreshButton = document.getElementById('refreshButton');
 const logoutBarbeiroButton = document.getElementById('logoutBarbeiroButton');
+const topbarActionMessage = document.getElementById('topbarActionMessage');
 const bloqueioForm = document.getElementById('bloqueioForm');
 const bloqueioFormInicio = document.getElementById('bloqueioFormInicio');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
@@ -74,9 +75,6 @@ let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let whatsappPolling = null;
 let pixConfig = null;
 let valorMensalAtual = 1;
-let whatsappBridgeUrl = null;
-let whatsappLocalOnly = false;
-const WHATSAPP_BRIDGE_FALLBACKS = ['http://localhost:3010', 'http://127.0.0.1:3010'];
 let activeSectionId = 'inicio';
 
 function formatarData(data) {
@@ -127,78 +125,16 @@ async function buscarJson(url, options = {}) {
   return response.json();
 }
 
-async function buscarBridgeToken() {
-  const payload = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/bridge-token`, {
-    method: 'POST',
-  });
-
-  return payload.token;
-}
-
-async function buscarJsonBridge(url, options = {}) {
-  try {
-    const response = await fetch(url, options);
-
-    if (!response.ok) {
-      let detalhe = '';
-
-      try {
-        const payload = await response.json();
-        detalhe = payload?.error ? payload.error : '';
-      } catch (error) {
-        detalhe = '';
-      }
-
-      const erro = new Error(detalhe || 'Nao consegui falar com o bot local do WhatsApp.');
-      erro.status = response.status;
-      throw erro;
-    }
-
-    return response.json();
-  } catch (error) {
-    if (error instanceof TypeError) {
-      const erroRede = new Error(
-        'Nao consegui falar com o bot local do WhatsApp. Abra o arquivo backend\\iniciar-whatsapp.bat e deixe a janela aberta.'
-      );
-      erroRede.status = 0;
-      throw erroRede;
-    }
-
-    throw error;
-  }
-}
-
-function getWhatsappBridgeBase() {
-  return String(whatsappBridgeUrl || WHATSAPP_BRIDGE_FALLBACKS[0]).replace(/\/$/, '');
-}
-
-function listarBridgeBases() {
-  const bases = [getWhatsappBridgeBase(), ...WHATSAPP_BRIDGE_FALLBACKS];
-  return Array.from(new Set(bases.map((item) => String(item).replace(/\/$/, ''))));
-}
-
-function usaWhatsappHospedado() {
-  return !whatsappLocalOnly && !whatsappBridgeUrl;
-}
-
-async function buscarJsonBridgeComFallback(path, options = {}) {
-  let ultimoErro = null;
-
-  for (const base of listarBridgeBases()) {
-    try {
-      return await buscarJsonBridge(`${base}${path}`, options);
-    } catch (error) {
-      ultimoErro = error;
-    }
-  }
-
-  throw ultimoErro || new Error('Nao consegui falar com o bot local do WhatsApp.');
-}
-
 function limparSessaoBarbeiro() {
   authToken = null;
   assinaturaAtualId = null;
   localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+function mostrarMensagemTopo(mensagem = '') {
+  if (topbarActionMessage) {
+    topbarActionMessage.textContent = mensagem;
+  }
 }
 
 function renderizarDiasFuncionamento(container, selecionados = [1, 2, 3, 4, 5, 6]) {
@@ -518,29 +454,17 @@ async function carregarPainelBarbeiro() {
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
     valorMensalAtual = Number(config.valorMensal || 1);
-    whatsappBridgeUrl = config.whatsappBridgeUrl || null;
-    whatsappLocalOnly = Boolean(config.whatsappLocalOnly);
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
     generateQrButton.disabled = false;
     generateQrButton.hidden = false;
-    openLocalWhatsappButton.hidden = !whatsappLocalOnly;
-    whatsappHelpText.textContent = usaWhatsappHospedado()
-      ? 'Seu acesso esta liberado. Gere o QR Code diretamente pelo painel online para conectar o WhatsApp.'
-      : whatsappLocalOnly
-        ? 'Seu acesso esta liberado. Para o WhatsApp funcionar de forma estavel, gere o QR Code pelo bot local no seu computador.'
-        : 'Seu acesso esta liberado. Gere o QR Code e acompanhe seu numero de WhatsApp por aqui sempre que precisar.';
-    if (usaWhatsappHospedado()) {
-      whatsappStatusBadge.textContent = 'Pronto para conectar';
-      qrCodeImage.hidden = true;
-      qrStatusMessage.textContent = 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp pelo painel online.';
-    } else if (whatsappLocalOnly) {
-      whatsappStatusBadge.textContent = 'Configuracao local';
-      qrCodeImage.hidden = true;
-      qrStatusMessage.textContent =
-        'Execute o bot local no seu computador e clique em Gerar QR Code para conectar o WhatsApp com estabilidade.';
-    }
+    openLocalWhatsappButton.hidden = true;
+    whatsappHelpText.textContent =
+      'Seu acesso esta liberado. Gere o QR Code diretamente por este painel para conectar o WhatsApp.';
+    whatsappStatusBadge.textContent = 'Pronto para conectar';
+    qrCodeImage.hidden = true;
+    qrStatusMessage.textContent = 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.';
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
       buscarJson('/api/agendamentos'),
@@ -568,6 +492,7 @@ async function carregarPainelBarbeiro() {
     if (tratarErroSessao(error)) {
       return;
     }
+    mostrarMensagemTopo('Nao consegui atualizar o painel agora.');
     if (formMessage) {
       formMessage.textContent = 'Nao consegui carregar o painel do salao.';
     }
@@ -588,9 +513,7 @@ async function consultarStatusWhatsapp() {
   }
 
   try {
-    const status = usaWhatsappHospedado()
-      ? await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`)
-      : await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/status`);
+    const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
 
     if (status.status === 'erro') {
@@ -777,20 +700,12 @@ generateQrButton.addEventListener('click', async () => {
 
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
-    if (usaWhatsappHospedado()) {
-      await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
-        method: 'POST',
-      });
-    } else {
-      const bridgeToken = await buscarBridgeToken();
-      await buscarJsonBridgeComFallback(`/sessions/${assinaturaAtualId}/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          apiBaseUrl: window.location.origin,
-          bridgeToken,
-        }),
-      });
+    const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
+      method: 'POST',
+    });
+
+    if (resposta?.qrCode) {
+      atualizarStatusWhatsapp(resposta.status, resposta.qrCode);
     }
 
     await consultarStatusWhatsapp();
@@ -912,24 +827,36 @@ bloqueiosListInicio?.addEventListener('click', (event) => {
   void lidarCliqueExclusaoBloqueio(event, formMessageInicio);
 });
 
-logoutBarbeiroButton.addEventListener('click', async () => {
+logoutBarbeiroButton?.addEventListener('click', async () => {
+  const textoOriginal = logoutBarbeiroButton.textContent;
+  logoutBarbeiroButton.disabled = true;
+  mostrarMensagemTopo('Saindo do painel...');
+
   try {
     await buscarJson('/api/barbeiro/logout', { method: 'POST' });
   } catch (error) {
     console.error(error);
   } finally {
     limparSessaoBarbeiro();
-    window.location.href = '/';
+    window.location.replace('/');
+    logoutBarbeiroButton.disabled = false;
+    logoutBarbeiroButton.textContent = textoOriginal;
   }
 });
 
-refreshButton.addEventListener('click', carregarPainelBarbeiro);
-openLocalWhatsappButton?.addEventListener('click', () => {
-  qrStatusMessage.textContent =
-    window.location.protocol === 'https:'
-      ? 'Abra o backend local e execute o arquivo iniciar-whatsapp-online.bat para expor o bot local com tunnel HTTPS. Depois atualize o painel.'
-      : 'Abra o backend local e execute o arquivo iniciar-whatsapp.bat para gerar o QR Code do WhatsApp.';
-  whatsappStatusBadge.textContent = 'Configuracao local';
+refreshButton?.addEventListener('click', async () => {
+  const textoOriginal = refreshButton.textContent;
+  refreshButton.disabled = true;
+  refreshButton.textContent = 'Atualizando...';
+  mostrarMensagemTopo('Atualizando os dados do painel...');
+
+  try {
+    await carregarPainelBarbeiro();
+    mostrarMensagemTopo('Painel atualizado com sucesso.');
+  } finally {
+    refreshButton.disabled = false;
+    refreshButton.textContent = textoOriginal;
+  }
 });
 mesFaturamentoInput?.addEventListener('change', () => {
   void carregarFaturamentoMesEscolhido();
