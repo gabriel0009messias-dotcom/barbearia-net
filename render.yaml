@@ -13,7 +13,7 @@ services:
       - key: PUBLIC_APP_URL
         value: https://barbearia-net.onrender.com
       - key: EVOLUTION_API_URL
-        sync: false
+        value: https://evolution-api-3-bp28.onrender.com
       - key: EVOLUTION_API_KEY
         sync: false
       - key: EVOLUTION_API_TIMEOUT_MS
