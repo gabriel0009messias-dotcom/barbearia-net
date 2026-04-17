@@ -6,9 +6,29 @@ function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/$/, '');
 }
 
+function obterPrimeiroEnvPreenchido(chaves = []) {
+  for (const chave of chaves) {
+    const valor = String(process.env[chave] || '').trim();
+
+    if (valor) {
+      return valor;
+    }
+  }
+
+  return '';
+}
+
 function getEvolutionConfig() {
-  const baseUrl = normalizarBaseUrl(process.env.EVOLUTION_API_URL);
-  const apiKey = String(process.env.EVOLUTION_API_KEY || '').trim();
+  const baseUrl = normalizarBaseUrl(
+    obterPrimeiroEnvPreenchido(['EVOLUTION_API_URL', 'WHATSAPP_EVOLUTION_API_URL']) ||
+      'https://evolution-api-3-bp28.onrender.com'
+  );
+  const apiKey = obterPrimeiroEnvPreenchido([
+    'EVOLUTION_API_KEY',
+    'WHATSAPP_EVOLUTION_API_KEY',
+    'AUTHENTICATION_API_KEY',
+    'API_KEY',
+  ]);
 
   return {
     baseUrl,
