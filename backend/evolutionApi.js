@@ -20,6 +20,14 @@ function getEvolutionConfig() {
   };
 }
 
+function parseBooleanEnv(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
+}
+
 function createEvolutionError(message, statusCode = 500, code = 'EVOLUTION_ERROR', details = null) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -138,6 +146,7 @@ async function evolutionRequest(path, options = {}) {
     } catch (error) {
       const isAbort = error?.name === 'AbortError';
       const isFetchError = error instanceof TypeError;
+      const networkCode = String(error?.cause?.code || error?.code || '').trim().toUpperCase();
 
       if (tentativa < totalTentativas && (isAbort || isFetchError)) {
         logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path}`, error);
@@ -150,6 +159,22 @@ async function evolutionRequest(path, options = {}) {
       }
 
       if (isFetchError) {
+        if (networkCode === 'ENOTFOUND') {
+          throw createEvolutionError(
+            'Nao foi possivel resolver o DNS da Evolution API. Verifique a URL configurada no servidor.',
+            503,
+            'EVOLUTION_DNS_ERROR'
+          );
+        }
+
+        if (networkCode === 'ECONNREFUSED') {
+          throw createEvolutionError(
+            'A conexao com a Evolution API foi recusada. Verifique se o servico esta online e aceitando conexoes.',
+            503,
+            'EVOLUTION_CONNECTION_REFUSED'
+          );
+        }
+
         throw createEvolutionError(
           'Nao foi possivel conectar na Evolution API. Verifique a URL do servidor e se ele esta online.',
           503,
@@ -168,6 +193,24 @@ async function evolutionRequest(path, options = {}) {
 
 function gerarNomeInstancia(assinaturaId) {
   return `barbearia-${assinaturaId}`;
+}
+
+function extrairConteudoQr(payload = null) {
+  const candidatos = [
+    payload?.code,
+    payload?.base64,
+    payload?.qrcode,
+    payload?.qr,
+    payload?.data?.code,
+    payload?.data?.qrcode,
+    payload?.response?.code,
+    payload?.response?.qrcode,
+    payload?.response?.qr,
+  ];
+
+  const conteudo = candidatos.find((item) => typeof item === 'string' && item.trim());
+
+  return conteudo ? String(conteudo).trim() : '';
 }
 
 function construirQrCodeUrl(code = '') {
@@ -197,7 +240,27 @@ async function buscarInstancias(instanceName = '') {
     method: 'GET',
   });
 
-  return Array.isArray(payload) ? payload : [];
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.response)) {
+    return payload.response;
+  }
+
+  if (Array.isArray(payload?.instances)) {
+    return payload.instances;
+  }
+
+  if (Array.isArray(payload?.response?.instances)) {
+    return payload.response.instances;
+  }
+
+  if (payload?.instance) {
+    return [payload];
+  }
+
+  return [];
 }
 
 async function buscarInstancia(instanceName) {
@@ -210,12 +273,23 @@ async function buscarInstancia(instanceName) {
 }
 
 async function criarInstancia(instanceName) {
+  const alwaysOnline = parseBooleanEnv(process.env.EVOLUTION_ALWAYS_ONLINE, true);
+  const readMessages = parseBooleanEnv(process.env.EVOLUTION_READ_MESSAGES, false);
+  const readStatus = parseBooleanEnv(process.env.EVOLUTION_READ_STATUS, false);
+  const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, true);
+
   return evolutionRequest('/instance/create', {
     method: 'POST',
     body: JSON.stringify({
       instanceName,
       qrcode: true,
       integration: 'WHATSAPP-BAILEYS',
+      alwaysOnline,
+      readMessages,
+      readStatus,
+      syncFullHistory,
+      rejectCall: true,
+      groupsIgnore: true,
     }),
   });
 }
@@ -246,6 +320,7 @@ module.exports = {
   createEvolutionError,
   logEvolutionError,
   gerarNomeInstancia,
+  extrairConteudoQr,
   construirQrCodeUrl,
   validarConexaoApi,
   buscarInstancias,

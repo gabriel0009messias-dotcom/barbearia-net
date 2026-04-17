@@ -79,6 +79,7 @@ let whatsappEnabled = false;
 let activeSectionId = 'inicio';
 let qrRequestInFlight = false;
 let ultimoQrGeradoEm = 0;
+let ultimoStatusWhatsapp = 'nao_configurado';
 
 function formatarData(data) {
   if (!data) return '-';
@@ -345,6 +346,7 @@ function renderizarBloqueios(bloqueios) {
 }
 
 function atualizarStatusWhatsapp(status, qrCode) {
+  ultimoStatusWhatsapp = status || 'nao_configurado';
   const mapa = {
     nao_configurado: 'Aguardando cadastro',
     iniciando: 'Preparando QR',
@@ -540,15 +542,6 @@ async function consultarStatusWhatsapp() {
       qrStatusMessage.textContent = status.ultimoErro || status.mensagem || 'Nao consegui iniciar o WhatsApp.';
     }
 
-    if (status.precisaQr && !status.conectado && !status.qrCode && !qrRequestInFlight) {
-      const deveRegenerar = Date.now() - ultimoQrGeradoEm >= 15000;
-
-      if (deveRegenerar) {
-        await solicitarQrWhatsapp({ silencioso: true });
-        return;
-      }
-    }
-
     if (status.conectado || status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
       clearInterval(whatsappPolling);
       whatsappPolling = null;
@@ -578,6 +571,7 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
     generateQrButton.disabled = true;
     generateQrButton.textContent = 'Gerando QR...';
     qrStatusMessage.textContent = 'Gerando QR Code do WhatsApp...';
+    whatsappStatusBadge.textContent = 'Preparando QR';
   }
 
   let ultimaFalha = null;
@@ -791,6 +785,12 @@ generateQrButton.addEventListener('click', async () => {
   }
 
   try {
+    if (ultimoStatusWhatsapp === 'iniciando') {
+      qrStatusMessage.textContent = 'A conexao ja esta em andamento. Aguarde alguns segundos para o QR aparecer.';
+      iniciarPollingWhatsapp();
+      return;
+    }
+
     const resposta = await solicitarQrWhatsapp();
 
     if (resposta?.conectado) {

@@ -248,6 +248,9 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'senha_hash', 'TEXT');
   garantirColuna('assinaturas', 'senha_salt', 'TEXT');
   garantirColuna('assinaturas', 'whatsapp_bridge_token', 'TEXT');
+  garantirColuna('assinaturas', 'whatsapp_ultimo_erro', 'TEXT');
+  garantirColuna('assinaturas', 'whatsapp_ultimo_check_em', 'TEXT');
+  garantirColuna('assinaturas', 'whatsapp_ultimo_qr_em', 'TEXT');
   garantirColuna('assinaturas', 'gateway_provider', 'TEXT');
   garantirColuna('assinaturas', 'gateway_status', 'TEXT');
   garantirColuna('assinaturas', 'gateway_external_reference', 'TEXT');

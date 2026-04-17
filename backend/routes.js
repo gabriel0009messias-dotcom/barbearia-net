@@ -9,6 +9,7 @@ const {
   createEvolutionError,
   logEvolutionError,
   gerarNomeInstancia,
+  extrairConteudoQr,
   construirQrCodeUrl,
   validarConexaoApi,
   buscarInstancia,
@@ -29,6 +30,7 @@ const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
 const ADMIN_PASSWORD = 'rios123456';
 const adminSessions = new Map();
 const barberSessions = new Map();
+const whatsappQrJobs = new Map();
 const DIAS_SEMANA = [
   { value: 0, label: 'Domingo' },
   { value: 1, label: 'Segunda-feira' },
@@ -1256,6 +1258,31 @@ function respostaStatusWhatsapp({
   };
 }
 
+function agoraIso() {
+  return new Date().toISOString();
+}
+
+function precisaGerarQrPorStatus(status = '') {
+  return ['nao_configurado', 'close', 'closed', 'disconnected', 'logout'].includes(String(status || '').trim().toLowerCase());
+}
+
+function compartilharGeracaoQr(assinaturaId, executor) {
+  if (whatsappQrJobs.has(assinaturaId)) {
+    return whatsappQrJobs.get(assinaturaId);
+  }
+
+  const job = Promise.resolve()
+    .then(executor)
+    .finally(() => {
+      if (whatsappQrJobs.get(assinaturaId) === job) {
+        whatsappQrJobs.delete(assinaturaId);
+      }
+    });
+
+  whatsappQrJobs.set(assinaturaId, job);
+  return job;
+}
+
 async function validarEvolutionApiDisponivel() {
   await validarConexaoApi();
 }
@@ -1272,6 +1299,21 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappStatus')) {
     campos.push('whatsapp_status = ?');
     params.push(valores.whatsappStatus || 'nao_configurado');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoErro')) {
+    campos.push('whatsapp_ultimo_erro = ?');
+    params.push(valores.whatsappUltimoErro || null);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoCheckEm')) {
+    campos.push('whatsapp_ultimo_check_em = ?');
+    params.push(valores.whatsappUltimoCheckEm || null);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoQrEm')) {
+    campos.push('whatsapp_ultimo_qr_em = ?');
+    params.push(valores.whatsappUltimoQrEm || null);
   }
 
   if (!campos.length) {
@@ -1293,6 +1335,9 @@ async function resetarSessaoWhatsapp(assinaturaId) {
   await persistirSessaoWhatsapp(assinaturaId, {
     whatsappSession: null,
     whatsappStatus: 'nao_configurado',
+    whatsappUltimoErro: null,
+    whatsappUltimoCheckEm: agoraIso(),
+    whatsappUltimoQrEm: null,
   });
 }
 
@@ -1337,6 +1382,12 @@ async function consultarStatusWhatsappEvolution(assinatura) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim();
 
   if (!instanceName) {
+    await persistirSessaoWhatsapp(assinatura.id, {
+      whatsappStatus: 'nao_configurado',
+      whatsappUltimoErro: null,
+      whatsappUltimoCheckEm: agoraIso(),
+    });
+
     return respostaStatusWhatsapp({
       status: 'nao_configurado',
       instancia: null,
@@ -1353,6 +1404,8 @@ async function consultarStatusWhatsappEvolution(assinatura) {
 
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: statusMapeado,
+      whatsappUltimoErro: null,
+      whatsappUltimoCheckEm: agoraIso(),
     });
 
     if (statusMapeado === 'conectado') {
@@ -1365,11 +1418,21 @@ async function consultarStatusWhatsappEvolution(assinatura) {
       });
     }
 
+    if (statusMapeado === 'iniciando') {
+      return respostaStatusWhatsapp({
+        status: statusMapeado,
+        instancia: instanceName,
+        conectado: false,
+        precisaQr: false,
+        mensagem: 'Conexao em andamento. Aguarde a confirmacao do WhatsApp.',
+      });
+    }
+
     return respostaStatusWhatsapp({
       status: statusMapeado,
       instancia: instanceName,
       conectado: false,
-      precisaQr: true,
+      precisaQr: precisaGerarQrPorStatus(statusMapeado),
       mensagem: 'A instancia existe, mas ainda precisa conectar o WhatsApp.',
     });
   } catch (error) {
@@ -1390,6 +1453,8 @@ async function consultarStatusWhatsappEvolution(assinatura) {
 
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: 'erro',
+      whatsappUltimoErro: error.message || 'Falha ao consultar a Evolution API.',
+      whatsappUltimoCheckEm: agoraIso(),
     });
 
     return respostaStatusWhatsapp({
@@ -1404,76 +1469,88 @@ async function consultarStatusWhatsappEvolution(assinatura) {
 }
 
 async function gerarQrWhatsappEvolution(assinatura) {
-  let ultimaFalha = null;
+  return compartilharGeracaoQr(assinatura.id, async () => {
+    let ultimaFalha = null;
 
-  for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
-    try {
-      const instanceName = await garantirInstanciaWhatsapp(assinatura);
-      const estadoAtual = await consultarStatusWhatsappEvolution({
-        ...assinatura,
-        whatsapp_session: instanceName,
-      });
-
-      if (estadoAtual.conectado) {
-        return respostaStatusWhatsapp({
-          ...estadoAtual,
-          status: 'success',
-          qrCode: null,
-          qr: null,
-          precisaQr: false,
-          mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
+    for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+      try {
+        const instanceName = await garantirInstanciaWhatsapp(assinatura);
+        const estadoAtual = await consultarStatusWhatsappEvolution({
+          ...assinatura,
+          whatsapp_session: instanceName,
         });
-      }
 
-      const conexao = await conectarInstancia(instanceName);
-      const qrCode = construirQrCodeUrl(conexao?.code);
+        if (estadoAtual.conectado) {
+          return respostaStatusWhatsapp({
+            ...estadoAtual,
+            status: 'success',
+            qrCode: null,
+            qr: null,
+            precisaQr: false,
+            mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
+          });
+        }
 
-      if (!qrCode) {
-        throw createEvolutionError(
-          'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
-          502,
-          'EVOLUTION_QR_EMPTY'
-        );
-      }
+        const conexao = await conectarInstancia(instanceName);
+        const qrCode = construirQrCodeUrl(extrairConteudoQr(conexao));
 
-      await persistirSessaoWhatsapp(assinatura.id, {
-        whatsappSession: instanceName,
-        whatsappStatus: 'qr_pronto',
-      });
+        if (!qrCode) {
+          throw createEvolutionError(
+            'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
+            502,
+            'EVOLUTION_QR_EMPTY',
+            conexao || null
+          );
+        }
 
-      return respostaStatusWhatsapp({
-        status: 'success',
-        qrCode,
-        qr: qrCode,
-        ultimoErro: null,
-        instancia: instanceName,
-        conectado: false,
-        precisaQr: true,
-        mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
-      });
-    } catch (error) {
-      ultimaFalha = error;
-      logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/3`, error);
+        await persistirSessaoWhatsapp(assinatura.id, {
+          whatsappSession: instanceName,
+          whatsappStatus: 'qr_pronto',
+          whatsappUltimoErro: null,
+          whatsappUltimoCheckEm: agoraIso(),
+          whatsappUltimoQrEm: agoraIso(),
+        });
 
-      if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
-        await resetarSessaoWhatsapp(assinatura.id);
-      }
+        return respostaStatusWhatsapp({
+          status: 'success',
+          qrCode,
+          qr: qrCode,
+          ultimoErro: null,
+          instancia: instanceName,
+          conectado: false,
+          precisaQr: true,
+          mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
+        });
+      } catch (error) {
+        ultimaFalha = error;
+        logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/3`, error);
 
-      if (tentativa < 3) {
-        await sleep(2000);
+        await persistirSessaoWhatsapp(assinatura.id, {
+          whatsappStatus: 'erro',
+          whatsappUltimoErro: error.message || 'Falha ao gerar QR Code do WhatsApp.',
+          whatsappUltimoCheckEm: agoraIso(),
+        });
+
+        if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
+          await resetarSessaoWhatsapp(assinatura.id);
+        }
+
+        if (tentativa < 3) {
+          await sleep(2000);
+        }
       }
     }
-  }
 
-  return respostaStatusWhatsapp({
-    status: 'error',
-    qrCode: null,
-    qr: null,
-    ultimoErro: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
-    instancia: String(assinatura?.whatsapp_session || '').trim() || null,
-    conectado: false,
-    precisaQr: false,
-    mensagem: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
+    return respostaStatusWhatsapp({
+      status: 'error',
+      qrCode: null,
+      qr: null,
+      ultimoErro: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
+      instancia: String(assinatura?.whatsapp_session || '').trim() || null,
+      conectado: false,
+      precisaQr: false,
+      mensagem: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
+    });
   });
 }
 
@@ -2190,7 +2267,6 @@ router.post('/publico/assinaturas', async (req, res) => {
 
     const suporteNumero = await getConfiguracao('suporte_numero');
     const proximoVencimento = calcularProximoVencimento(dia);
-    const whatsappSession = `assinatura-${Date.now()}`;
     const diasSerializados = serializarDiasFuncionamento(diasFuncionamento);
     const credenciais = criarCredenciaisSenha(senha);
 
@@ -2233,7 +2309,7 @@ router.post('/publico/assinaturas', async (req, res) => {
         proximoVencimento,
         whatsappNumero || telefone,
         'nao_configurado',
-        whatsappSession,
+        null,
         0,
         null,
         null,
@@ -2253,6 +2329,14 @@ router.post('/publico/assinaturas', async (req, res) => {
         [result.lastID, servico.nome, servico.preco]
       );
     }
+
+    await persistirSessaoWhatsapp(result.lastID, {
+      whatsappSession: gerarNomeInstancia(result.lastID),
+      whatsappStatus: 'nao_configurado',
+      whatsappUltimoErro: null,
+      whatsappUltimoCheckEm: null,
+      whatsappUltimoQrEm: null,
+    });
 
     const assinaturaCriada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [result.lastID]);
     const checkout = await criarCheckoutMercadoPagoParaAssinatura(assinaturaCriada, req);
