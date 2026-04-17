@@ -7,6 +7,7 @@ const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas }
 const {
   getEvolutionConfig,
   createEvolutionError,
+  logEvolutionError,
   gerarNomeInstancia,
   construirQrCodeUrl,
   validarConexaoApi,
@@ -814,6 +815,10 @@ function withTimeout(promise, timeoutMs, timeoutMessage) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function enviarEmailPorApi(config, payload) {
   if (config.provider === 'resend') {
     const response = await fetch('https://api.resend.com/emails', {
@@ -1232,6 +1237,7 @@ function mapearStatusWhatsappEvolution(state = '') {
 function respostaStatusWhatsapp({
   status = 'nao_configurado',
   qrCode = null,
+  qr = null,
   ultimoErro = null,
   instancia = null,
   conectado = false,
@@ -1241,6 +1247,7 @@ function respostaStatusWhatsapp({
   return {
     status,
     qrCode,
+    qr,
     ultimoErro,
     instancia,
     conectado: Boolean(conectado),
@@ -1280,6 +1287,13 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
      WHERE id = ?`,
     params
   );
+}
+
+async function resetarSessaoWhatsapp(assinaturaId) {
+  await persistirSessaoWhatsapp(assinaturaId, {
+    whatsappSession: null,
+    whatsappStatus: 'nao_configurado',
+  });
 }
 
 async function garantirInstanciaWhatsapp(assinatura) {
@@ -1359,6 +1373,21 @@ async function consultarStatusWhatsappEvolution(assinatura) {
       mensagem: 'A instancia existe, mas ainda precisa conectar o WhatsApp.',
     });
   } catch (error) {
+    logEvolutionError(`status da assinatura ${assinatura.id}`, error);
+
+    if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
+      await resetarSessaoWhatsapp(assinatura.id);
+
+      return respostaStatusWhatsapp({
+        status: 'nao_configurado',
+        ultimoErro: error.message,
+        instancia: null,
+        conectado: false,
+        precisaQr: true,
+        mensagem: 'A sessao anterior do WhatsApp nao existe mais. Gere um novo QR Code.',
+      });
+    }
+
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: 'erro',
     });
@@ -1375,45 +1404,76 @@ async function consultarStatusWhatsappEvolution(assinatura) {
 }
 
 async function gerarQrWhatsappEvolution(assinatura) {
-  const instanceName = await garantirInstanciaWhatsapp(assinatura);
-  const estadoAtual = await consultarStatusWhatsappEvolution({
-    ...assinatura,
-    whatsapp_session: instanceName,
-  });
+  let ultimaFalha = null;
 
-  if (estadoAtual.conectado) {
-    return respostaStatusWhatsapp({
-      ...estadoAtual,
-      qrCode: null,
-      precisaQr: false,
-      mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
-    });
+  for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+    try {
+      const instanceName = await garantirInstanciaWhatsapp(assinatura);
+      const estadoAtual = await consultarStatusWhatsappEvolution({
+        ...assinatura,
+        whatsapp_session: instanceName,
+      });
+
+      if (estadoAtual.conectado) {
+        return respostaStatusWhatsapp({
+          ...estadoAtual,
+          status: 'success',
+          qrCode: null,
+          qr: null,
+          precisaQr: false,
+          mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
+        });
+      }
+
+      const conexao = await conectarInstancia(instanceName);
+      const qrCode = construirQrCodeUrl(conexao?.code);
+
+      if (!qrCode) {
+        throw createEvolutionError(
+          'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
+          502,
+          'EVOLUTION_QR_EMPTY'
+        );
+      }
+
+      await persistirSessaoWhatsapp(assinatura.id, {
+        whatsappSession: instanceName,
+        whatsappStatus: 'qr_pronto',
+      });
+
+      return respostaStatusWhatsapp({
+        status: 'success',
+        qrCode,
+        qr: qrCode,
+        ultimoErro: null,
+        instancia: instanceName,
+        conectado: false,
+        precisaQr: true,
+        mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
+      });
+    } catch (error) {
+      ultimaFalha = error;
+      logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/3`, error);
+
+      if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
+        await resetarSessaoWhatsapp(assinatura.id);
+      }
+
+      if (tentativa < 3) {
+        await sleep(2000);
+      }
+    }
   }
-
-  const conexao = await conectarInstancia(instanceName);
-  const qrCode = construirQrCodeUrl(conexao?.code);
-
-  if (!qrCode) {
-    throw createEvolutionError(
-      'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
-      502,
-      'EVOLUTION_QR_EMPTY'
-    );
-  }
-
-  await persistirSessaoWhatsapp(assinatura.id, {
-    whatsappSession: instanceName,
-    whatsappStatus: 'qr_pronto',
-  });
 
   return respostaStatusWhatsapp({
-    status: 'qr_pronto',
-    qrCode,
-    ultimoErro: null,
-    instancia: instanceName,
+    status: 'error',
+    qrCode: null,
+    qr: null,
+    ultimoErro: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
+    instancia: String(assinatura?.whatsapp_session || '').trim() || null,
     conectado: false,
-    precisaQr: true,
-    mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
+    precisaQr: false,
+    mensagem: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
   });
 }
 
@@ -2231,8 +2291,9 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
     }
 
     const resultado = await gerarQrWhatsappEvolution(assinatura);
-    res.json({ ok: true, ...resultado });
+    res.json({ ok: resultado.status !== 'error', ...resultado });
   } catch (error) {
+    logEvolutionError(`inicio do whatsapp da assinatura ${id}`, error);
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
@@ -2255,7 +2316,38 @@ router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, 
     const resultado = await gerarQrWhatsappEvolution(assinatura);
     res.json(resultado);
   } catch (error) {
+    logEvolutionError(`endpoint qr da assinatura ${id}`, error);
     res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
+  try {
+    const assinatura = await carregarAssinaturaAtualizada(req.assinatura.id);
+
+    if (!assinatura) {
+      res.status(404).json({
+        status: 'error',
+        qr: null,
+        message: 'Assinatura nao encontrada.',
+      });
+      return;
+    }
+
+    const resultado = await gerarQrWhatsappEvolution(assinatura);
+    res.json({
+      status: resultado.status === 'error' ? 'error' : 'success',
+      qr: resultado.qr || resultado.qrCode || null,
+      message: resultado.mensagem || '',
+      conectado: Boolean(resultado.conectado),
+    });
+  } catch (error) {
+    logEvolutionError(`endpoint /whatsapp/qr da assinatura ${req.assinatura?.id || 'desconhecida'}`, error);
+    res.status(error.statusCode || 500).json({
+      status: 'error',
+      qr: null,
+      message: error.message || 'Falha ao gerar QR Code.',
+    });
   }
 });
 
@@ -2442,6 +2534,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
     const sessao = await consultarStatusWhatsappEvolution(assinatura);
     res.json(sessao);
   } catch (error) {
+    logEvolutionError(`status do whatsapp da assinatura ${id}`, error);
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
@@ -2492,6 +2585,7 @@ router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async
       })
     );
   } catch (error) {
+    logEvolutionError(`logout do whatsapp da assinatura ${id}`, error);
     res.status(error.statusCode || 500).json({ error: error.message });
   }
 });

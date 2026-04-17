@@ -21,7 +21,7 @@ services:
       - key: EVOLUTION_API_RETRY_ATTEMPTS
         value: 3
       - key: EVOLUTION_API_RETRY_DELAY_MS
-        value: 3000
+        value: 2000
     disk:
       name: barbearia-data
       mountPath: /var/data

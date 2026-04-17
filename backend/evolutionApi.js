@@ -1,6 +1,6 @@
 const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_API_TIMEOUT_MS || 15000);
 const DEFAULT_RETRY_ATTEMPTS = Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS || 3);
-const DEFAULT_RETRY_DELAY_MS = Number(process.env.EVOLUTION_API_RETRY_DELAY_MS || 3000);
+const DEFAULT_RETRY_DELAY_MS = Number(process.env.EVOLUTION_API_RETRY_DELAY_MS || 2000);
 
 function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/$/, '');
@@ -26,6 +26,16 @@ function createEvolutionError(message, statusCode = 500, code = 'EVOLUTION_ERROR
   error.code = code;
   error.details = details;
   return error;
+}
+
+function logEvolutionError(contexto, error) {
+  const detalhes = error?.details || error?.payload || null;
+  console.error(`[Evolution API] ${contexto}:`, {
+    message: error?.message || String(error),
+    code: error?.code || null,
+    statusCode: error?.statusCode || null,
+    details: detalhes,
+  });
 }
 
 function ensureEvolutionConfigured() {
@@ -116,6 +126,7 @@ async function evolutionRequest(path, options = {}) {
         );
 
         if (tentativa < totalTentativas && isRetryableStatus(response.status)) {
+          logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path}`, error);
           await sleep(retryDelayMs);
           continue;
         }
@@ -129,6 +140,7 @@ async function evolutionRequest(path, options = {}) {
       const isFetchError = error instanceof TypeError;
 
       if (tentativa < totalTentativas && (isAbort || isFetchError)) {
+        logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path}`, error);
         await sleep(retryDelayMs);
         continue;
       }
@@ -232,6 +244,7 @@ module.exports = {
   getEvolutionConfig,
   ensureEvolutionConfigured,
   createEvolutionError,
+  logEvolutionError,
   gerarNomeInstancia,
   construirQrCodeUrl,
   validarConexaoApi,
