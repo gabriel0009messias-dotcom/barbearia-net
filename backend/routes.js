@@ -6,11 +6,15 @@ const db = require('./database');
 const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas } = require('./asaas');
 const {
   getEvolutionConfig,
+  createEvolutionError,
   gerarNomeInstancia,
   construirQrCodeUrl,
+  validarConexaoApi,
+  buscarInstancia,
   criarInstancia,
   conectarInstancia,
   obterEstadoConexao,
+  desconectarInstancia,
 } = require('./evolutionApi');
 
 const router = express.Router();
@@ -1225,6 +1229,30 @@ function mapearStatusWhatsappEvolution(state = '') {
   return estado || 'nao_configurado';
 }
 
+function respostaStatusWhatsapp({
+  status = 'nao_configurado',
+  qrCode = null,
+  ultimoErro = null,
+  instancia = null,
+  conectado = false,
+  precisaQr = false,
+  mensagem = '',
+} = {}) {
+  return {
+    status,
+    qrCode,
+    ultimoErro,
+    instancia,
+    conectado: Boolean(conectado),
+    precisaQr: Boolean(precisaQr),
+    mensagem,
+  };
+}
+
+async function validarEvolutionApiDisponivel() {
+  await validarConexaoApi();
+}
+
 async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
   const campos = [];
   const params = [];
@@ -1257,6 +1285,20 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
 async function garantirInstanciaWhatsapp(assinatura) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
 
+  await validarEvolutionApiDisponivel();
+
+  const existente = await buscarInstancia(instanceName);
+
+  if (existente?.instance?.instanceName) {
+    if (instanceName !== assinatura?.whatsapp_session) {
+      await persistirSessaoWhatsapp(assinatura.id, {
+        whatsappSession: instanceName,
+      });
+    }
+
+    return instanceName;
+  }
+
   try {
     await criarInstancia(instanceName);
   } catch (error) {
@@ -1281,59 +1323,98 @@ async function consultarStatusWhatsappEvolution(assinatura) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim();
 
   if (!instanceName) {
-    return {
+    return respostaStatusWhatsapp({
       status: 'nao_configurado',
-      qrCode: null,
-      ultimoErro: null,
       instancia: null,
-    };
+      conectado: false,
+      precisaQr: true,
+      mensagem: 'Nenhuma sessao do WhatsApp foi iniciada ainda.',
+    });
   }
 
   try {
+    await validarEvolutionApiDisponivel();
     const estado = await obterEstadoConexao(instanceName);
     const statusMapeado = mapearStatusWhatsappEvolution(estado?.instance?.state);
-    let qrCode = null;
-
-    if (statusMapeado !== 'conectado') {
-      const conexao = await conectarInstancia(instanceName);
-      qrCode = construirQrCodeUrl(conexao?.code);
-
-      if (qrCode) {
-        await persistirSessaoWhatsapp(assinatura.id, {
-          whatsappStatus: 'qr_pronto',
-        });
-
-        return {
-          status: 'qr_pronto',
-          qrCode,
-          ultimoErro: null,
-          instancia: instanceName,
-        };
-      }
-    }
 
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: statusMapeado,
     });
 
-    return {
+    if (statusMapeado === 'conectado') {
+      return respostaStatusWhatsapp({
+        status: statusMapeado,
+        instancia: instanceName,
+        conectado: true,
+        precisaQr: false,
+        mensagem: 'WhatsApp conectado com sucesso.',
+      });
+    }
+
+    return respostaStatusWhatsapp({
       status: statusMapeado,
-      qrCode: null,
-      ultimoErro: null,
       instancia: instanceName,
-    };
+      conectado: false,
+      precisaQr: true,
+      mensagem: 'A instancia existe, mas ainda precisa conectar o WhatsApp.',
+    });
   } catch (error) {
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: 'erro',
     });
 
-    return {
+    return respostaStatusWhatsapp({
       status: 'erro',
-      qrCode: null,
       ultimoErro: error.message,
       instancia: instanceName,
-    };
+      conectado: false,
+      precisaQr: false,
+      mensagem: error.message,
+    });
   }
+}
+
+async function gerarQrWhatsappEvolution(assinatura) {
+  const instanceName = await garantirInstanciaWhatsapp(assinatura);
+  const estadoAtual = await consultarStatusWhatsappEvolution({
+    ...assinatura,
+    whatsapp_session: instanceName,
+  });
+
+  if (estadoAtual.conectado) {
+    return respostaStatusWhatsapp({
+      ...estadoAtual,
+      qrCode: null,
+      precisaQr: false,
+      mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
+    });
+  }
+
+  const conexao = await conectarInstancia(instanceName);
+  const qrCode = construirQrCodeUrl(conexao?.code);
+
+  if (!qrCode) {
+    throw createEvolutionError(
+      'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
+      502,
+      'EVOLUTION_QR_EMPTY'
+    );
+  }
+
+  await persistirSessaoWhatsapp(assinatura.id, {
+    whatsappSession: instanceName,
+    whatsappStatus: 'qr_pronto',
+  });
+
+  return respostaStatusWhatsapp({
+    status: 'qr_pronto',
+    qrCode,
+    ultimoErro: null,
+    instancia: instanceName,
+    conectado: false,
+    precisaQr: true,
+    mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
+  });
 }
 
 router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
@@ -1582,6 +1663,15 @@ router.get('/publico/assinatura-config', async (req, res) => {
       whatsappBridgeUrl: null,
       whatsappLocalOnly: false,
       whatsappProvider: evolution.enabled ? 'evolution_api' : 'indisponivel',
+      whatsappEnabled: evolution.enabled,
+      whatsappSetupMessage: evolution.enabled
+        ? ''
+        : 'Configure EVOLUTION_API_URL e EVOLUTION_API_KEY no servidor para liberar o QR Code do WhatsApp.',
+      whatsappRetry: {
+        attempts: evolution.retryAttempts,
+        delayMs: evolution.retryDelayMs,
+        timeoutMs: evolution.timeoutMs,
+      },
       gateway: {
         provider: 'mercado_pago',
         enabled: Boolean(getMercadoPagoAccessToken()),
@@ -2140,21 +2230,30 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
       return;
     }
 
-    const instanceName = await garantirInstanciaWhatsapp(assinatura);
-    const conexao = await conectarInstancia(instanceName);
-    const qrCode = construirQrCodeUrl(conexao?.code);
+    const resultado = await gerarQrWhatsappEvolution(assinatura);
+    res.json({ ok: true, ...resultado });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
 
-    await persistirSessaoWhatsapp(id, {
-      whatsappSession: instanceName,
-      whatsappStatus: qrCode ? 'qr_pronto' : 'iniciando',
-    });
+router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, res) => {
+  const { id } = req.params;
 
-    res.json({
-      ok: true,
-      status: qrCode ? 'qr_pronto' : 'iniciando',
-      instancia: instanceName,
-      qrCode,
-    });
+  try {
+    if (!assinaturaPertenceAoBarbeiro(req, res)) {
+      return;
+    }
+
+    const assinatura = await carregarAssinaturaAtualizada(id);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const resultado = await gerarQrWhatsappEvolution(assinatura);
+    res.json(resultado);
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
   }
@@ -2343,7 +2442,57 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
     const sessao = await consultarStatusWhatsappEvolution(assinatura);
     res.json(sessao);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    if (!assinaturaPertenceAoBarbeiro(req, res)) {
+      return;
+    }
+
+    const assinatura = await carregarAssinaturaAtualizada(id);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const instanceName = String(assinatura.whatsapp_session || '').trim();
+
+    if (!instanceName) {
+      res.json(
+        respostaStatusWhatsapp({
+          status: 'nao_configurado',
+          instancia: null,
+          conectado: false,
+          precisaQr: true,
+          mensagem: 'Nao havia sessao ativa para desconectar.',
+        })
+      );
+      return;
+    }
+
+    await validarEvolutionApiDisponivel();
+    await desconectarInstancia(instanceName);
+    await persistirSessaoWhatsapp(id, {
+      whatsappStatus: 'nao_configurado',
+    });
+
+    res.json(
+      respostaStatusWhatsapp({
+        status: 'nao_configurado',
+        instancia: instanceName,
+        conectado: false,
+        precisaQr: true,
+        mensagem: 'WhatsApp desconectado com sucesso.',
+      })
+    );
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 

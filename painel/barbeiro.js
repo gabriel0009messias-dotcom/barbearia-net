@@ -75,6 +75,7 @@ let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let whatsappPolling = null;
 let pixConfig = null;
 let valorMensalAtual = 1;
+let whatsappEnabled = false;
 let activeSectionId = 'inicio';
 
 function formatarData(data) {
@@ -454,17 +455,22 @@ async function carregarPainelBarbeiro() {
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     pixConfig = config.pix || null;
     valorMensalAtual = Number(config.valorMensal || 1);
+    whatsappEnabled = Boolean(config.whatsappEnabled);
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generateQrButton.disabled = false;
+    generateQrButton.disabled = !whatsappEnabled;
     generateQrButton.hidden = false;
     openLocalWhatsappButton.hidden = true;
-    whatsappHelpText.textContent =
-      'Seu acesso esta liberado. Gere o QR Code diretamente por este painel para conectar o WhatsApp.';
-    whatsappStatusBadge.textContent = 'Pronto para conectar';
+    whatsappHelpText.textContent = whatsappEnabled
+      ? 'Seu acesso esta liberado. Gere o QR Code diretamente por este painel para conectar o WhatsApp.'
+      : (config.whatsappSetupMessage ||
+          'O QR Code do WhatsApp ainda nao foi liberado neste servidor.');
+    whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
     qrCodeImage.hidden = true;
-    qrStatusMessage.textContent = 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.';
+    qrStatusMessage.textContent = whatsappEnabled
+      ? 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.'
+      : 'Finalize a configuracao da Evolution API no servidor para habilitar o WhatsApp.';
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
       buscarJson('/api/agendamentos'),
@@ -508,7 +514,7 @@ async function excluirBloqueio(id) {
 }
 
 async function consultarStatusWhatsapp() {
-  if (!assinaturaAtualId || !authToken) {
+  if (!assinaturaAtualId || !authToken || !whatsappEnabled) {
     return;
   }
 
@@ -516,11 +522,15 @@ async function consultarStatusWhatsapp() {
     const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
     atualizarStatusWhatsapp(status.status, status.qrCode);
 
-    if (status.status === 'erro') {
-      qrStatusMessage.textContent = status.ultimoErro || 'Nao consegui iniciar o WhatsApp.';
+    if (status.mensagem) {
+      qrStatusMessage.textContent = status.mensagem;
     }
 
-    if (status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
+    if (status.status === 'erro') {
+      qrStatusMessage.textContent = status.ultimoErro || status.mensagem || 'Nao consegui iniciar o WhatsApp.';
+    }
+
+    if (status.conectado || status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
       clearInterval(whatsappPolling);
       whatsappPolling = null;
     }
@@ -698,14 +708,29 @@ generateQrButton.addEventListener('click', async () => {
     return;
   }
 
+  if (!whatsappEnabled) {
+    qrStatusMessage.textContent =
+      'O servidor ainda nao foi configurado com EVOLUTION_API_URL e EVOLUTION_API_KEY.';
+    whatsappStatusBadge.textContent = 'Configurar';
+    return;
+  }
+
   try {
     qrStatusMessage.textContent = 'Preparando o QR Code do WhatsApp...';
     const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
       method: 'POST',
     });
 
-    if (resposta?.qrCode) {
-      atualizarStatusWhatsapp(resposta.status, resposta.qrCode);
+    atualizarStatusWhatsapp(resposta.status, resposta.qrCode);
+
+    if (resposta?.mensagem) {
+      qrStatusMessage.textContent = resposta.mensagem;
+    }
+
+    if (resposta?.conectado) {
+      clearInterval(whatsappPolling);
+      whatsappPolling = null;
+      return;
     }
 
     await consultarStatusWhatsapp();
