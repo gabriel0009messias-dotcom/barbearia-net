@@ -16,7 +16,8 @@ const runtimeErrorLogPath = path.join(__dirname, 'server-error.log');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();
 const adminSessions = new Map();
-const ADMIN_PIN = '5090';
+const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
+const ADMIN_PASSWORD = 'rios123456';
 let suporteNumeroAdmin = '--';
 const ACESSO_VITALICIO = {
   id: 1,
@@ -528,15 +529,19 @@ app.get('/controle-interno', (req, res) => {
       <section id="loginCard" class="card">
         <p class="eyebrow">Controle Interno</p>
         <h1>Painel administrativo</h1>
-        <p>Entre com o PIN do admin para gerenciar assinaturas.</p>
+        <p>Entre com o Gmail e a senha do admin para gerenciar assinaturas.</p>
         <div class="help">
-          <strong>PIN atual para teste: 5090</strong>
-          <p style="margin:8px 0 0">Se quiser, clique em Entrar rápido.</p>
+          <strong>Acesso do admin configurado</strong>
+          <p style="margin:8px 0 0">Use o Gmail e a senha do admin ou clique em Entrar rápido.</p>
         </div>
         <form id="loginForm" class="grid">
           <label>
-            PIN do admin
-            <input id="pinInput" type="password" value="5090" placeholder="Digite 5090" required />
+            Gmail do admin
+            <input id="emailInput" type="email" value="gabriel0009messias@gmail.com" placeholder="Digite o Gmail do admin" required />
+          </label>
+          <label>
+            Senha do admin
+            <input id="senhaInput" type="password" value="rios123456" placeholder="Digite a senha do admin" required />
           </label>
           <button class="primary" type="submit">Entrar</button>
           <button id="quickButton" class="secondary" type="button">Entrar rápido</button>
@@ -591,7 +596,8 @@ app.get('/controle-interno', (req, res) => {
       const loginCard = document.getElementById('loginCard');
       const adminPanel = document.getElementById('adminPanel');
       const loginForm = document.getElementById('loginForm');
-      const pinInput = document.getElementById('pinInput');
+      const emailInput = document.getElementById('emailInput');
+      const senhaInput = document.getElementById('senhaInput');
       const quickButton = document.getElementById('quickButton');
       const loginMessage = document.getElementById('loginMessage');
       const summaryText = document.getElementById('summaryText');
@@ -731,10 +737,10 @@ app.get('/controle-interno', (req, res) => {
         renderRows(assinaturas);
       }
 
-      async function enterAdmin(pin) {
+      async function enterAdmin(email, senha) {
         const payload = await api('/api/admin/login', {
           method: 'POST',
-          body: JSON.stringify({ pin }),
+          body: JSON.stringify({ email, senha }),
         });
         setToken(payload.token);
         loginCard.hidden = true;
@@ -747,7 +753,7 @@ app.get('/controle-interno', (req, res) => {
         loginMessage.textContent = 'Entrando...';
         loginMessage.classList.remove('error');
         try {
-          await enterAdmin(pinInput.value.trim());
+          await enterAdmin(emailInput.value.trim(), senhaInput.value);
           loginMessage.textContent = '';
         } catch (error) {
           loginMessage.textContent = error.message;
@@ -756,11 +762,12 @@ app.get('/controle-interno', (req, res) => {
       });
 
       quickButton.addEventListener('click', async () => {
-        pinInput.value = '5090';
+        emailInput.value = 'gabriel0009messias@gmail.com';
+        senhaInput.value = 'rios123456';
         loginMessage.textContent = 'Entrando...';
         loginMessage.classList.remove('error');
         try {
-          await enterAdmin('5090');
+          await enterAdmin('gabriel0009messias@gmail.com', 'rios123456');
           loginMessage.textContent = '';
         } catch (error) {
           loginMessage.textContent = error.message;
@@ -1009,10 +1016,11 @@ app.post('/api/barbeiro/login', (req, res) => {
 });
 
 app.post('/api/admin/login', (req, res) => {
-  const pin = String(req.body?.pin || '').trim();
+  const email = normalizarEmail(req.body?.email || '');
+  const senha = String(req.body?.senha || '');
 
-  if (pin !== ADMIN_PIN) {
-    res.status(401).json({ error: 'PIN admin invalido.' });
+  if (email !== normalizarEmail(ADMIN_EMAIL) || senha !== ADMIN_PASSWORD) {
+    res.status(401).json({ error: 'Email ou senha incorretos.' });
     return;
   }
 
