@@ -853,9 +853,94 @@ select {
   opacity: 0.7;
 }
 
+.danger {
+  background: rgba(229, 9, 20, 0.12);
+  color: #ff8c92;
+}
+
 .danger-button {
   background: rgba(229, 9, 20, 0.12);
   color: #ff8c92;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.status-chip-ativo {
+  background: rgba(125, 240, 177, 0.16);
+  color: #7df0b1;
+}
+
+.status-chip-pendente {
+  background: rgba(255, 201, 87, 0.14);
+  color: #ffd36c;
+}
+
+.status-chip-bloqueado {
+  background: rgba(255, 102, 112, 0.14);
+  color: #ff8c92;
+}
+
+.action-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.table-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.is-active-filter {
+  background: linear-gradient(135deg, var(--accent), #ff5a5f);
+  border-color: transparent;
+}
+
+.payment-panel {
+  border-color: rgba(255, 201, 87, 0.22);
+  background: rgba(255, 201, 87, 0.08);
+}
+
+.payment-panel .card-header {
+  margin-bottom: 12px;
+}
+
+.payment-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 20px;
+  align-items: start;
+}
+
+.pix-copy-box {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  word-break: break-all;
+}
+
+.payment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .compact-form {
@@ -1090,6 +1175,7 @@ code {
   .metrics,
   .support-grid,
   .price-grid,
+  .payment-layout,
   .whatsapp-connect-grid,
   .service-row,
   .schedule-grid {

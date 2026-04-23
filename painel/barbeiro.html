@@ -149,35 +149,63 @@
             </p>
           </section>
 
-          <section id="paymentReminderCard" class="panel-card" hidden>
+          <section id="paymentReminderCard" class="panel-card payment-panel" hidden>
             <div class="card-header">
               <div>
-                <p class="eyebrow">Lembrete de pagamento</p>
-                <h3>Seu vencimento esta chegando</h3>
+                <p class="eyebrow">Pagamento via PIX</p>
+                <h3>Regularize sua mensalidade</h3>
               </div>
             </div>
-            <p id="paymentReminderText" class="table-subcopy">
-              Seu pagamento via Pix esta proximo. Regularize antes do vencimento para nao bloquear o acesso.
-            </p>
+            <div class="payment-layout">
+              <div>
+                <p id="paymentReminderText" class="table-subcopy">
+                  Seu pagamento via Pix esta proximo. Regularize antes do vencimento para nao bloquear o acesso.
+                </p>
+                <div class="pix-copy-box">
+                  <strong id="paymentPixValor">Valor: R$ 0,00</strong>
+                  <p id="paymentPixCopiaCola" class="table-subcopy">Codigo Pix copia e cola</p>
+                </div>
+                <p id="paymentPixInstruction" class="table-subcopy">
+                  Apos o pagamento, envie o comprovante no WhatsApp.
+                </p>
+                <div class="payment-actions">
+                  <a id="paymentWhatsappButton" class="primary-button" href="#" target="_blank" rel="noopener noreferrer">
+                    Enviar comprovante no WhatsApp
+                  </a>
+                  <button id="copyPixButton" class="secondary-pill-button" type="button">Copiar codigo PIX</button>
+                </div>
+              </div>
+              <div class="qr-panel">
+                <img id="paymentPixQrImage" alt="QR Code Pix" hidden />
+                <p class="table-subcopy">QR Code fixo da mensalidade.</p>
+              </div>
+            </div>
           </section>
 
           <section id="painelBloqueadoMessage" class="panel-card blocked-panel" hidden>
             <div class="card-header">
               <div>
                 <p class="eyebrow">Acesso bloqueado</p>
-                <h3>Sua assinatura nao esta liberada</h3>
+                <h3>Seu acesso foi bloqueado</h3>
               </div>
             </div>
             <p id="blockedMessageText" class="table-subcopy">
-              Regularize o pagamento via Pix para voltar a usar o sistema.
+              Pagamento pendente.
             </p>
             <div id="blockedPixCard" class="support-note blocked-pix-card" hidden>
-              <strong>Pagamento via Pix</strong>
+              <strong>Pagamento via PIX</strong>
+              <p id="blockedPixValorLabel">Valor: R$ 0,00</p>
               <p id="blockedPixFavorecidoLabel">Favorecido: --</p>
               <div id="blockedPixQrPanel" class="pix-qr-panel" hidden>
                 <img id="blockedPixQrImage" alt="QR Code do pagamento Pix" hidden />
               </div>
               <p id="blockedPixChaveLabel">Chave Pix: --</p>
+              <p id="blockedPixCopiaColaLabel" class="table-subcopy">Pix copia e cola: --</p>
+              <div class="payment-actions">
+                <a id="blockedWhatsappButton" class="primary-button" href="#" target="_blank" rel="noopener noreferrer">
+                  Enviar comprovante no WhatsApp
+                </a>
+              </div>
             </div>
           </section>
 

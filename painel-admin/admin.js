@@ -2,6 +2,7 @@ const assinaturaCount = document.getElementById('assinaturaCount');
 const totalAssinaturas = document.getElementById('totalAssinaturas');
 const assinaturasAtivas = document.getElementById('assinaturasAtivas');
 const assinaturasPendentes = document.getElementById('assinaturasPendentes');
+const assinaturasBloqueadas = document.getElementById('assinaturasBloqueadas');
 const assinaturasTable = document.getElementById('assinaturasTable');
 const refreshButton = document.getElementById('refreshButton');
 const logoutButton = document.getElementById('logoutButton');
@@ -14,20 +15,26 @@ const copiarCadastroLinkButton = document.getElementById('copiarCadastroLinkButt
 const cadastroLinkMessage = document.getElementById('cadastroLinkMessage');
 const pagamentoResumo = document.getElementById('pagamentoResumo');
 const vencimentoResumo = document.getElementById('vencimentoResumo');
+const pixResumo = document.getElementById('pixResumo');
+const filtroButtons = Array.from(document.querySelectorAll('[data-filtro-status]'));
 
 const adminToken = localStorage.getItem('barbearia_admin_token');
-let statusDisponiveis = ['pendente', 'ativo', 'bloqueado'];
+const renderLink = 'https://barbearia-net.onrender.com/';
+
+let assinaturasCache = [];
+let filtroStatusAtual = 'todos';
 
 if (!adminToken) {
   window.location.href = '/controle-interno';
 }
 
-// Exibir o link correto de cadastro conforme ambiente
-const renderLink = 'https://barbearia-net.onrender.com/';
 cadastroLinkInput.value = renderLink;
 
 function formatarData(data) {
-  if (!data) return '-';
+  if (!data) {
+    return '-';
+  }
+
   return new Date(`${data}T00:00:00`).toLocaleDateString('pt-BR');
 }
 
@@ -38,6 +45,13 @@ function escaparHtml(texto = '') {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function formatarMoeda(valor) {
+  return Number(valor || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  });
 }
 
 async function buscarJson(url, options = {}) {
@@ -56,7 +70,7 @@ async function buscarJson(url, options = {}) {
     if (response.status === 401) {
       localStorage.removeItem('barbearia_admin_token');
       window.location.href = '/controle-interno';
-      return;
+      return null;
     }
 
     throw new Error(payload?.error || `Falha ao carregar ${url}`);
@@ -65,11 +79,11 @@ async function buscarJson(url, options = {}) {
   return payload;
 }
 
-function renderizarResumo(assinaturas) {
+function renderizarResumo(assinaturas, config) {
   const total = assinaturas.length;
   const ativas = assinaturas.filter((item) => item.status === 'ativo').length;
   const pendentes = assinaturas.filter((item) => item.status === 'pendente').length;
-  const cartao = assinaturas.filter((item) => item.metodo_pagamento === 'cartao').length;
+  const bloqueadas = assinaturas.filter((item) => item.status === 'bloqueado').length;
   const pix = assinaturas.filter((item) => item.metodo_pagamento === 'pix').length;
   const dia5 = assinaturas.filter((item) => Number(item.dia_vencimento) === 5).length;
   const dia12 = assinaturas.filter((item) => Number(item.dia_vencimento) === 12).length;
@@ -78,33 +92,49 @@ function renderizarResumo(assinaturas) {
   totalAssinaturas.textContent = String(total);
   assinaturasAtivas.textContent = String(ativas);
   assinaturasPendentes.textContent = String(pendentes);
-  assinaturaCount.textContent = `${total} cadastros`;
-  pagamentoResumo.textContent = `Cartao: ${cartao} | Pix: ${pix}`;
+  assinaturasBloqueadas.textContent = String(bloqueadas);
+  pagamentoResumo.textContent = `Pix: ${pix}`;
   vencimentoResumo.textContent = `Vencimentos 5: ${dia5} | 12: ${dia12} | 24: ${dia24}`;
+  pixResumo.textContent = config?.pix?.copiaCola
+    ? `Valor fixo ${formatarMoeda(config.pix.valor)} | Chave ${config.pix.chaveExibicao || config.pix.chave}`
+    : 'QR Code e copia e cola fixos para todos os clientes.';
 }
 
-function montarOpcoesStatus(statusAtual) {
-  return statusDisponiveis
-    .map(
-      (status) =>
-        `<option value="${status}" ${status === statusAtual ? 'selected' : ''}>${status.toUpperCase()}</option>`
-    )
-    .join('');
-}
-
-function resumirServicos(servicos = []) {
-  if (!servicos.length) {
-    return '-';
+function obterAssinaturasFiltradas() {
+  if (filtroStatusAtual === 'todos') {
+    return assinaturasCache;
   }
 
-  return servicos
-    .map((item) => `${item.nome} (${Number(item.preco).toFixed(2).replace('.', ',')})`)
-    .join(', ');
+  return assinaturasCache.filter((item) => item.status === filtroStatusAtual);
 }
 
-function renderizarAssinaturas(assinaturas) {
+function atualizarFiltroAtivo() {
+  filtroButtons.forEach((button) => {
+    button.classList.toggle('is-active-filter', button.dataset.filtroStatus === filtroStatusAtual);
+  });
+}
+
+function classeStatus(status) {
+  const atual = String(status || '').toLowerCase();
+
+  if (atual === 'ativo') {
+    return 'status-chip status-chip-ativo';
+  }
+
+  if (atual === 'pendente') {
+    return 'status-chip status-chip-pendente';
+  }
+
+  return 'status-chip status-chip-bloqueado';
+}
+
+function renderizarAssinaturas() {
+  const assinaturas = obterAssinaturasFiltradas();
+  assinaturaCount.textContent = `${assinaturas.length} cadastros`;
+  atualizarFiltroAtivo();
+
   if (!assinaturas.length) {
-    assinaturasTable.innerHTML = '<tr><td colspan="11">Nenhuma assinatura cadastrada.</td></tr>';
+    assinaturasTable.innerHTML = '<tr><td colspan="10">Nenhum cliente encontrado nesse filtro.</td></tr>';
     return;
   }
 
@@ -114,40 +144,25 @@ function renderizarAssinaturas(assinaturas) {
         <tr>
           <td>
             <strong>${escaparHtml(item.barbearia_nome)}</strong><br />
-            <small>${escaparHtml(item.telefone || '-')}</small>
+            <small>${escaparHtml(item.responsavel_nome || '-')}</small>
           </td>
           <td>
-            ${escaparHtml(item.responsavel_nome || '-')}<br />
+            ${escaparHtml(item.telefone || '-')}<br />
             <small>${escaparHtml(item.email || '-')}</small>
           </td>
           <td>
-            ${escaparHtml((item.metodo_pagamento || '-').toUpperCase())}<br />
-            <small>R$ ${Number(item.valor_mensal || 0).toFixed(2).replace('.', ',')}</small>
+            <strong>${formatarData(item.proximo_vencimento)}</strong><br />
+            <small>${formatarMoeda(item.valor_mensal)}</small>
           </td>
           <td>
+            <span class="${classeStatus(item.status)}">${escaparHtml(String(item.status || '').toUpperCase())}</span>
+          </td>
+          <td>
+            <strong>${escaparHtml(item.atraso?.indicador || 'Em dia')}</strong><br />
             <small>${escaparHtml(item.lembrete_pagamento?.mensagem || 'Pagamento em dia.')}</small>
           </td>
           <td>
-            Dia ${escaparHtml(String(item.dia_vencimento || '-'))}<br />
-            <small>Prox.: ${formatarData(item.proximo_vencimento)}</small>
-          </td>
-          <td>
-            ${escaparHtml(item.whatsapp_numero || '-')}<br />
-            <small>${escaparHtml(item.whatsapp_status || 'nao_configurado')}</small>
-          </td>
-          <td>
-            <select class="status-select" data-field="status" data-id="${item.id}">
-              ${montarOpcoesStatus(item.status)}
-            </select>
-          </td>
-          <td>
-            <input
-              class="inline-input"
-              data-field="ultimoPagamento"
-              data-id="${item.id}"
-              type="date"
-              value="${item.ultimo_pagamento || ''}"
-            />
+            <input class="inline-input" data-field="ultimoPagamento" data-id="${item.id}" type="date" value="${item.ultimo_pagamento || ''}" />
           </td>
           <td>
             <input
@@ -155,14 +170,23 @@ function renderizarAssinaturas(assinaturas) {
               data-field="observacoes"
               data-id="${item.id}"
               type="text"
-              maxlength="160"
+              maxlength="180"
               value="${escaparHtml(item.observacoes || '')}"
-              placeholder="Ex.: pagou no Pix"
+              placeholder="Observacao interna"
             />
           </td>
-          <td><small>${escaparHtml(resumirServicos(item.servicos))}</small></td>
           <td>
-            <button class="table-action" data-action="salvar" data-id="${item.id}" type="button">Salvar</button>
+            <div class="action-stack">
+              <button class="table-action" data-action="copiar-cobranca" data-id="${item.id}" type="button">Copiar mensagem</button>
+              <a class="table-link-button" href="${item.cobranca?.lembreteLink || '#'}" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+            </div>
+          </td>
+          <td>
+            <div class="action-stack">
+              <button class="table-action" data-action="confirmar" data-id="${item.id}" type="button">Confirmar pagamento</button>
+              <button class="table-action danger-button" data-action="bloquear" data-id="${item.id}" type="button">Bloquear cliente</button>
+              <button class="table-action" data-action="salvar" data-id="${item.id}" type="button">Salvar obs.</button>
+            </div>
           </td>
           <td>
             <button class="table-action danger" data-action="excluir" data-id="${item.id}" type="button">Excluir</button>
@@ -182,12 +206,12 @@ async function carregarPainelAdmin() {
       buscarJson('/api/admin/assinaturas', { method: 'GET' }),
     ]);
 
-    statusDisponiveis = config.statusDisponiveis || statusDisponiveis;
+    assinaturasCache = assinaturas || [];
     suporteNumeroInput.value = config.suporteNumero || '';
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
 
-    renderizarResumo(assinaturas);
-    renderizarAssinaturas(assinaturas);
+    renderizarResumo(assinaturasCache, config);
+    renderizarAssinaturas();
   } catch (error) {
     console.error(error);
     suporteMessage.textContent = 'Nao consegui carregar seu painel admin.';
@@ -205,6 +229,7 @@ suporteForm.addEventListener('submit', async (event) => {
 
     supportNumberLabel.textContent = `Suporte: ${atualizado.suporteNumero || '--'}`;
     suporteMessage.textContent = 'Numero de suporte atualizado com sucesso.';
+    await carregarPainelAdmin();
   } catch (error) {
     console.error(error);
     suporteMessage.textContent = 'Nao consegui atualizar o numero de suporte.';
@@ -212,52 +237,76 @@ suporteForm.addEventListener('submit', async (event) => {
 });
 
 assinaturasTable.addEventListener('click', async (event) => {
-  const botaoSalvar = event.target.closest('button[data-action="salvar"]');
-  const botaoExcluir = event.target.closest('button[data-action="excluir"]');
+  const botao = event.target.closest('button[data-action]');
 
-  if (botaoSalvar) {
-    const { id } = botaoSalvar.dataset;
-    const status = document.querySelector(`[data-field="status"][data-id="${id}"]`)?.value;
-    const ultimoPagamento = document.querySelector(`[data-field="ultimoPagamento"][data-id="${id}"]`)?.value;
-    const observacoes = document.querySelector(`[data-field="observacoes"][data-id="${id}"]`)?.value;
-
-    try {
-      botaoSalvar.disabled = true;
-      await buscarJson(`/api/admin/assinaturas/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status, ultimoPagamento, observacoes }),
-      });
-
-      suporteMessage.textContent = 'Assinatura atualizada com sucesso.';
-      await carregarPainelAdmin();
-    } catch (error) {
-      console.error(error);
-      suporteMessage.textContent = 'Nao consegui salvar essa assinatura.';
-    } finally {
-      botaoSalvar.disabled = false;
-    }
+  if (!botao) {
     return;
   }
 
-  if (botaoExcluir) {
-    const { id } = botaoExcluir.dataset;
-    if (!confirm('Tem certeza que deseja excluir este cliente? Esta ação não pode ser desfeita.')) {
+  const { id, action } = botao.dataset;
+  const ultimoPagamento = document.querySelector(`[data-field="ultimoPagamento"][data-id="${id}"]`)?.value;
+  const observacoes = document.querySelector(`[data-field="observacoes"][data-id="${id}"]`)?.value?.trim() || '';
+  const assinatura = assinaturasCache.find((item) => String(item.id) === String(id));
+
+  try {
+    botao.disabled = true;
+
+    if (action === 'copiar-cobranca') {
+      await navigator.clipboard.writeText(assinatura?.cobranca?.mensagem || '');
+      suporteMessage.textContent = 'Mensagem de cobranca copiada.';
       return;
     }
-    try {
-      botaoExcluir.disabled = true;
-      await buscarJson(`/api/admin/assinaturas/${id}`, {
-        method: 'DELETE'
+
+    if (action === 'confirmar') {
+      await buscarJson(`/api/admin/assinaturas/${id}/confirmar-pagamento`, {
+        method: 'POST',
+        body: JSON.stringify({ dataPagamento: ultimoPagamento, observacoes }),
       });
-      suporteMessage.textContent = 'Assinatura excluída com sucesso.';
+      suporteMessage.textContent = 'Pagamento confirmado manualmente.';
       await carregarPainelAdmin();
-    } catch (error) {
-      console.error(error);
-      suporteMessage.textContent = 'Nao consegui excluir essa assinatura.';
-    } finally {
-      botaoExcluir.disabled = false;
+      return;
     }
-    return;
+
+    if (action === 'bloquear') {
+      await buscarJson(`/api/admin/assinaturas/${id}/bloquear`, {
+        method: 'POST',
+        body: JSON.stringify({ observacoes }),
+      });
+      suporteMessage.textContent = 'Cliente bloqueado manualmente.';
+      await carregarPainelAdmin();
+      return;
+    }
+
+    if (action === 'salvar') {
+      await buscarJson(`/api/admin/assinaturas/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: assinatura?.status || 'pendente',
+          ultimoPagamento,
+          observacoes,
+        }),
+      });
+      suporteMessage.textContent = 'Observacao salva com sucesso.';
+      await carregarPainelAdmin();
+      return;
+    }
+
+    if (action === 'excluir') {
+      if (!confirm('Tem certeza que deseja excluir este cliente? Esta acao nao pode ser desfeita.')) {
+        return;
+      }
+
+      await buscarJson(`/api/admin/assinaturas/${id}`, {
+        method: 'DELETE',
+      });
+      suporteMessage.textContent = 'Assinatura excluida com sucesso.';
+      await carregarPainelAdmin();
+    }
+  } catch (error) {
+    console.error(error);
+    suporteMessage.textContent = error.message || 'Nao consegui concluir essa acao.';
+  } finally {
+    botao.disabled = false;
   }
 });
 
@@ -275,8 +324,15 @@ copiarCadastroLinkButton.addEventListener('click', async () => {
   } catch (error) {
     console.error(error);
     cadastroLinkInput.select();
-    cadastroLinkMessage.textContent = 'Nao consegui copiar automaticamente. O link ja ficou selecionado para copiar.';
+    cadastroLinkMessage.textContent = 'Nao consegui copiar automaticamente. O link ficou selecionado para copiar.';
   }
+});
+
+filtroButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    filtroStatusAtual = button.dataset.filtroStatus || 'todos';
+    renderizarAssinaturas();
+  });
 });
 
 carregarPainelAdmin();

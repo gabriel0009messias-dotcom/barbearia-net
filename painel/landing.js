@@ -3,12 +3,16 @@ const TOKEN_STORAGE_KEY = 'barbearia_auth_token';
 const loginBarbeiroForm = document.getElementById('loginBarbeiroForm');
 const loginBarbeiroMessage = document.getElementById('loginBarbeiroMessage');
 const loginBlockedPixCard = document.getElementById('loginBlockedPixCard');
+const loginBlockedPixValorLabel = document.getElementById('loginBlockedPixValorLabel');
 const loginBlockedPixFavorecidoLabel = document.getElementById('loginBlockedPixFavorecidoLabel');
 const loginBlockedPixQrPanel = document.getElementById('loginBlockedPixQrPanel');
 const loginBlockedPixQrImage = document.getElementById('loginBlockedPixQrImage');
 const loginBlockedPixChaveLabel = document.getElementById('loginBlockedPixChaveLabel');
+const loginBlockedPixCopiaColaLabel = document.getElementById('loginBlockedPixCopiaColaLabel');
+const loginBlockedWhatsappButton = document.getElementById('loginBlockedWhatsappButton');
 const abrirCadastroButtons = document.querySelectorAll('[data-open-cadastro]');
 const abrirRecuperacaoButton = document.getElementById('abrirRecuperacaoButton');
+
 let pixConfig = null;
 let valorMensalAtual = 1;
 
@@ -26,41 +30,37 @@ async function buscarJson(url, options = {}) {
   if (!response.ok) {
     const error = new Error(payload?.error || `Falha ao carregar ${url}`);
     error.status = response.status;
+    error.details = payload;
     throw error;
   }
 
   return payload;
 }
 
-async function mostrarPixBloqueado() {
-  if (!pixConfig?.chave) {
+function formatarMoeda(valor) {
+  return Number(valor || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  });
+}
+
+function mostrarPixBloqueado(estado = {}) {
+  const pix = estado?.pix || pixConfig;
+
+  if (!pix?.copiaCola) {
     esconderPixBloqueado();
     return;
   }
 
-  loginBlockedPixFavorecidoLabel.textContent = `Favorecido: ${pixConfig.favorecido}`;
-  loginBlockedPixChaveLabel.textContent = `Chave Pix: ${pixConfig.chave}`;
-
-  try {
-    const pagamentoPix = await buscarJson('/api/publico/pix/qrcode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        valor: valorMensalAtual,
-        descricao: 'Assinatura mensal Salãoflix',
-      }),
-    });
-
-    loginBlockedPixQrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
-      pagamentoPix.payload
-    )}`;
-    loginBlockedPixCard.hidden = false;
-    loginBlockedPixQrPanel.hidden = false;
-    loginBlockedPixQrImage.hidden = false;
-  } catch (error) {
-    console.error(error);
-    esconderPixBloqueado();
-  }
+  loginBlockedPixValorLabel.textContent = `Valor: ${formatarMoeda(pix.valor || valorMensalAtual)}`;
+  loginBlockedPixFavorecidoLabel.textContent = `Favorecido: ${pix.favorecido || '--'}`;
+  loginBlockedPixChaveLabel.textContent = `Chave Pix: ${pix.chaveExibicao || pix.chave || '--'}`;
+  loginBlockedPixCopiaColaLabel.textContent = `Pix copia e cola: ${pix.copiaCola}`;
+  loginBlockedWhatsappButton.href = pix.whatsappLink || '#';
+  loginBlockedPixQrImage.src = pix.qrCodeImageUrl || '';
+  loginBlockedPixCard.hidden = false;
+  loginBlockedPixQrPanel.hidden = !pix.qrCodeImageUrl;
+  loginBlockedPixQrImage.hidden = !pix.qrCodeImageUrl;
 }
 
 async function carregarConfiguracaoPublica() {
@@ -116,10 +116,10 @@ loginBarbeiroForm.addEventListener('submit', async (event) => {
   } catch (error) {
     console.error(error);
     loginBarbeiroMessage.textContent =
-      error.status === 403 ? 'Sistema bloqueado. Regularize seu Pix.' : error.message;
+      error.status === 403 ? error.message || 'Sistema bloqueado. Regularize seu Pix.' : error.message;
 
     if (error.status === 403) {
-      await mostrarPixBloqueado();
+      mostrarPixBloqueado(error.details || {});
     }
   }
 });

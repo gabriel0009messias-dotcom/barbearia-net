@@ -61,6 +61,10 @@
             <span>Pendentes</span>
             <strong id="assinaturasPendentes">0</strong>
           </article>
+          <article class="metric-card">
+            <span>Bloqueadas</span>
+            <strong id="assinaturasBloqueadas">0</strong>
+          </article>
         </section>
 
         <section class="subscription-grid">
@@ -115,14 +119,15 @@
           <article class="panel-card">
             <div class="card-header">
               <div>
-                <p class="eyebrow">Resumo</p>
-                <h3>Formas de pagamento</h3>
+                <p class="eyebrow">PIX</p>
+                <h3>Cobranca fixa</h3>
               </div>
             </div>
 
             <div class="support-note">
-              <strong id="pagamentoResumo">Cartao: 0 | Pix: 0</strong>
+              <strong id="pagamentoResumo">Pix: 0</strong>
               <p id="vencimentoResumo">Vencimentos 5: 0 | 12: 0 | 24: 0</p>
+              <p id="pixResumo">QR Code e copia e cola fixos para todos os clientes.</p>
             </div>
           </article>
         </section>
@@ -133,7 +138,13 @@
               <p class="eyebrow">Financeiro</p>
               <h3>Assinaturas cadastradas</h3>
             </div>
-            <span id="assinaturaCount" class="badge">0 cadastros</span>
+            <div class="hero-actions">
+              <button id="filtroTodos" class="secondary-pill-button" type="button" data-filtro-status="todos">Todos</button>
+              <button id="filtroAtivos" class="secondary-pill-button" type="button" data-filtro-status="ativo">Ativos</button>
+              <button id="filtroPendentes" class="secondary-pill-button" type="button" data-filtro-status="pendente">Pendentes</button>
+              <button id="filtroBloqueados" class="secondary-pill-button" type="button" data-filtro-status="bloqueado">Bloqueados</button>
+              <span id="assinaturaCount" class="badge">0 cadastros</span>
+            </div>
           </div>
 
           <div class="table-wrap">
@@ -141,22 +152,20 @@
               <thead>
                 <tr>
                   <th>Barbearia</th>
-                  <th>Responsavel</th>
-                  <th>Pagamento</th>
-                  <th>Cobranca</th>
+                  <th>Contato</th>
                   <th>Vencimento</th>
-                  <th>WhatsApp</th>
                   <th>Status</th>
+                  <th>Atraso</th>
                   <th>Ultimo pagamento</th>
                   <th>Observacoes</th>
-                  <th>Servicos</th>
-                  <th>Salvar</th>
+                  <th>Cobranca</th>
+                  <th>Acoes</th>
                   <th>Excluir</th>
                 </tr>
               </thead>
               <tbody id="assinaturasTable">
                 <tr>
-                  <td colspan="12">Nenhuma assinatura cadastrada.</td>
+                  <td colspan="10">Nenhuma assinatura cadastrada.</td>
                 </tr>
               </tbody>
             </table>

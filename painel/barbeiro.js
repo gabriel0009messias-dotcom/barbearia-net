@@ -47,13 +47,22 @@ const whatsappHelpText = document.getElementById('whatsappHelpText');
 const painelLiberadoMessage = document.getElementById('painelLiberadoMessage');
 const paymentReminderCard = document.getElementById('paymentReminderCard');
 const paymentReminderText = document.getElementById('paymentReminderText');
+const paymentPixValor = document.getElementById('paymentPixValor');
+const paymentPixCopiaCola = document.getElementById('paymentPixCopiaCola');
+const paymentPixInstruction = document.getElementById('paymentPixInstruction');
+const paymentWhatsappButton = document.getElementById('paymentWhatsappButton');
+const paymentPixQrImage = document.getElementById('paymentPixQrImage');
+const copyPixButton = document.getElementById('copyPixButton');
 const painelBloqueadoMessage = document.getElementById('painelBloqueadoMessage');
 const blockedMessageText = document.getElementById('blockedMessageText');
 const blockedPixCard = document.getElementById('blockedPixCard');
+const blockedPixValorLabel = document.getElementById('blockedPixValorLabel');
 const blockedPixFavorecidoLabel = document.getElementById('blockedPixFavorecidoLabel');
 const blockedPixQrPanel = document.getElementById('blockedPixQrPanel');
 const blockedPixQrImage = document.getElementById('blockedPixQrImage');
 const blockedPixChaveLabel = document.getElementById('blockedPixChaveLabel');
+const blockedPixCopiaColaLabel = document.getElementById('blockedPixCopiaColaLabel');
+const blockedWhatsappButton = document.getElementById('blockedWhatsappButton');
 const configuracoesBarbeiroForm = document.getElementById('configuracoesBarbeiroForm');
 const configuracoesMessage = document.getElementById('configuracoesMessage');
 const diasFuncionamentoPainel = document.getElementById('diasFuncionamentoPainel');
@@ -111,22 +120,16 @@ async function buscarJson(url, options = {}) {
     headers: getHeaders(options.headers || {}),
   });
 
+  const payload = await response.json().catch(() => ({}));
+
   if (!response.ok) {
-    let detalhe = '';
-
-    try {
-      const payload = await response.json();
-      detalhe = payload?.error ? payload.error : '';
-    } catch (error) {
-      detalhe = '';
-    }
-
-    const erro = new Error(detalhe || `Falha ao carregar ${url}`);
+    const erro = new Error(payload?.error || `Falha ao carregar ${url}`);
     erro.status = response.status;
+    erro.details = payload;
     throw erro;
   }
 
-  return response.json();
+  return payload;
 }
 
 function limparSessaoBarbeiro() {
@@ -379,6 +382,55 @@ function atualizarStatusWhatsapp(status, qrCode) {
   qrCodeImage.hidden = true;
 }
 
+function obterPixPagamentoAtual(estado = {}) {
+  return estado?.pix || pixConfig || null;
+}
+
+function preencherPagamentoPendente(estado = {}) {
+  const pix = obterPixPagamentoAtual(estado);
+
+  paymentReminderText.textContent = estado?.mensagem || 'Pagamento pendente.';
+  paymentPixValor.textContent = `Valor: ${currency.format(Number(pix?.valor || valorMensalAtual || 0))}`;
+  paymentPixCopiaCola.textContent = pix?.copiaCola ? `Pix copia e cola: ${pix.copiaCola}` : 'Codigo Pix indisponivel.';
+  paymentPixInstruction.textContent = pix?.instrucoes || 'Apos o pagamento, envie o comprovante no WhatsApp.';
+  paymentWhatsappButton.href = pix?.whatsappLink || '#';
+
+  if (pix?.qrCodeImageUrl) {
+    paymentPixQrImage.hidden = false;
+    paymentPixQrImage.src = pix.qrCodeImageUrl;
+  } else {
+    paymentPixQrImage.hidden = true;
+    paymentPixQrImage.removeAttribute('src');
+  }
+
+  blockedPixCard.hidden = !pix?.copiaCola;
+  blockedPixValorLabel.textContent = `Valor: ${currency.format(Number(pix?.valor || valorMensalAtual || 0))}`;
+  blockedPixFavorecidoLabel.textContent = `Favorecido: ${pix?.favorecido || '--'}`;
+  blockedPixChaveLabel.textContent = `Chave Pix: ${pix?.chaveExibicao || pix?.chave || '--'}`;
+  blockedPixCopiaColaLabel.textContent = pix?.copiaCola ? `Pix copia e cola: ${pix.copiaCola}` : 'Pix copia e cola indisponivel.';
+  blockedWhatsappButton.href = pix?.whatsappLink || '#';
+
+  if (pix?.qrCodeImageUrl) {
+    blockedPixQrPanel.hidden = false;
+    blockedPixQrImage.hidden = false;
+    blockedPixQrImage.src = pix.qrCodeImageUrl;
+  } else {
+    blockedPixQrPanel.hidden = true;
+    blockedPixQrImage.hidden = true;
+    blockedPixQrImage.removeAttribute('src');
+  }
+}
+
+function mostrarEstadoPagamento(estado = {}) {
+  painelLiberadoMessage.hidden = true;
+  paymentReminderCard.hidden = false;
+  painelBloqueadoMessage.hidden = estado?.status !== 'bloqueado';
+  blockedMessageText.textContent = estado?.status === 'bloqueado' ? 'Pagamento pendente.' : estado?.mensagem || 'Pagamento pendente.';
+  generateQrButton.disabled = true;
+  preencherPagamentoPendente(estado);
+  setActiveSection('atualizacao');
+}
+
 async function atualizarPixBloqueado() {
   const mostrarPix = Boolean(pixConfig?.chave);
   blockedPixCard.hidden = !mostrarPix;
@@ -433,7 +485,10 @@ function atualizarLembretePagamento(assinatura) {
     return;
   }
 
-  paymentReminderText.textContent = lembrete.mensagem;
+  preencherPagamentoPendente({
+    mensagem: lembrete.mensagem,
+    pix: assinatura.pix,
+  });
   paymentReminderCard.hidden = false;
 }
 
@@ -445,7 +500,7 @@ function tratarErroSessao(error) {
   }
 
   if (error.status === 403) {
-    void mostrarPainelBloqueado(error.message);
+    void mostrarEstadoPagamento(error.details || { mensagem: error.message });
     return true;
   }
 
@@ -949,6 +1004,24 @@ refreshButton?.addEventListener('click', async () => {
     refreshButton.textContent = textoOriginal;
   }
 });
+
+copyPixButton?.addEventListener('click', async () => {
+  const pix = obterPixPagamentoAtual();
+
+  if (!pix?.copiaCola) {
+    mostrarMensagemTopo('Codigo Pix indisponivel agora.');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(pix.copiaCola);
+    mostrarMensagemTopo('Codigo Pix copiado com sucesso.');
+  } catch (error) {
+    console.error(error);
+    mostrarMensagemTopo('Nao consegui copiar o codigo Pix.');
+  }
+});
+
 mesFaturamentoInput?.addEventListener('change', () => {
   void carregarFaturamentoMesEscolhido();
 });

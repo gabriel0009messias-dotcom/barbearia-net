@@ -21,11 +21,21 @@ const {
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
-const METODOS_PAGAMENTO = ['cartao', 'pix'];
+const METODOS_PAGAMENTO = ['pix'];
 const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
+const VALOR_MENSAL_PADRAO = 1;
+const TOLERANCIA_ATRASO_DIAS = 3;
+const MENSAGEM_COMPROVANTE_WHATSAPP = 'Ola, acabei de fazer o pagamento e estou enviando o comprovante.';
+const MENSAGEM_COBRANCA_PADRAO = 'Seu pagamento venceu, favor regularizar para evitar bloqueio.';
+const PIX_CONFIG = {
+  chave: '11906363528',
+  chaveExibicao: '119.063.635.28',
+  favorecido: 'Gabriel Messias Rios',
+  cidade: 'SAO PAULO',
+};
 const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
 const ADMIN_PASSWORD = 'rios123456';
 const adminSessions = new Map();
@@ -285,6 +295,10 @@ function mapearAssinatura(assinatura) {
 
   return {
     ...assinatura,
+    nome: assinatura.barbearia_nome,
+    data_vencimento: assinatura.proximo_vencimento,
+    data_ultimo_pagamento: assinatura.ultimo_pagamento,
+    observacao: assinatura.observacoes || '',
     dias_funcionamento: desserializarDiasFuncionamento(assinatura.dias_funcionamento),
     localizacao_cidade: String(assinatura.localizacao_cidade || '').trim(),
     localizacao_rua: String(assinatura.localizacao_rua || '').trim(),
@@ -292,70 +306,172 @@ function mapearAssinatura(assinatura) {
   };
 }
 
-function criarLembretePagamento(assinatura) {
-  if (!assinatura?.proximo_vencimento) {
+function normalizarTelefoneWhatsApp(numero = '') {
+  const digitos = String(numero || '').replace(/\D/g, '');
+
+  if (!digitos) {
+    return '';
+  }
+
+  if (digitos.startsWith('55')) {
+    return digitos;
+  }
+
+  return `55${digitos}`;
+}
+
+function criarLinkWhatsApp(numero, mensagem) {
+  const telefone = normalizarTelefoneWhatsApp(numero);
+
+  if (!telefone) {
     return null;
+  }
+
+  return `https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`;
+}
+
+function criarPayloadPix(valor = VALOR_MENSAL_PADRAO) {
+  const valorFormatado = Number.isFinite(Number(valor)) ? Number(valor).toFixed(2) : Number(VALOR_MENSAL_PADRAO).toFixed(2);
+  return `00020126360014BR.GOV.BCB.PIX0111${PIX_CONFIG.chave}520400005303986540${valorFormatado}5802BR5915${PIX_CONFIG.favorecido}6009${PIX_CONFIG.cidade}62070503SALAO6304`;
+}
+
+function obterDadosPix(valor = VALOR_MENSAL_PADRAO, suporteNumero = '') {
+  const copiaCola = criarPayloadPix(valor);
+
+  return {
+    chave: PIX_CONFIG.chave,
+    chaveExibicao: PIX_CONFIG.chaveExibicao,
+    favorecido: PIX_CONFIG.favorecido,
+    valor: Number(valor),
+    copiaCola,
+    qrCodeImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(copiaCola)}`,
+    instrucoes: 'Apos o pagamento, envie o comprovante no WhatsApp',
+    mensagemWhatsapp: MENSAGEM_COMPROVANTE_WHATSAPP,
+    whatsappLink: criarLinkWhatsApp(suporteNumero, MENSAGEM_COMPROVANTE_WHATSAPP),
+  };
+}
+
+function calcularResumoPagamento(assinatura) {
+  if (!assinatura?.proximo_vencimento) {
+    return {
+      diasAtraso: 0,
+      atrasado: false,
+      venceHoje: false,
+      bloqueiaHoje: false,
+      statusSugerido: assinatura?.status || 'pendente',
+      indicadorAtraso: 'Sem vencimento definido',
+      mensagemAdmin: 'Sem vencimento definido.',
+      mensagemCliente: 'Pagamento pendente. Aguarde a confirmacao manual do admin.',
+    };
   }
 
   const hoje = new Date();
   const vencimento = criarDataLocal(assinatura.proximo_vencimento);
 
   if (!vencimento) {
+    return {
+      diasAtraso: 0,
+      atrasado: false,
+      venceHoje: false,
+      bloqueiaHoje: false,
+      statusSugerido: assinatura.status,
+      indicadorAtraso: 'Data invalida',
+      mensagemAdmin: 'Data de vencimento invalida.',
+      mensagemCliente: 'Nao foi possivel verificar o vencimento da assinatura.',
+    };
+  }
+
+  const diasAtraso = Math.max(0, calcularDiferencaEmDias(vencimento, hoje));
+  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
+  const atrasado = diasAtraso > 0;
+  const venceHoje = diasParaVencer === 0;
+  const bloqueiaHoje = diasAtraso === TOLERANCIA_ATRASO_DIAS;
+  const bloqueadoAutomatico = diasAtraso > TOLERANCIA_ATRASO_DIAS;
+
+  let statusSugerido = assinatura.status;
+
+  if (assinatura.status !== 'bloqueado') {
+    if (bloqueadoAutomatico) {
+      statusSugerido = 'bloqueado';
+    } else if (venceHoje || atrasado) {
+      statusSugerido = 'pendente';
+    }
+  }
+
+  let indicadorAtraso = 'Em dia';
+  let mensagemAdmin = 'Pagamento em dia.';
+  let mensagemCliente = 'Seu acesso esta ativo.';
+
+  if (bloqueadoAutomatico) {
+    indicadorAtraso = `${diasAtraso} dias atrasado`;
+    mensagemAdmin = `Pagamento atrasado ha ${diasAtraso} dias. Cliente deve permanecer bloqueado ate confirmacao manual.`;
+    mensagemCliente = 'Seu acesso foi bloqueado por pagamento pendente.';
+  } else if (bloqueiaHoje) {
+    indicadorAtraso = '3 dias (bloquear hoje)';
+    mensagemAdmin = 'Cliente com 3 dias de atraso. Se nao houver pagamento confirmado, bloqueie hoje.';
+    mensagemCliente = 'Seu pagamento esta com 3 dias de atraso. Regularize hoje para evitar bloqueio.';
+  } else if (diasAtraso === 2) {
+    indicadorAtraso = '2 dias atrasado';
+    mensagemAdmin = 'Cliente com 2 dias de atraso.';
+    mensagemCliente = 'Seu pagamento esta com 2 dias de atraso. Regularize para evitar bloqueio.';
+  } else if (diasAtraso === 1) {
+    indicadorAtraso = '1 dia atrasado';
+    mensagemAdmin = 'Cliente com 1 dia de atraso.';
+    mensagemCliente = 'Seu pagamento esta com 1 dia de atraso. Regularize para evitar bloqueio.';
+  } else if (venceHoje) {
+    indicadorAtraso = 'Vence hoje';
+    mensagemAdmin = 'Pagamento vence hoje. Status deve ficar pendente ate a confirmacao manual.';
+    mensagemCliente = 'Seu pagamento vence hoje.';
+  } else if (diasParaVencer > 0 && diasParaVencer <= 3) {
+    indicadorAtraso = `Vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}`;
+    mensagemAdmin = `Pagamento vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}.`;
+    mensagemCliente = `Seu pagamento vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}.`;
+  }
+
+  return {
+    diasAtraso,
+    diasParaVencer,
+    atrasado,
+    venceHoje,
+    bloqueiaHoje,
+    bloqueadoAutomatico,
+    statusSugerido,
+    indicadorAtraso,
+    mensagemAdmin,
+    mensagemCliente,
+  };
+}
+
+function criarLembretePagamento(assinatura) {
+  const resumo = calcularResumoPagamento(assinatura);
+
+  if (resumo.statusSugerido === 'ativo' && !resumo.venceHoje && !resumo.atrasado && resumo.diasParaVencer > 3) {
     return null;
   }
 
-  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
-
-  if (diasParaVencer < 0) {
-    return {
-      tipo: 'atrasado',
-      diasParaVencer,
-      mensagem: `Seu pagamento venceu em ${assinatura.proximo_vencimento}. Regularize a assinatura para desbloquear o sistema.`,
-    };
-  }
-
-  if (diasParaVencer === 0) {
-    return {
-      tipo: 'hoje',
-      diasParaVencer,
-      mensagem: `Sua assinatura vence hoje, dia ${String(assinatura.dia_vencimento).padStart(2, '0')}. Pague hoje para nao bloquear o acesso.`,
-    };
-  }
-
-  if (diasParaVencer <= 3) {
-    return {
-      tipo: 'proximo',
-      diasParaVencer,
-      mensagem: `Sua assinatura vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}, no dia ${String(
-        assinatura.dia_vencimento
-      ).padStart(2, '0')}.`,
-    };
-  }
-
-  return null;
+  return {
+    tipo: resumo.statusSugerido === 'bloqueado' ? 'bloqueado' : resumo.atrasado ? 'atrasado' : resumo.venceHoje ? 'hoje' : 'proximo',
+    diasAtraso: resumo.diasAtraso,
+    diasParaVencer: resumo.diasParaVencer,
+    indicador: resumo.indicadorAtraso,
+    mensagem: resumo.mensagemCliente,
+  };
 }
 
 async function sincronizarStatusPorVencimento(assinatura) {
-  if (!assinatura || assinatura.status !== 'ativo' || !assinatura.proximo_vencimento) {
+  if (!assinatura || !assinatura.proximo_vencimento) {
     return assinatura;
   }
 
-  const hoje = new Date();
-  const vencimento = criarDataLocal(assinatura.proximo_vencimento);
+  const resumo = calcularResumoPagamento(assinatura);
 
-  if (!vencimento) {
-    return assinatura;
-  }
-
-  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
-
-  if (diasParaVencer <= 0) {
+  if (resumo.statusSugerido !== assinatura.status) {
     await runAsync(
       `UPDATE assinaturas
-       SET status = 'bloqueado',
+       SET status = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [assinatura.id]
+      [resumo.statusSugerido, assinatura.id]
     );
 
     return getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinatura.id]);
@@ -371,8 +487,22 @@ async function enriquecerAssinatura(assinatura) {
     return sincronizada;
   }
 
+  const resumoPagamento = calcularResumoPagamento(sincronizada);
+  const pix = obterDadosPix(sincronizada.valor_mensal || VALOR_MENSAL_PADRAO, sincronizada.suporte_numero);
+
   return {
     ...mapearAssinatura(sincronizada),
+    pix,
+    atraso: {
+      dias: resumoPagamento.diasAtraso,
+      indicador: resumoPagamento.indicadorAtraso,
+      bloqueiaHoje: resumoPagamento.bloqueiaHoje,
+    },
+    cobranca: {
+      mensagem: MENSAGEM_COBRANCA_PADRAO,
+      whatsappLink: criarLinkWhatsApp(sincronizada.suporte_numero, MENSAGEM_COMPROVANTE_WHATSAPP),
+      lembreteLink: criarLinkWhatsApp(sincronizada.telefone || sincronizada.whatsapp_numero, MENSAGEM_COBRANCA_PADRAO),
+    },
     lembrete_pagamento: criarLembretePagamento(sincronizada),
   };
 }
@@ -391,6 +521,8 @@ function avaliarAcessoAssinatura(assinatura) {
     };
   }
 
+  const resumo = calcularResumoPagamento(assinatura);
+
   if (assinatura.status === 'ativo') {
     return {
       liberado: true,
@@ -403,14 +535,37 @@ function avaliarAcessoAssinatura(assinatura) {
     return {
       liberado: false,
       motivo: 'pagamento_pendente',
-      mensagem: 'Pagamento pendente. Regularize sua assinatura para liberar o sistema.',
+      mensagem:
+        resumo.atrasado || resumo.venceHoje
+          ? resumo.mensagemCliente
+          : 'Pagamento pendente. Envie o comprovante e aguarde a confirmacao manual do admin.',
     };
   }
 
   return {
     liberado: false,
     motivo: 'bloqueado',
-    mensagem: 'Sistema bloqueado. Regularize sua assinatura para voltar a usar o sistema.',
+    mensagem: resumo.mensagemCliente,
+  };
+}
+
+function montarEstadoPagamento(assinatura) {
+  const resumo = calcularResumoPagamento(assinatura);
+  const acesso = avaliarAcessoAssinatura(assinatura);
+
+  return {
+    status: assinatura.status,
+    liberado: acesso.liberado,
+    motivo: acesso.motivo,
+    mensagem: acesso.mensagem,
+    atraso: {
+      dias: resumo.diasAtraso,
+      indicador: resumo.indicadorAtraso,
+      bloqueiaHoje: resumo.bloqueiaHoje,
+    },
+    pix: obterDadosPix(assinatura.valor_mensal || VALOR_MENSAL_PADRAO, assinatura.suporte_numero),
+    mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
+    whatsappLink: criarLinkWhatsApp(assinatura.suporte_numero, MENSAGEM_COMPROVANTE_WHATSAPP),
   };
 }
 
@@ -545,6 +700,7 @@ async function carregarAssinaturaPorToken(token) {
 
     const error = new Error(acesso.mensagem);
     error.statusCode = 403;
+    error.assinatura = assinatura;
     throw error;
   }
 
@@ -568,6 +724,7 @@ async function carregarAssinaturaPorBridgeToken(token) {
   if (!acesso.liberado) {
     const error = new Error(acesso.mensagem);
     error.statusCode = 403;
+    error.assinatura = assinatura;
     throw error;
   }
 
@@ -588,7 +745,13 @@ async function requireBarbeiro(req, res, next) {
     req.assinatura = assinatura;
     next();
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    const payload = { error: error.message };
+
+    if (error.assinatura) {
+      Object.assign(payload, montarEstadoPagamento(error.assinatura));
+    }
+
+    res.status(error.statusCode || 500).json(payload);
   }
 }
 
@@ -610,7 +773,13 @@ async function requirePainelOuBridge(req, res, next) {
     req.assinatura = assinatura;
     next();
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    const payload = { error: error.message };
+
+    if (error.assinatura) {
+      Object.assign(payload, montarEstadoPagamento(error.assinatura));
+    }
+
+    res.status(error.statusCode || 500).json(payload);
   }
 }
 
@@ -1793,10 +1962,11 @@ router.get('/publico/assinatura-config', async (req, res) => {
   try {
     const suporteNumero = await getConfiguracao('suporte_numero');
     const evolution = getEvolutionConfig();
+    const pix = obterDadosPix(VALOR_MENSAL_PADRAO, suporteNumero);
 
     res.json({
       suporteNumero,
-      valorMensal: 1,
+      valorMensal: VALOR_MENSAL_PADRAO,
       whatsappBridgeUrl: null,
       whatsappLocalOnly: false,
       whatsappProvider: evolution.enabled ? 'evolution_api' : 'indisponivel',
@@ -1809,15 +1979,9 @@ router.get('/publico/assinatura-config', async (req, res) => {
         delayMs: evolution.retryDelayMs,
         timeoutMs: evolution.timeoutMs,
       },
-      gateway: {
-        provider: 'mercado_pago',
-        enabled: Boolean(getMercadoPagoAccessToken()),
-        label: 'Mercado Pago',
-      },
-      pix: {
-        chave: '119.063.635.28',
-        favorecido: 'Gabriel Messias Rios',
-      },
+      gateway: null,
+      pix,
+      cobrancaMensagem: MENSAGEM_COBRANCA_PADRAO,
       diasVencimento: DIAS_VENCIMENTO,
       metodosPagamento: METODOS_PAGAMENTO,
       diasSemana: DIAS_SEMANA,
@@ -1835,20 +1999,18 @@ router.get('/publico/assinatura-config', async (req, res) => {
 });
 
 router.get('/publico/pix/chave', (req, res) => {
-  const chavePix = '11906363528';
-  res.json({ chave: chavePix, tipo: 'cpf' });
+  res.json({ chave: PIX_CONFIG.chave, tipo: 'cpf' });
 });
 
 router.post('/publico/pix/qrcode', async (req, res) => {
   const { valor, descricao } = req.body;
-  const chavePix = '11906363528';
-  const nomeRecebedor = 'Gabriel Messias Rios';
-  const cidade = 'SAO PAULO';
-  const txid = `BARBER${Date.now()}`;
-  const valorFormatado = Number.isFinite(Number(valor)) ? Number(valor).toFixed(2) : '0.00';
-  const payload = `00020126360014BR.GOV.BCB.PIX0111${chavePix}520400005303986540${valorFormatado}5802BR5915${nomeRecebedor}6009${cidade}62070503${txid}6304`;
-
-  res.json({ payload, txid, valor, descricao });
+  const pix = obterDadosPix(valor || VALOR_MENSAL_PADRAO);
+  res.json({
+    payload: pix.copiaCola,
+    qrCodeImageUrl: pix.qrCodeImageUrl,
+    valor: Number(valor || VALOR_MENSAL_PADRAO),
+    descricao,
+  });
 });
 
 router.post('/mercadopago/webhook', async (req, res) => {
@@ -1892,12 +2054,7 @@ router.get('/publico/assinaturas/:id/status', async (req, res) => {
 
     res.json({
       id: assinatura.id,
-      status: assinatura.status,
-      liberado: acesso.liberado,
-      motivo: acesso.motivo,
-      mensagem: acesso.mensagem,
-      gatewayStatus: assinatura.gateway_status || null,
-      checkoutUrl: assinatura.gateway_checkout_url || null,
+      ...montarEstadoPagamento(assinatura),
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1956,7 +2113,10 @@ router.post('/barbeiro/login', async (req, res) => {
     const acesso = avaliarAcessoAssinatura(assinatura);
 
     if (!acesso.liberado) {
-      res.status(403).json({ error: acesso.mensagem });
+      res.status(403).json({
+        error: acesso.mensagem,
+        ...montarEstadoPagamento(assinatura),
+      });
       return;
     }
 
@@ -2146,7 +2306,7 @@ router.post('/publico/assinaturas', async (req, res) => {
   }
 
   if (!email) {
-    res.status(400).json({ error: 'Informe um Gmail valido para liberar a assinatura no Mercado Pago.' });
+    res.status(400).json({ error: 'Informe um email valido para o cadastro.' });
     return;
   }
 
@@ -2248,13 +2408,12 @@ router.post('/publico/assinaturas', async (req, res) => {
         }
 
         const assinaturaAtualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinaturaExistente.id]);
-        const checkout = await criarCheckoutMercadoPagoParaAssinatura(assinaturaAtualizada, req);
+        const assinaturaCompleta = await montarRespostaAssinatura(assinaturaExistente.id);
 
         res.status(200).json({
-          mensagem: 'Cadastro atualizado. Agora finalize seu pagamento no Mercado Pago para liberar o login.',
-          checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
-          gatewayStatus: checkout.status || 'pending',
-          assinatura: await montarRespostaAssinatura(assinaturaExistente.id),
+          mensagem: 'Cadastro atualizado. Pagamento via Pix pendente de confirmacao manual no admin.',
+          pix: assinaturaCompleta.pix,
+          assinatura: assinaturaCompleta,
         });
         return;
       }
@@ -2303,7 +2462,7 @@ router.post('/publico/assinaturas', async (req, res) => {
         email || '',
         metodoPagamento,
         dia,
-        1,
+        VALOR_MENSAL_PADRAO,
         'pendente',
         suporteNumero,
         proximoVencimento,
@@ -2338,14 +2497,12 @@ router.post('/publico/assinaturas', async (req, res) => {
       whatsappUltimoQrEm: null,
     });
 
-    const assinaturaCriada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [result.lastID]);
-    const checkout = await criarCheckoutMercadoPagoParaAssinatura(assinaturaCriada, req);
+    const assinaturaCriada = await montarRespostaAssinatura(result.lastID);
 
     res.status(201).json({
-      mensagem: 'Cadastro concluido. Agora finalize o pagamento no Mercado Pago para liberar seu login.',
-      checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
-      gatewayStatus: checkout.status || 'pending',
-      assinatura: await montarRespostaAssinatura(result.lastID),
+      mensagem: 'Cadastro concluido. Pagamento via Pix pendente de confirmacao manual no admin.',
+      pix: assinaturaCriada.pix,
+      assinatura: assinaturaCriada,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
@@ -2704,12 +2861,10 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
 
     res.json({
       suporteNumero,
-      valorMensal: 1,
-      gateway: {
-        provider: 'mercado_pago',
-        enabled: Boolean(getMercadoPagoAccessToken()),
-        label: 'Mercado Pago',
-      },
+      valorMensal: VALOR_MENSAL_PADRAO,
+      gateway: null,
+      pix: obterDadosPix(VALOR_MENSAL_PADRAO, suporteNumero),
+      mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
       diasVencimento: DIAS_VENCIMENTO,
       metodosPagamento: METODOS_PAGAMENTO,
       statusDisponiveis: STATUS_ASSINATURA,
@@ -2787,6 +2942,68 @@ router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
         observacoes || assinatura.observacoes || '',
         id,
       ]
+    );
+
+    res.json(await montarRespostaAssinatura(id));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/admin/assinaturas/:id/confirmar-pagamento', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const dataPagamento = String(req.body?.dataPagamento || '').trim() || new Date().toISOString().slice(0, 10);
+  const observacoes = String(req.body?.observacoes || '').trim();
+
+  try {
+    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    const referenciaPagamento = criarDataLocal(dataPagamento) || new Date();
+    const proximoVencimento = formatarDataISO(
+      new Date(referenciaPagamento.getFullYear(), referenciaPagamento.getMonth(), referenciaPagamento.getDate() + 30)
+    );
+
+    await runAsync(
+      `UPDATE assinaturas
+       SET status = 'ativo',
+           ultimo_pagamento = ?,
+           proximo_vencimento = ?,
+           observacoes = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [dataPagamento, proximoVencimento, observacoes || assinatura.observacoes || '', id]
+    );
+
+    res.json(await montarRespostaAssinatura(id));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/admin/assinaturas/:id/bloquear', requireAdmin, async (req, res) => {
+  const { id } = req.params;
+  const observacoes = String(req.body?.observacoes || '').trim();
+
+  try {
+    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+
+    if (!assinatura) {
+      res.status(404).json({ error: 'Assinatura nao encontrada.' });
+      return;
+    }
+
+    await runAsync(
+      `UPDATE assinaturas
+       SET status = 'bloqueado',
+           observacoes = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [observacoes || assinatura.observacoes || '', id]
     );
 
     res.json(await montarRespostaAssinatura(id));
