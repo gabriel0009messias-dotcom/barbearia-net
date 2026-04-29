@@ -1490,6 +1490,27 @@ async function consultarStatusWhatsappLocal(assinaturaId) {
   });
 }
 
+function iniciarSessaoWhatsappLocalEmSegundoPlano(assinaturaId) {
+  iniciarSessaoWhatsappLocal(assinaturaId).catch((error) => {
+    console.error(`Erro ao iniciar sessao local do WhatsApp da assinatura ${assinaturaId}:`, error.message);
+  });
+}
+
+async function aguardarStatusWhatsappLocal(assinaturaId, { tentativas = 20, intervaloMs = 500 } = {}) {
+  let ultimoStatus = await consultarStatusWhatsappLocal(assinaturaId);
+
+  for (let tentativa = 1; tentativa < tentativas; tentativa += 1) {
+    if (ultimoStatus.conectado || ultimoStatus.qrCode || ultimoStatus.ultimoErro || ultimoStatus.status !== 'iniciando') {
+      return ultimoStatus;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervaloMs));
+    ultimoStatus = await consultarStatusWhatsappLocal(assinaturaId);
+  }
+
+  return ultimoStatus;
+}
+
 function agoraIso() {
   return new Date().toISOString();
 }
@@ -2636,8 +2657,8 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    await iniciarSessaoWhatsappLocal(assinatura.id);
-    const resultado = await consultarStatusWhatsappLocal(assinatura.id);
+    iniciarSessaoWhatsappLocalEmSegundoPlano(assinatura.id);
+    const resultado = await aguardarStatusWhatsappLocal(assinatura.id);
     res.json({
       status: resultado.status === 'erro' ? 'error' : 'success',
       qr: resultado.qr || resultado.qrCode || null,
