@@ -943,6 +943,31 @@ select {
   margin-top: 16px;
 }
 
+.pix-page-shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-height: calc(100vh - 120px);
+  padding: 32px 0;
+}
+
+.pix-page-card {
+  width: min(920px, 100%);
+}
+
+.pix-payment-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: start;
+}
+
+.pix-payment-copy {
+  display: grid;
+  gap: 16px;
+}
+
 .compact-form {
   margin-bottom: 18px;
 }
@@ -1176,6 +1201,7 @@ code {
   .support-grid,
   .price-grid,
   .payment-layout,
+  .pix-payment-grid,
   .whatsapp-connect-grid,
   .service-row,
   .schedule-grid {

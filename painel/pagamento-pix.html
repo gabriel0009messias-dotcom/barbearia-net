@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pagamento via PIX</title>
+    <link rel="stylesheet" href="./styles.css?v=20260423a" />
+  </head>
+  <body>
+    <section class="auth-landing">
+      <div class="landing-overlay"></div>
+
+      <header class="landing-topbar">
+        <div class="landing-brand">SALAOFLIX</div>
+        <div class="landing-topbar-actions">
+          <a class="landing-topbar-button link-button" href="/">Voltar</a>
+        </div>
+      </header>
+
+      <main class="pix-page-shell">
+        <section class="landing-panel pix-page-card">
+          <p class="eyebrow">Pagamento</p>
+          <h1>Pagamento via PIX</h1>
+          <p class="landing-panel-copy">
+            Valor mensal fixo com confirmacao manual no painel administrativo.
+          </p>
+
+          <div class="pix-payment-grid">
+            <div class="pix-payment-copy">
+              <div class="support-note">
+                <strong>Valor: R$ 65,00</strong>
+                <p>Favorecido: Gabriel Messias Rios</p>
+                <p>Cidade: Sao Paulo</p>
+              </div>
+
+              <div class="pix-copy-box">
+                <strong>Chave PIX para copiar e colar</strong>
+                <p id="pixCodeText" class="table-subcopy">
+                  11906363528
+                </p>
+                <p class="table-subcopy">Titular: Gabriel Messias Rios</p>
+              </div>
+
+              <p class="table-subcopy">
+                Apos o pagamento, envie o comprovante no WhatsApp. A liberacao e feita manualmente.
+              </p>
+
+              <div class="payment-actions">
+                <button id="copyPixPageButton" class="primary-button" type="button">Copiar codigo PIX</button>
+              </div>
+            </div>
+
+            <div class="qr-panel">
+              <img
+                src="./assets/pix-qr-fixo.png"
+                alt="QR Code PIX fixo"
+              />
+              <p class="table-subcopy"><strong>PIX:</strong> 11906363528</p>
+              <p class="table-subcopy"><strong>Nome:</strong> Gabriel Messias Rios</p>
+              <p class="table-subcopy">QR Code PIX fixo para pagamento manual.</p>
+            </div>
+          </div>
+
+          <p id="pixPageMessage" class="form-message light-message"></p>
+        </section>
+      </main>
+    </section>
+
+    <script>
+      const pixCode = '11906363528';
+      const copyPixPageButton = document.getElementById('copyPixPageButton');
+      const pixPageMessage = document.getElementById('pixPageMessage');
+
+      copyPixPageButton?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(pixCode);
+          pixPageMessage.textContent = 'Codigo PIX copiado com sucesso.';
+        } catch (error) {
+          pixPageMessage.textContent = 'Nao consegui copiar automaticamente.';
+        }
+      });
+    </script>
+  </body>
+</html>

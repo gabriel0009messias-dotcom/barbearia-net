@@ -26,15 +26,17 @@ const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
-const VALOR_MENSAL_PADRAO = 1;
+const VALOR_MENSAL_PADRAO = 65;
 const TOLERANCIA_ATRASO_DIAS = 3;
 const MENSAGEM_COMPROVANTE_WHATSAPP = 'Ola, acabei de fazer o pagamento e estou enviando o comprovante.';
 const MENSAGEM_COBRANCA_PADRAO = 'Seu pagamento venceu, favor regularizar para evitar bloqueio.';
 const PIX_CONFIG = {
   chave: '11906363528',
-  chaveExibicao: '119.063.635.28',
+  chaveExibicao: '11906363528',
   favorecido: 'Gabriel Messias Rios',
   cidade: 'SAO PAULO',
+  copiaColaFixo: '11906363528',
+  qrCodeImageUrl: '/assets/pix-qr-fixo.png',
 };
 const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
 const ADMIN_PASSWORD = 'rios123456';
@@ -331,8 +333,7 @@ function criarLinkWhatsApp(numero, mensagem) {
 }
 
 function criarPayloadPix(valor = VALOR_MENSAL_PADRAO) {
-  const valorFormatado = Number.isFinite(Number(valor)) ? Number(valor).toFixed(2) : Number(VALOR_MENSAL_PADRAO).toFixed(2);
-  return `00020126360014BR.GOV.BCB.PIX0111${PIX_CONFIG.chave}520400005303986540${valorFormatado}5802BR5915${PIX_CONFIG.favorecido}6009${PIX_CONFIG.cidade}62070503SALAO6304`;
+  return PIX_CONFIG.copiaColaFixo;
 }
 
 function obterDadosPix(valor = VALOR_MENSAL_PADRAO, suporteNumero = '') {
@@ -344,7 +345,7 @@ function obterDadosPix(valor = VALOR_MENSAL_PADRAO, suporteNumero = '') {
     favorecido: PIX_CONFIG.favorecido,
     valor: Number(valor),
     copiaCola,
-    qrCodeImageUrl: `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(copiaCola)}`,
+    qrCodeImageUrl: PIX_CONFIG.qrCodeImageUrl,
     instrucoes: 'Apos o pagamento, envie o comprovante no WhatsApp',
     mensagemWhatsapp: MENSAGEM_COMPROVANTE_WHATSAPP,
     whatsappLink: criarLinkWhatsApp(suporteNumero, MENSAGEM_COMPROVANTE_WHATSAPP),

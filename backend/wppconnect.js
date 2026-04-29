@@ -2,6 +2,8 @@ const express = require('express');
 const qrcodeTerminal = require('qrcode-terminal');
 const wppconnect = require('@wppconnect-team/wppconnect');
 
+require('./loadEnv');
+
 const { attachBotHandlers } = require('./botFlow');
 const { criarOpcoesWppconnect } = require('./whatsappBrowser');
 
@@ -94,6 +96,21 @@ function calcularMinutosAteAgendamento(data, hora) {
   return Math.round((agendamento.getTime() - Date.now()) / (60 * 1000));
 }
 
+function calcularDiasDesdeAgendamento(data) {
+  const [ano, mes, dia] = String(data || '')
+    .split('-')
+    .map((item) => Number.parseInt(item, 10));
+
+  if (!ano || !mes || !dia) {
+    return null;
+  }
+
+  const agendamento = new Date(ano, mes - 1, dia, 0, 0, 0, 0);
+  const hoje = new Date();
+  const hojeNormalizado = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate(), 0, 0, 0, 0);
+  return Math.floor((hojeNormalizado.getTime() - agendamento.getTime()) / (24 * 60 * 60 * 1000));
+}
+
 async function verificarLembretesDaSessao(assinaturaId) {
   const sessao = obterSessao(assinaturaId);
 
@@ -109,6 +126,15 @@ async function verificarLembretesDaSessao(assinaturaId) {
 
     const minutos = calcularMinutosAteAgendamento(item.data, item.hora);
     return Number.isInteger(minutos) && minutos <= 15 && minutos >= 0;
+  });
+
+  const posAtendimentoPendentes = agendamentos.filter((item) => {
+    if (item.status !== 'confirmado' || item.lembrete_7_enviado_em) {
+      return false;
+    }
+
+    const dias = calcularDiasDesdeAgendamento(item.data);
+    return Number.isInteger(dias) && dias >= 7;
   });
 
   for (const agendamento of pendentes) {
@@ -131,6 +157,30 @@ async function verificarLembretesDaSessao(assinaturaId) {
 
     await sessao.client.sendText(telefone, mensagem);
     await buscarApi(sessao, `/api/agendamentos/${agendamento.id}/lembrete-15`, {
+      method: 'POST',
+      body: JSON.stringify({ enviadoEm: new Date().toISOString() }),
+    });
+  }
+
+  for (const agendamento of posAtendimentoPendentes) {
+    const telefone = normalizarTelefoneWhatsapp(agendamento.telefone);
+
+    if (!telefone) {
+      continue;
+    }
+
+    const nomeCliente = agendamento.cliente || 'cliente';
+    const mensagem = [
+      `Ola ${nomeCliente}!`,
+      '',
+      `Ja se passaram quase 7 dias desde que fizemos o servico de ${agendamento.servico || 'corte'}.`,
+      'Que tal agendar um horario?',
+      '',
+      'Estamos a disposicao!',
+    ].join('\n');
+
+    await sessao.client.sendText(telefone, mensagem);
+    await buscarApi(sessao, `/api/agendamentos/${agendamento.id}/lembrete-7`, {
       method: 'POST',
       body: JSON.stringify({ enviadoEm: new Date().toISOString() }),
     });
@@ -185,6 +235,7 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
         catchQR: (base64Qrimg, asciiQR) => {
           sessao.qrCode = base64Qrimg;
           sessao.status = 'qr_pronto';
+          sessao.ultimoErro = null;
 
           if (asciiQR) {
             console.log(`\nQR Code do WhatsApp da assinatura ${assinaturaId}:\n`);
@@ -200,6 +251,9 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
         },
         statusFind: (statusSession) => {
           sessao.status = statusSession || sessao.status;
+          if (sessao.status && sessao.status !== 'erro') {
+            sessao.ultimoErro = null;
+          }
           console.log(`Status do WhatsApp (${assinaturaId}):`, sessao.status);
         },
       })
@@ -207,6 +261,7 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
     .then((client) => {
       sessao.client = client;
       sessao.status = 'conectado';
+      sessao.ultimoErro = null;
       attachBotHandlers(client, {
         sessionKey,
         assinaturaId: Number(assinaturaId),
