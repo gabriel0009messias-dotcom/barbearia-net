@@ -680,6 +680,21 @@ async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape,
   }
 }
 
+async function enviarEnqueteInterativa(client, user, pergunta, opcoes, sessionKey = 'default') {
+  try {
+    const message = await client.sendPollMessage(user, pergunta, opcoes, {
+      selectableCount: 1,
+    });
+    registrarMensagemEnviada(message);
+    registrarUltimaMensagemDoBot(sessionKey, user, message);
+    await consumirLimpezaPendente(client, sessionKey, user);
+    return true;
+  } catch (error) {
+    console.warn('Nao consegui enviar enquete interativa:', error.message);
+    return false;
+  }
+}
+
 async function enviarListaInterativa(client, user, options, fallbackTexto, sessionKey = 'default') {
   try {
     const message = await client.sendListMessage(user, options);
@@ -700,44 +715,54 @@ async function enviarMenuPrincipal(client, user, sessionKey) {
   resetarEstado(sessionKey, user);
   const estados = getEstados(sessionKey);
   estados[user].etapa = 'menu';
-  const fallbackMenu = 'Ola! Como posso te ajudar?\n1. AGENDAR\n2. PRECOS';
+  const fallbackMenu = 'Ola! Como posso te ajudar?\n1. AGENDAR\n2. PRECOS\n3. ENDERECO';
 
-  await enviarListaInterativa(
+  const enqueteEnviada = await enviarEnqueteInterativa(
     client,
     user,
-    {
-      buttonText: 'Abrir menu',
-      description: 'Ola! Escolha uma opcao abaixo para continuar.',
-      title: 'Barbearia',
-      footer: 'Selecione uma opcao',
-      sections: [
-        {
-          title: 'Atendimento',
-          rows: [
-            {
-              rowId: 'menu_agendar',
-              title: 'Agendar horario',
-              description: 'Escolher servico, dia e horario',
-            },
-            {
-              rowId: 'menu_precos',
-              title: 'Ver precos',
-              description: 'Consultar valores de corte e barba',
-            },
-          ],
-        },
-      ],
-    },
-    fallbackMenu,
+    'Como posso te ajudar?\n\nEssa pergunta sera apagada apos a resposta',
+    ['🗓️ Realizar agendamento', '💰 Preços', '📍 Endereço'],
     sessionKey
   );
 
-  await enviarTextoCompatibilidade(
-    client,
-    user,
-    `${fallbackMenu}\n\nSe os botoes nao aparecerem, responda com AGENDAR ou PRECOS.`,
-    sessionKey
-  );
+  if (!enqueteEnviada) {
+    await enviarListaInterativa(
+      client,
+      user,
+      {
+        buttonText: 'Abrir menu',
+        description: 'Ola! Escolha uma opcao abaixo para continuar.',
+        title: 'Barbearia',
+        footer: 'Selecione uma opcao',
+        sections: [
+          {
+            title: 'Atendimento',
+            rows: [
+              {
+                rowId: 'menu_agendar',
+                title: 'Agendar horario',
+                description: 'Escolher servico, dia e horario',
+              },
+              {
+                rowId: 'menu_precos',
+                title: 'Ver precos',
+                description: 'Consultar valores de corte e barba',
+              },
+              {
+                rowId: 'menu_endereco',
+                title: 'Endereco',
+                description: 'Ver onde fica a barbearia',
+              },
+            ],
+          },
+        ],
+      },
+      fallbackMenu,
+      sessionKey
+    );
+  }
+
+  await enviarTextoCompatibilidade(client, user, `${fallbackMenu}\n\nSe as opcoes nao aparecerem, responda com AGENDAR, PRECOS ou ENDERECO.`, sessionKey);
 }
 
 async function enviarPrecos(client, user, servicos, sessionKey) {
@@ -774,7 +799,21 @@ async function enviarPrecos(client, user, servicos, sessionKey) {
   await enviarTextoCompatibilidade(
     client,
     user,
-    `Tabela de precos em texto:\n\n${montarListaPrecos(servicos)}\n\n1. AGENDAR\n2. MENU`,
+    `Tabela de precos em texto:\n\n${montarListaPrecos(servicos)}\n\n1. AGENDAR\n2. MENU\n3. ENDERECO`,
+    sessionKey
+  );
+}
+
+async function enviarEndereco(client, user, assinaturaId, sessionKey) {
+  const localizacaoSalao = await carregarLocalizacaoSalao(assinaturaId, sessionKey);
+  const textoLocalizacao = montarTextoLocalizacao(localizacaoSalao);
+
+  await enviarTexto(
+    client,
+    user,
+    textoLocalizacao
+      ? `${textoLocalizacao}\n\nDigite MENU para voltar ou AGENDAR para escolher um horario.`
+      : 'O endereco da barbearia ainda nao foi configurado. Digite MENU para voltar.',
     sessionKey
   );
 }
@@ -981,17 +1020,40 @@ function ehComandoCancelarAgendamento(normalizado) {
   return ['excluir', 'cancelar agendamento', 'cancelar horario', 'desmarcar'].includes(normalizado);
 }
 
+function extrairOpcaoEnquete(data = {}) {
+  const primeiraOpcao = Array.isArray(data.selectedOptions) ? data.selectedOptions[0] : null;
+  const texto = String(
+    primeiraOpcao?.name ||
+      primeiraOpcao?.optionName ||
+      primeiraOpcao?.text ||
+      primeiraOpcao?.value ||
+      ''
+  ).trim();
+  const normalizado = normalizarTexto(texto);
+
+  if (normalizado.includes('agendamento') || normalizado.includes('agendar')) {
+    return { body: 'AGENDAR', payload: 'menu_agendar', normalizado: 'agendar' };
+  }
+
+  if (normalizado.includes('preco')) {
+    return { body: 'PRECOS', payload: 'menu_precos', normalizado: 'precos' };
+  }
+
+  if (normalizado.includes('endereco')) {
+    return { body: 'ENDERECO', payload: 'menu_endereco', normalizado: 'endereco' };
+  }
+
+  return null;
+}
+
 function attachBotHandlers(client, options = {}) {
   const sessionKey = options.sessionKey || 'default';
   const assinaturaId = options.assinaturaId || null;
   definirContextoSessao(sessionKey, options);
 
-  client.onMessage(async (message) => {
-    if (foiEnviadaPeloBot(message)) return;
-    if (message.fromMe || String(message.from || '').includes('@g.us') || message.from === 'status@broadcast') return;
-
-    const user = message.from;
-    const { body, payload, normalizado } = extrairSelecao(message);
+  async function processarEntrada(entrada) {
+    const user = entrada.from;
+    const { body, payload, normalizado } = entrada;
     const estados = getEstados(sessionKey);
 
     console.log('Mensagem recebida:', {
@@ -1044,6 +1106,11 @@ function attachBotHandlers(client, options = {}) {
           return;
         }
 
+        if (normalizado === 'endereco' || normalizado === '3') {
+          await enviarEndereco(client, user, assinaturaId, sessionKey);
+          return;
+        }
+
         await enviarMenuPrincipal(client, user, sessionKey);
         return;
       }
@@ -1087,6 +1154,11 @@ function attachBotHandlers(client, options = {}) {
 
         if (payload === 'menu_precos' || normalizado === '2' || normalizado === 'precos') {
           await enviarPrecos(client, user, servicos, sessionKey);
+          return;
+        }
+
+        if (payload === 'menu_endereco' || normalizado === '3' || normalizado === 'endereco') {
+          await enviarEndereco(client, user, assinaturaId, sessionKey);
           return;
         }
 
@@ -1198,7 +1270,35 @@ function attachBotHandlers(client, options = {}) {
       );
       resetarEstado(sessionKey, user);
     }
+  }
+
+  client.onMessage(async (message) => {
+    if (foiEnviadaPeloBot(message)) return;
+    if (message.fromMe || String(message.from || '').includes('@g.us') || message.from === 'status@broadcast') return;
+    await processarEntrada({
+      from: message.from,
+      type: message.type,
+      fromMe: message.fromMe,
+      ...extrairSelecao(message),
+    });
   });
+
+  if (typeof client.onPollResponse === 'function') {
+    client.onPollResponse(async (data) => {
+      const entrada = extrairOpcaoEnquete(data);
+
+      if (!entrada) {
+        return;
+      }
+
+      await processarEntrada({
+        from: data.chatId,
+        type: 'poll_response',
+        fromMe: false,
+        ...entrada,
+      });
+    });
+  }
 }
 
 module.exports = {
