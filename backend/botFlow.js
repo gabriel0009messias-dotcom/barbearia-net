@@ -12,6 +12,7 @@ const estadosPorSessao = new Map();
 const contextosPorSessao = new Map();
 const mensagensEnviadasPeloBot = new Set();
 const ultimasMensagensPorSessao = new Map();
+const limpezasPendentesPorSessao = new Map();
 
 function getEstados(sessionKey) {
   if (!estadosPorSessao.has(sessionKey)) {
@@ -27,6 +28,14 @@ function getMapaUltimasMensagens(sessionKey) {
   }
 
   return ultimasMensagensPorSessao.get(sessionKey);
+}
+
+function getMapaLimpezasPendentes(sessionKey) {
+  if (!limpezasPendentesPorSessao.has(sessionKey)) {
+    limpezasPendentesPorSessao.set(sessionKey, {});
+  }
+
+  return limpezasPendentesPorSessao.get(sessionKey);
 }
 
 function resetarEstado(sessionKey, user) {
@@ -615,10 +624,37 @@ async function apagarUltimasMensagensDoBot(client, sessionKey, user) {
   }
 }
 
+function agendarLimpezaMensagensAnteriores(sessionKey, user) {
+  const mensagens = getMapaUltimasMensagens(sessionKey);
+  const pendentes = getMapaLimpezasPendentes(sessionKey);
+  pendentes[user] = Array.isArray(mensagens[user]) ? [...new Set(mensagens[user])] : [];
+  mensagens[user] = [];
+}
+
+async function consumirLimpezaPendente(client, sessionKey, user) {
+  const pendentes = getMapaLimpezasPendentes(sessionKey);
+  const ids = Array.isArray(pendentes[user]) ? pendentes[user] : [];
+
+  if (!ids.length) {
+    return;
+  }
+
+  pendentes[user] = [];
+
+  for (const id of ids) {
+    try {
+      await client.deleteMessage(user, id, false, false);
+    } catch (error) {
+      console.warn(`Nao consegui apagar a mensagem ${id} do chat ${user}:`, error.message);
+    }
+  }
+}
+
 async function enviarTexto(client, user, texto, sessionKey = 'default') {
   const message = await client.sendText(user, texto);
   registrarMensagemEnviada(message);
   registrarUltimaMensagemDoBot(sessionKey, user, message);
+  await consumirLimpezaPendente(client, sessionKey, user);
   return message;
 }
 
@@ -636,6 +672,7 @@ async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape,
     });
     registrarMensagemEnviada(message);
     registrarUltimaMensagemDoBot(sessionKey, user, message);
+    await consumirLimpezaPendente(client, sessionKey, user);
     return true;
   } catch (error) {
     console.warn('Nao consegui enviar botoes interativos:', error.message);
@@ -648,6 +685,7 @@ async function enviarListaInterativa(client, user, options, fallbackTexto, sessi
     const message = await client.sendListMessage(user, options);
     registrarMensagemEnviada(message);
     registrarUltimaMensagemDoBot(sessionKey, user, message);
+    await consumirLimpezaPendente(client, sessionKey, user);
     return true;
   } catch (error) {
     console.warn('Nao consegui enviar lista interativa:', error.message);
@@ -972,7 +1010,7 @@ function attachBotHandlers(client, options = {}) {
     const estado = estados[user];
 
     try {
-      await apagarUltimasMensagensDoBot(client, sessionKey, user);
+      agendarLimpezaMensagensAnteriores(sessionKey, user);
       const acesso = await carregarAcessoAssinatura(assinaturaId, sessionKey);
 
       if (!acesso.liberado) {
@@ -1017,7 +1055,8 @@ function attachBotHandlers(client, options = {}) {
           await enviarTexto(
             client,
             user,
-            'Voce nao tem nenhum agendamento confirmado para cancelar agora. Digite MENU para fazer um novo agendamento.'
+            'Voce nao tem nenhum agendamento confirmado para cancelar agora. Digite MENU para fazer um novo agendamento.',
+            sessionKey
           );
           return;
         }
@@ -1027,7 +1066,8 @@ function attachBotHandlers(client, options = {}) {
           user,
           `Seu agendamento foi cancelado com sucesso.\nServico: ${agendamentoCancelado.servico || '-'}\nData: ${new Date(
             `${agendamentoCancelado.data}T00:00:00`
-          ).toLocaleDateString('pt-BR')}\nHorario: ${agendamentoCancelado.hora}\n\nQualquer coisa, digite MENU para fazer outro agendamento.`
+          ).toLocaleDateString('pt-BR')}\nHorario: ${agendamentoCancelado.hora}\n\nQualquer coisa, digite MENU para fazer outro agendamento.`,
+          sessionKey
         );
         resetarEstado(sessionKey, user);
         return;
