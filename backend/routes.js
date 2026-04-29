@@ -1490,6 +1490,28 @@ async function consultarStatusWhatsappLocal(assinaturaId) {
   });
 }
 
+function iniciarSessaoWhatsappLocalSemBloquear(assinaturaId) {
+  iniciarSessaoWhatsappLocal(assinaturaId).catch((error) => {
+    console.error(`Erro ao iniciar sessao local do WhatsApp da assinatura ${assinaturaId}:`, error.message);
+  });
+}
+
+async function aguardarQrWhatsappLocal(assinaturaId, { timeoutMs = 12000, intervalMs = 400 } = {}) {
+  const startedAt = Date.now();
+  let statusAtual = await consultarStatusWhatsappLocal(assinaturaId);
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (statusAtual.conectado || statusAtual.qrCode || statusAtual.ultimoErro) {
+      return statusAtual;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    statusAtual = await consultarStatusWhatsappLocal(assinaturaId);
+  }
+
+  return statusAtual;
+}
+
 function agoraIso() {
   return new Date().toISOString();
 }
@@ -2636,13 +2658,22 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    await iniciarSessaoWhatsappLocal(assinatura.id);
-    const resultado = await consultarStatusWhatsappLocal(assinatura.id);
+    const statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
+
+    if (!statusInicial.conectado && !statusInicial.qrCode && statusInicial.status !== 'iniciando') {
+      iniciarSessaoWhatsappLocalSemBloquear(assinatura.id);
+    }
+
+    const resultado = statusInicial.qrCode || statusInicial.conectado
+      ? statusInicial
+      : await aguardarQrWhatsappLocal(assinatura.id);
+
     res.json({
       status: resultado.status === 'erro' ? 'error' : 'success',
       qr: resultado.qr || resultado.qrCode || null,
       message: resultado.mensagem || '',
       conectado: Boolean(resultado.conectado),
+      whatsappStatus: resultado.status || 'nao_configurado',
     });
   } catch (error) {
     res.status(500).json({
@@ -2935,7 +2966,7 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
 });
 
 router.patch('/admin/assinatura-config', requireAdmin, async (req, res) => {
-  const { suporteNumero } = req.body;
+  const suporteNumero = String(req.body?.suporteNumero || '').trim();
 
   if (!suporteNumero) {
     res.status(400).json({ error: 'Numero de suporte e obrigatorio.' });
@@ -2947,6 +2978,13 @@ router.patch('/admin/assinatura-config', requireAdmin, async (req, res) => {
       `INSERT INTO configuracoes (chave, valor)
        VALUES ('suporte_numero', ?)
        ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor`,
+      [suporteNumero]
+    );
+
+    await runAsync(
+      `UPDATE assinaturas
+       SET suporte_numero = ?,
+           updated_at = CURRENT_TIMESTAMP`,
       [suporteNumero]
     );
 

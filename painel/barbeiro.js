@@ -638,7 +638,9 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
         });
 
         if (resposta.status === 'success') {
-          atualizarStatusWhatsapp(resposta.conectado ? 'conectado' : 'qr_pronto', resposta.qr);
+          const statusRecebido =
+            resposta.whatsappStatus || (resposta.conectado ? 'conectado' : resposta.qr ? 'qr_pronto' : 'iniciando');
+          atualizarStatusWhatsapp(statusRecebido, resposta.qr);
           qrStatusMessage.textContent = resposta.message || 'QR Code atualizado com sucesso.';
 
           if (resposta.qr) {

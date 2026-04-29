@@ -200,10 +200,12 @@ salvarSuporteButton?.addEventListener('click', async () => {
   adminTableMessage.textContent = 'Salvando suporte...';
 
   try {
-    await buscarJson('/api/admin/assinatura-config', {
+    const resposta = await buscarJson('/api/admin/assinatura-config', {
       method: 'PATCH',
       body: JSON.stringify({ suporteNumero: adminSuporteInput.value.trim() }),
     });
+    adminSuporteInput.value = resposta.suporteNumero || adminSuporteInput.value;
+    await carregarPainelAdmin();
     adminTableMessage.textContent = 'Suporte atualizado com sucesso.';
   } catch (error) {
     adminTableMessage.textContent = error.message;
