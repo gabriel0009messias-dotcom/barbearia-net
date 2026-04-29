@@ -18,7 +18,11 @@ const {
   obterEstadoConexao,
   desconectarInstancia,
 } = require('./evolutionApi');
-const { iniciarSessao: iniciarSessaoWhatsappLocal, statusSessao: statusSessaoWhatsappLocal } = require('./whatsappManager');
+const {
+  iniciarSessao: iniciarSessaoWhatsappLocal,
+  reiniciarSessao: reiniciarSessaoWhatsappLocal,
+  statusSessao: statusSessaoWhatsappLocal,
+} = require('./whatsappManager');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -1487,6 +1491,8 @@ async function consultarStatusWhatsappLocal(assinaturaId) {
     conectado,
     precisaQr: !conectado,
     mensagem,
+    iniciadoEm: sessao.iniciadoEm || null,
+    atualizadoEm: sessao.atualizadoEm || null,
   });
 }
 
@@ -1510,6 +1516,14 @@ async function aguardarQrWhatsappLocal(assinaturaId, { timeoutMs = 12000, interv
   }
 
   return statusAtual;
+}
+
+function statusLocalPareceTravado(status = {}) {
+  if (status.conectado || status.qrCode || status.ultimoErro || status.status !== 'iniciando' || !status.iniciadoEm) {
+    return false;
+  }
+
+  return Date.now() - Number(status.iniciadoEm) > 45000;
 }
 
 function agoraIso() {
@@ -2658,7 +2672,14 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    const statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
+    let statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
+
+    if (statusLocalPareceTravado(statusInicial)) {
+      reiniciarSessaoWhatsappLocal(assinatura.id).catch((error) => {
+        console.error(`Erro ao reiniciar sessao local do WhatsApp da assinatura ${assinatura.id}:`, error.message);
+      });
+      statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
+    }
 
     if (!statusInicial.conectado && !statusInicial.qrCode && statusInicial.status !== 'iniciando') {
       iniciarSessaoWhatsappLocalSemBloquear(assinatura.id);
@@ -2674,6 +2695,7 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       message: resultado.mensagem || '',
       conectado: Boolean(resultado.conectado),
       whatsappStatus: resultado.status || 'nao_configurado',
+      retryable: !resultado.conectado && !resultado.qr,
     });
   } catch (error) {
     res.status(500).json({

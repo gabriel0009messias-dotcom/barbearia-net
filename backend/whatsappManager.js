@@ -3,6 +3,7 @@ const { criarOpcoesWppconnect } = require('./whatsappBrowser');
 
 const sessoes = new Map();
 let wppconnectInstance = null;
+const SESSION_START_TIMEOUT_MS = 45000;
 
 function obterWppconnect() {
   if (!wppconnectInstance) {
@@ -21,21 +22,56 @@ function obterSessao(assinaturaId) {
       client: null,
       startPromise: null,
       ultimoErro: null,
+      iniciadoEm: null,
+      atualizadoEm: null,
     });
   }
 
   return sessoes.get(assinaturaId);
 }
 
+function atualizarSessao(sessao, valores = {}) {
+  Object.assign(sessao, valores, {
+    atualizadoEm: Date.now(),
+  });
+}
+
+function sessaoTravada(sessao) {
+  if (!sessao.startPromise || sessao.status !== 'iniciando' || !sessao.iniciadoEm) {
+    return false;
+  }
+
+  return Date.now() - sessao.iniciadoEm > SESSION_START_TIMEOUT_MS;
+}
+
+function resetarSessaoInterna(sessao) {
+  atualizarSessao(sessao, {
+    status: 'nao_iniciado',
+    qrCode: null,
+    client: null,
+    startPromise: null,
+    ultimoErro: null,
+    iniciadoEm: null,
+  });
+}
+
 async function iniciarSessao(assinaturaId) {
   const sessao = obterSessao(assinaturaId);
+
+  if (sessaoTravada(sessao)) {
+    resetarSessaoInterna(sessao);
+  }
 
   if (sessao.startPromise) {
     return sessao.startPromise;
   }
 
-  sessao.status = 'iniciando';
-  sessao.ultimoErro = null;
+  atualizarSessao(sessao, {
+    status: 'iniciando',
+    qrCode: null,
+    ultimoErro: null,
+    iniciadoEm: Date.now(),
+  });
 
   const wppconnect = obterWppconnect();
 
@@ -45,30 +81,40 @@ async function iniciarSessao(assinaturaId) {
         session: `assinatura-${assinaturaId}`,
         headless: true,
         catchQR: (base64Qrimg) => {
-          sessao.qrCode = base64Qrimg;
-          sessao.status = 'qr_pronto';
-          sessao.ultimoErro = null;
+          atualizarSessao(sessao, {
+            qrCode: base64Qrimg,
+            status: 'qr_pronto',
+            ultimoErro: null,
+          });
         },
         statusFind: (statusSession) => {
-          sessao.status = statusSession || sessao.status;
-          if (['conectado', 'isLogged', 'qrReadSuccess'].includes(sessao.status)) {
-            sessao.qrCode = null;
-            sessao.ultimoErro = null;
-          }
+          const novoStatus = statusSession || sessao.status;
+          atualizarSessao(sessao, {
+            status: novoStatus,
+            qrCode: ['conectado', 'isLogged', 'qrReadSuccess'].includes(novoStatus) ? null : sessao.qrCode,
+            ultimoErro: ['conectado', 'isLogged', 'qrReadSuccess'].includes(novoStatus) ? null : sessao.ultimoErro,
+          });
         },
       })
     )
     .then((client) => {
-      sessao.client = client;
-      sessao.status = 'conectado';
-      sessao.qrCode = null;
-      sessao.ultimoErro = null;
+      atualizarSessao(sessao, {
+        client,
+        status: 'conectado',
+        qrCode: null,
+        ultimoErro: null,
+        iniciadoEm: null,
+      });
       attachBotHandlers(client, { sessionKey: `assinatura-${assinaturaId}`, assinaturaId });
       return client;
     })
     .catch((error) => {
-      sessao.status = 'erro';
-      sessao.ultimoErro = error.message;
+      atualizarSessao(sessao, {
+        status: 'erro',
+        ultimoErro: error.message,
+        startPromise: null,
+        iniciadoEm: null,
+      });
       throw error;
     })
     .finally(() => {
@@ -78,6 +124,12 @@ async function iniciarSessao(assinaturaId) {
   return sessao.startPromise;
 }
 
+function reiniciarSessao(assinaturaId) {
+  const sessao = obterSessao(assinaturaId);
+  resetarSessaoInterna(sessao);
+  return iniciarSessao(assinaturaId);
+}
+
 function statusSessao(assinaturaId) {
   const sessao = obterSessao(assinaturaId);
 
@@ -85,6 +137,8 @@ function statusSessao(assinaturaId) {
     status: sessao.status,
     qrCode: sessao.qrCode,
     ultimoErro: sessao.ultimoErro,
+    iniciadoEm: sessao.iniciadoEm,
+    atualizadoEm: sessao.atualizadoEm,
   };
 }
 
@@ -94,6 +148,7 @@ function clienteSessao(assinaturaId) {
 
 module.exports = {
   iniciarSessao,
+  reiniciarSessao,
   statusSessao,
   clienteSessao,
 };
