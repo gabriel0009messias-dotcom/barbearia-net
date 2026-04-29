@@ -29,6 +29,22 @@ function listarCaminhosChromeWindows() {
   ].filter(Boolean);
 }
 
+function obterChromeDoPuppeteer() {
+  try {
+    // eslint-disable-next-line global-require
+    const puppeteer = require('puppeteer');
+    const executablePath = typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
+
+    if (executablePath && fs.existsSync(executablePath)) {
+      return executablePath;
+    }
+  } catch (error) {
+    // Continua para os proximos fallbacks.
+  }
+
+  return null;
+}
+
 function encontrarChromeEmCache(caminhoBase) {
   if (!caminhoBase || !fs.existsSync(caminhoBase)) {
     return null;
@@ -58,28 +74,19 @@ function encontrarChromeEmCache(caminhoBase) {
 }
 
 function encontrarNavegadorLocal() {
+  const caminhoConfigurado = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
+
+  if (caminhoConfigurado && fs.existsSync(caminhoConfigurado)) {
+    return caminhoConfigurado;
+  }
+
+  const chromeDoPuppeteer = obterChromeDoPuppeteer();
+
+  if (chromeDoPuppeteer) {
+    return chromeDoPuppeteer;
+  }
+
   if (process.platform !== 'win32') {
-    const caminhoConfigurado = process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH;
-
-    if (caminhoConfigurado && fs.existsSync(caminhoConfigurado)) {
-      return caminhoConfigurado;
-    }
-
-    try {
-      // Quando o Chrome do Puppeteer foi instalado no build, este helper encontra o binario real.
-      // Isso evita depender de configurar manualmente o caminho no Render.
-      // eslint-disable-next-line global-require
-      const puppeteer = require('puppeteer');
-      const executablePath =
-        typeof puppeteer.executablePath === 'function' ? puppeteer.executablePath() : null;
-
-      if (executablePath && fs.existsSync(executablePath)) {
-        return executablePath;
-      }
-    } catch (error) {
-      // Continua procurando nos caches conhecidos abaixo.
-    }
-
     const cachesConhecidos = [
       process.env.PUPPETEER_CACHE_DIR,
       path.join(__dirname, 'puppeteer-cache'),
@@ -122,7 +129,14 @@ function criarOpcoesWppconnect({ session, headless, catchQR, statusFind }) {
     statusFind,
     logQR: false,
     folderNameToken: tokenDir,
-    browserArgs: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    browserArgs: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+    ],
     puppeteerOptions: {
       userDataDir,
       ...(executablePath ? { executablePath } : {}),
