@@ -1053,7 +1053,7 @@ function attachBotHandlers(client, options = {}) {
 
   async function processarEntrada(entrada) {
     const user = entrada.from;
-    const { body, payload, normalizado } = entrada;
+    const { body, payload, normalizado, fromMe = false, type = 'unknown' } = entrada;
     const estados = getEstados(sessionKey);
 
     console.log('Mensagem recebida:', {
@@ -1061,8 +1061,8 @@ function attachBotHandlers(client, options = {}) {
       from: user,
       body,
       payload,
-      fromMe: message.fromMe,
-      type: message.type,
+      fromMe,
+      type,
     });
 
     if (!estados[user]) {
