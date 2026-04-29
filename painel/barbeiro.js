@@ -527,13 +527,12 @@ async function carregarPainelBarbeiro() {
     openLocalWhatsappButton.hidden = true;
     whatsappHelpText.textContent = whatsappEnabled
       ? 'Seu acesso esta liberado. Gere o QR Code diretamente por este painel para conectar o WhatsApp.'
-      : (config.whatsappSetupMessage ||
-          'O QR Code do WhatsApp ainda nao foi liberado neste servidor.');
+      : (config.whatsappSetupMessage || 'O WhatsApp nao esta disponivel no momento.');
     whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
     qrCodeImage.hidden = true;
     qrStatusMessage.textContent = whatsappEnabled
       ? 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.'
-      : 'Finalize a configuracao da Evolution API no servidor para habilitar o WhatsApp.';
+      : 'O WhatsApp nao esta disponivel no momento.';
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
       buscarJson('/api/agendamentos'),
@@ -833,8 +832,7 @@ generateQrButton.addEventListener('click', async () => {
   }
 
   if (!whatsappEnabled) {
-    qrStatusMessage.textContent =
-      'O servidor ainda nao foi configurado com EVOLUTION_API_URL e EVOLUTION_API_KEY.';
+    qrStatusMessage.textContent = 'O WhatsApp nao esta disponivel no momento.';
     whatsappStatusBadge.textContent = 'Configurar';
     return;
   }

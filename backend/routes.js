@@ -18,6 +18,7 @@ const {
   obterEstadoConexao,
   desconectarInstancia,
 } = require('./evolutionApi');
+const { iniciarSessao: iniciarSessaoWhatsappLocal, statusSessao: statusSessaoWhatsappLocal } = require('./whatsappManager');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -1428,6 +1429,67 @@ function respostaStatusWhatsapp({
   };
 }
 
+function mapearStatusWhatsappLocal(status = '', qrCode = null) {
+  const statusNormalizado = String(status || '').trim();
+
+  if (['conectado', 'isLogged', 'qrReadSuccess'].includes(statusNormalizado)) {
+    return 'conectado';
+  }
+
+  if (statusNormalizado === 'erro') {
+    return 'erro';
+  }
+
+  if (statusNormalizado === 'iniciando') {
+    return 'iniciando';
+  }
+
+  if (statusNormalizado === 'qr_pronto' || qrCode) {
+    return 'qr_pronto';
+  }
+
+  return 'nao_configurado';
+}
+
+async function consultarStatusWhatsappLocal(assinaturaId) {
+  const sessao = statusSessaoWhatsappLocal(assinaturaId);
+  const statusMapeado = mapearStatusWhatsappLocal(sessao.status, sessao.qrCode);
+  const conectado = statusMapeado === 'conectado';
+  const qrCode = conectado ? null : sessao.qrCode || null;
+  const mensagem =
+    sessao.ultimoErro ||
+    (conectado
+      ? 'WhatsApp conectado com sucesso.'
+      : qrCode
+        ? 'Escaneie o QR Code com o WhatsApp para concluir a conexao.'
+        : statusMapeado === 'iniciando'
+          ? 'Preparando a sessao do WhatsApp.'
+          : 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.');
+
+  const dadosPersistencia = {
+    whatsappStatus: statusMapeado,
+    whatsappUltimoErro: sessao.ultimoErro || null,
+    whatsappUltimoCheckEm: agoraIso(),
+  };
+
+  if (qrCode) {
+    dadosPersistencia.whatsappUltimoQrEm = agoraIso();
+  }
+
+  await persistirSessaoWhatsapp(assinaturaId, dadosPersistencia);
+
+  return respostaStatusWhatsapp({
+    status: statusMapeado,
+    qrCode,
+    qr: qrCode,
+    ultimoErro: sessao.ultimoErro || null,
+    instancia: `assinatura-${assinaturaId}`,
+    conectado,
+    precisaQr: !conectado,
+    mensagem,
+  });
+}
+
 function agoraIso() {
   return new Date().toISOString();
 }
@@ -1969,12 +2031,10 @@ router.get('/publico/assinatura-config', async (req, res) => {
       suporteNumero,
       valorMensal: VALOR_MENSAL_PADRAO,
       whatsappBridgeUrl: null,
-      whatsappLocalOnly: false,
-      whatsappProvider: evolution.enabled ? 'evolution_api' : 'indisponivel',
-      whatsappEnabled: evolution.enabled,
-      whatsappSetupMessage: evolution.enabled
-        ? ''
-        : 'Configure EVOLUTION_API_URL e EVOLUTION_API_KEY no servidor para liberar o QR Code do WhatsApp.',
+      whatsappLocalOnly: true,
+      whatsappProvider: 'wppconnect_local',
+      whatsappEnabled: true,
+      whatsappSetupMessage: '',
       whatsappRetry: {
         attempts: evolution.retryAttempts,
         delayMs: evolution.retryDelayMs,
@@ -2576,16 +2636,16 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       return;
     }
 
-    const resultado = await gerarQrWhatsappEvolution(assinatura);
+    await iniciarSessaoWhatsappLocal(assinatura.id);
+    const resultado = await consultarStatusWhatsappLocal(assinatura.id);
     res.json({
-      status: resultado.status === 'error' ? 'error' : 'success',
+      status: resultado.status === 'erro' ? 'error' : 'success',
       qr: resultado.qr || resultado.qrCode || null,
       message: resultado.mensagem || '',
       conectado: Boolean(resultado.conectado),
     });
   } catch (error) {
-    logEvolutionError(`endpoint /whatsapp/qr da assinatura ${req.assinatura?.id || 'desconhecida'}`, error);
-    res.status(error.statusCode || 500).json({
+    res.status(500).json({
       status: 'error',
       qr: null,
       message: error.message || 'Falha ao gerar QR Code.',
@@ -2773,11 +2833,10 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
       return;
     }
 
-    const sessao = await consultarStatusWhatsappEvolution(assinatura);
+    const sessao = await consultarStatusWhatsappLocal(Number(id));
     res.json(sessao);
   } catch (error) {
-    logEvolutionError(`status do whatsapp da assinatura ${id}`, error);
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -51,12 +51,18 @@ async function iniciarSessao(assinaturaId) {
         },
         statusFind: (statusSession) => {
           sessao.status = statusSession || sessao.status;
+          if (['conectado', 'isLogged', 'qrReadSuccess'].includes(sessao.status)) {
+            sessao.qrCode = null;
+            sessao.ultimoErro = null;
+          }
         },
       })
     )
     .then((client) => {
       sessao.client = client;
       sessao.status = 'conectado';
+      sessao.qrCode = null;
+      sessao.ultimoErro = null;
       attachBotHandlers(client, { sessionKey: `assinatura-${assinaturaId}`, assinaturaId });
       return client;
     })
