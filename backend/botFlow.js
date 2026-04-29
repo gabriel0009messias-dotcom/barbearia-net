@@ -11,6 +11,7 @@ function getDb() {
 const estadosPorSessao = new Map();
 const contextosPorSessao = new Map();
 const mensagensEnviadasPeloBot = new Set();
+const ultimasMensagensPorSessao = new Map();
 
 function getEstados(sessionKey) {
   if (!estadosPorSessao.has(sessionKey)) {
@@ -18,6 +19,14 @@ function getEstados(sessionKey) {
   }
 
   return estadosPorSessao.get(sessionKey);
+}
+
+function getMapaUltimasMensagens(sessionKey) {
+  if (!ultimasMensagensPorSessao.has(sessionKey)) {
+    ultimasMensagensPorSessao.set(sessionKey, {});
+  }
+
+  return ultimasMensagensPorSessao.get(sessionKey);
 }
 
 function resetarEstado(sessionKey, user) {
@@ -568,17 +577,56 @@ function foiEnviadaPeloBot(message) {
   return id ? mensagensEnviadasPeloBot.has(id) : false;
 }
 
-async function enviarTexto(client, user, texto) {
+function registrarUltimaMensagemDoBot(sessionKey, user, message) {
+  const id = extrairIdMensagem(message);
+  if (!id) {
+    return;
+  }
+
+  const mapa = getMapaUltimasMensagens(sessionKey);
+
+  if (!Array.isArray(mapa[user])) {
+    mapa[user] = [];
+  }
+
+  mapa[user].push(id);
+
+  if (mapa[user].length > 10) {
+    mapa[user] = mapa[user].slice(-10);
+  }
+}
+
+async function apagarUltimasMensagensDoBot(client, sessionKey, user) {
+  const mapa = getMapaUltimasMensagens(sessionKey);
+  const ids = Array.isArray(mapa[user]) ? [...new Set(mapa[user])] : [];
+
+  if (!ids.length) {
+    return;
+  }
+
+  mapa[user] = [];
+
+  for (const id of ids) {
+    try {
+      await client.deleteMessage(user, id, false, false);
+    } catch (error) {
+      console.warn(`Nao consegui apagar a mensagem ${id} do chat ${user}:`, error.message);
+    }
+  }
+}
+
+async function enviarTexto(client, user, texto, sessionKey = 'default') {
   const message = await client.sendText(user, texto);
   registrarMensagemEnviada(message);
+  registrarUltimaMensagemDoBot(sessionKey, user, message);
   return message;
 }
 
-async function enviarTextoCompatibilidade(client, user, texto) {
-  await enviarTexto(client, user, texto);
+async function enviarTextoCompatibilidade(client, user, texto, sessionKey = 'default') {
+  await enviarTexto(client, user, texto, sessionKey);
 }
 
-async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape) {
+async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape, sessionKey = 'default') {
   try {
     const message = await client.sendText(user, texto, {
       useTemplateButtons: true,
@@ -587,6 +635,7 @@ async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape)
       footer: rodape,
     });
     registrarMensagemEnviada(message);
+    registrarUltimaMensagemDoBot(sessionKey, user, message);
     return true;
   } catch (error) {
     console.warn('Nao consegui enviar botoes interativos:', error.message);
@@ -594,10 +643,11 @@ async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape)
   }
 }
 
-async function enviarListaInterativa(client, user, options, fallbackTexto) {
+async function enviarListaInterativa(client, user, options, fallbackTexto, sessionKey = 'default') {
   try {
     const message = await client.sendListMessage(user, options);
     registrarMensagemEnviada(message);
+    registrarUltimaMensagemDoBot(sessionKey, user, message);
     return true;
   } catch (error) {
     console.warn('Nao consegui enviar lista interativa:', error.message);
@@ -640,13 +690,15 @@ async function enviarMenuPrincipal(client, user, sessionKey) {
         },
       ],
     },
-    fallbackMenu
+    fallbackMenu,
+    sessionKey
   );
 
   await enviarTextoCompatibilidade(
     client,
     user,
-    `${fallbackMenu}\n\nSe os botoes nao aparecerem, responda com AGENDAR ou PRECOS.`
+    `${fallbackMenu}\n\nSe os botoes nao aparecerem, responda com AGENDAR ou PRECOS.`,
+    sessionKey
   );
 }
 
@@ -655,7 +707,7 @@ async function enviarPrecos(client, user, servicos, sessionKey) {
   const estados = getEstados(sessionKey);
   estados[user].etapa = 'menu';
 
-  await enviarTexto(client, user, `Tabela de precos:\n\n${montarListaPrecos(servicos)}`);
+  await enviarTexto(client, user, `Tabela de precos:\n\n${montarListaPrecos(servicos)}`, sessionKey);
 
   await enviarListaInterativa(client, user, {
     buttonText: 'Escolher proxima etapa',
@@ -679,16 +731,17 @@ async function enviarPrecos(client, user, servicos, sessionKey) {
         ],
       },
     ],
-  });
+  }, null, sessionKey);
 
   await enviarTextoCompatibilidade(
     client,
     user,
-    `Tabela de precos em texto:\n\n${montarListaPrecos(servicos)}\n\n1. AGENDAR\n2. MENU`
+    `Tabela de precos em texto:\n\n${montarListaPrecos(servicos)}\n\n1. AGENDAR\n2. MENU`,
+    sessionKey
   );
 }
 
-async function enviarListaServicos(client, user, estado, servicos) {
+async function enviarListaServicos(client, user, estado, servicos, sessionKey) {
   estado.etapa = 'servico';
   const fallbackTexto = `Qual o servico?\n${montarMenuServicosFallback(servicos)}`;
 
@@ -711,13 +764,15 @@ async function enviarListaServicos(client, user, estado, servicos) {
         },
       ],
     },
-    fallbackTexto
+    fallbackTexto,
+    sessionKey
   );
 
   await enviarTextoCompatibilidade(
     client,
     user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o nome do servico.`
+    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o nome do servico.`,
+    sessionKey
   );
 
   if (!enviado) {
@@ -760,13 +815,15 @@ async function enviarListaDatas(client, user, estado, configuracaoAgenda, sessio
         },
       ],
     },
-    fallbackTexto
+    fallbackTexto,
+    sessionKey
   );
 
   await enviarTextoCompatibilidade(
     client,
     user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero do dia ou com o dia escrito.`
+    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero do dia ou com o dia escrito.`,
+    sessionKey
   );
 
   if (!enviado) {
@@ -774,7 +831,7 @@ async function enviarListaDatas(client, user, estado, configuracaoAgenda, sessio
   }
 }
 
-async function enviarListaHorarios(client, user, estado) {
+async function enviarListaHorarios(client, user, estado, sessionKey) {
   estado.etapa = 'hora';
   const fallbackTexto = `Qual o horario?\n${estado.horariosLivres
     .map((hora, index) => `${index + 1}. ${hora}`)
@@ -799,13 +856,15 @@ async function enviarListaHorarios(client, user, estado) {
         },
       ],
     },
-    fallbackTexto
+    fallbackTexto,
+    sessionKey
   );
 
   await enviarTextoCompatibilidade(
     client,
     user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o horario.`
+    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o horario.`,
+    sessionKey
   );
 
   if (!enviado) {
@@ -813,7 +872,7 @@ async function enviarListaHorarios(client, user, estado) {
   }
 }
 
-async function enviarConfirmacao(client, user, estado) {
+async function enviarConfirmacao(client, user, estado, sessionKey) {
   estado.etapa = 'confirmar';
   const resumo = montarResumoAgendamento(user, estado);
 
@@ -826,15 +885,16 @@ async function enviarConfirmacao(client, user, estado) {
       { id: 'confirmar:nao', text: 'Cancelar' },
     ],
     'Confirme seu horario',
-    'Revise antes de finalizar'
+    'Revise antes de finalizar',
+    sessionKey
   );
 
   if (!enviado) {
-    await enviarTexto(client, user, `${resumo}\n\nResponda CONFIRMAR ou CANCELAR.`);
+    await enviarTexto(client, user, `${resumo}\n\nResponda CONFIRMAR ou CANCELAR.`, sessionKey);
     return;
   }
 
-  await enviarTextoCompatibilidade(client, user, `${resumo}\n\n1. CONFIRMAR\n2. CANCELAR`);
+  await enviarTextoCompatibilidade(client, user, `${resumo}\n\n1. CONFIRMAR\n2. CANCELAR`, sessionKey);
 }
 
 function encontrarServico(servicos, payload, body) {
@@ -890,6 +950,7 @@ function attachBotHandlers(client, options = {}) {
 
   client.onMessage(async (message) => {
     if (foiEnviadaPeloBot(message)) return;
+    if (message.fromMe || String(message.from || '').includes('@g.us') || message.from === 'status@broadcast') return;
 
     const user = message.from;
     const { body, payload, normalizado } = extrairSelecao(message);
@@ -911,6 +972,7 @@ function attachBotHandlers(client, options = {}) {
     const estado = estados[user];
 
     try {
+      await apagarUltimasMensagensDoBot(client, sessionKey, user);
       const acesso = await carregarAcessoAssinatura(assinaturaId, sessionKey);
 
       if (!acesso.liberado) {
@@ -923,6 +985,27 @@ function attachBotHandlers(client, options = {}) {
       const configuracaoAgenda = await carregarConfiguracaoAgenda(assinaturaId, sessionKey);
 
       if (ehComandoMenu(normalizado, payload)) {
+        await enviarMenuPrincipal(client, user, sessionKey);
+        return;
+      }
+
+      if (estado.etapa === 'inicio') {
+        if (normalizado === 'agendar' || normalizado === '1') {
+          const podeContinuar = await pedirNomeCliente(client, user, estado, sessionKey);
+
+          if (!podeContinuar) {
+            return;
+          }
+
+          await enviarListaServicos(client, user, estado, servicos, sessionKey);
+          return;
+        }
+
+        if (normalizado === 'precos' || normalizado === '2') {
+          await enviarPrecos(client, user, servicos, sessionKey);
+          return;
+        }
+
         await enviarMenuPrincipal(client, user, sessionKey);
         return;
       }
@@ -958,7 +1041,7 @@ function attachBotHandlers(client, options = {}) {
             return;
           }
 
-          await enviarListaServicos(client, user, estado, servicos);
+          await enviarListaServicos(client, user, estado, servicos, sessionKey);
           return;
         }
 
@@ -967,7 +1050,7 @@ function attachBotHandlers(client, options = {}) {
           return;
         }
 
-        await enviarTexto(client, user, 'Nao entendi sua escolha. Digite Menu para abrir as opcoes do atendimento.');
+        await enviarTexto(client, user, 'Nao entendi sua escolha. Digite Menu para abrir as opcoes do atendimento.', sessionKey);
         return;
       }
 
@@ -975,13 +1058,13 @@ function attachBotHandlers(client, options = {}) {
         const nomeCliente = body.trim();
 
         if (nomeCliente.length < 3 || /^\d+$/.test(nomeCliente)) {
-          await enviarTexto(client, user, 'Me envie seu nome para eu salvar o agendamento certinho.');
+          await enviarTexto(client, user, 'Me envie seu nome para eu salvar o agendamento certinho.', sessionKey);
           return;
         }
 
         estado.nomeCliente = nomeCliente;
-        await enviarTexto(client, user, `Perfeito, ${nomeCliente}. Agora vamos escolher seu servico.`);
-        await enviarListaServicos(client, user, estado, servicos);
+        await enviarTexto(client, user, `Perfeito, ${nomeCliente}. Agora vamos escolher seu servico.`, sessionKey);
+        await enviarListaServicos(client, user, estado, servicos, sessionKey);
         return;
       }
 
@@ -989,7 +1072,7 @@ function attachBotHandlers(client, options = {}) {
         const servico = encontrarServico(servicos, payload, body);
 
         if (!servico) {
-          await enviarTexto(client, user, 'Nao encontrei esse servico. Digite Menu para abrir as opcoes do atendimento.');
+          await enviarTexto(client, user, 'Nao encontrei esse servico. Digite Menu para abrir as opcoes do atendimento.', sessionKey);
           return;
         }
 
@@ -1002,7 +1085,7 @@ function attachBotHandlers(client, options = {}) {
         const dataSelecionada = encontrarData(estado, payload, body);
 
         if (!dataSelecionada) {
-          await enviarTexto(client, user, 'Nao encontrei essa data. Digite Menu para abrir as opcoes do atendimento.');
+          await enviarTexto(client, user, 'Nao encontrei essa data. Digite Menu para abrir as opcoes do atendimento.', sessionKey);
           return;
         }
 
@@ -1010,12 +1093,12 @@ function attachBotHandlers(client, options = {}) {
         estado.horariosLivres = await buscarHorariosLivres(estado.data, configuracaoAgenda, sessionKey);
 
         if (!estado.horariosLivres.length) {
-          await enviarTexto(client, user, 'Nao ha horarios livres nesse dia. Vamos escolher outra data.');
+          await enviarTexto(client, user, 'Nao ha horarios livres nesse dia. Vamos escolher outra data.', sessionKey);
           await enviarListaDatas(client, user, estado, configuracaoAgenda, sessionKey);
           return;
         }
 
-        await enviarListaHorarios(client, user, estado);
+        await enviarListaHorarios(client, user, estado, sessionKey);
         return;
       }
 
@@ -1023,12 +1106,12 @@ function attachBotHandlers(client, options = {}) {
         const horario = encontrarHorario(estado, payload, body);
 
         if (!horario) {
-          await enviarTexto(client, user, 'Nao encontrei esse horario. Digite Menu para abrir as opcoes do atendimento.');
+          await enviarTexto(client, user, 'Nao encontrei esse horario. Digite Menu para abrir as opcoes do atendimento.', sessionKey);
           return;
         }
 
         estado.hora = horario;
-        await enviarConfirmacao(client, user, estado);
+        await enviarConfirmacao(client, user, estado, sessionKey);
         return;
       }
 
@@ -1047,29 +1130,31 @@ function attachBotHandlers(client, options = {}) {
               'Qualquer coisa, digite MENU para fazer outro agendamento ou EXCLUIR se voce quiser cancelar esse horario e marcar outro dia.',
             ]
               .filter((item) => item !== null && item !== undefined && String(item).length > 0)
-              .join('\n\n')
+              .join('\n\n'),
+            sessionKey
           );
           resetarEstado(sessionKey, user);
           return;
         }
 
         if (payload === 'confirmar:nao' || normalizado === '2' || normalizado === 'cancelar') {
-          await enviarTexto(client, user, 'Tudo bem! Seu agendamento nao foi salvo. Digite Menu para comecar de novo.');
+          await enviarTexto(client, user, 'Tudo bem! Seu agendamento nao foi salvo. Digite Menu para comecar de novo.', sessionKey);
           resetarEstado(sessionKey, user);
           return;
         }
 
-        await enviarTexto(client, user, 'Nao entendi. Digite Menu para abrir as opcoes do atendimento.');
+        await enviarTexto(client, user, 'Nao entendi. Digite Menu para abrir as opcoes do atendimento.', sessionKey);
         return;
       }
 
-      await enviarTexto(client, user, 'Digite Menu para abrir as opcoes do atendimento.');
+      await enviarTexto(client, user, 'Digite Menu para abrir as opcoes do atendimento.', sessionKey);
     } catch (error) {
       console.error(`Erro no fluxo do WhatsApp (${sessionKey}):`, error);
       await enviarTexto(
         client,
         user,
-        'Tive um problema ao processar sua mensagem. Digite Menu para abrir as opcoes do atendimento.'
+        'Tive um problema ao processar sua mensagem. Digite Menu para abrir as opcoes do atendimento.',
+        sessionKey
       );
       resetarEstado(sessionKey, user);
     }
