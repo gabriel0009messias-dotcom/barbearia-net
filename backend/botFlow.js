@@ -73,6 +73,12 @@ function formatarPreco(preco) {
   return `R$ ${Number(preco).toFixed(2).replace('.', ',')}`;
 }
 
+function removerEmojiInicial(texto = '') {
+  return String(texto || '')
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .trim();
+}
+
 function erroHorarioJaOcupado(error) {
   return error?.code === 'SQLITE_CONSTRAINT' || /ja foi agendado|unique|constraint/i.test(String(error?.message || ''));
 }
@@ -336,27 +342,53 @@ function formatarData(data) {
   });
 }
 
+function capitalizarTexto(texto = '') {
+  const valor = String(texto || '').trim();
+  return valor ? valor.charAt(0).toUpperCase() + valor.slice(1) : '';
+}
+
+function formatarDataEnquete(data) {
+  const formatada = new Date(`${data}T00:00:00`).toLocaleDateString('pt-BR', {
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+  });
+  const [diaSemana, diaMes] = formatada.split(',').map((item) => String(item || '').trim());
+  return `${capitalizarTexto(diaSemana)} (${diaMes})`;
+}
+
 function montarListaPrecos(servicos) {
   return servicos.map((servico) => `- ${servico.nome}: ${formatarPreco(servico.preco)}`).join('\n');
 }
 
 function montarMenuServicosFallback(servicos) {
   return servicos
-    .map((servico, index) => `${index + 1}. ${servico.nome} - ${formatarPreco(servico.preco)}`)
+    .map((servico, index) => `${index + 1}. ${servico.nome}`)
     .join('\n');
 }
 
 function montarResumoAgendamento(user, estado) {
   const nomeCliente = estado.nomeCliente || user;
+  const linhas = [
+    'Resumo de pre-agendamento',
+    `✅ Cliente: ${nomeCliente}`,
+    `✅ Preco: ${formatarPreco(estado.servico.preco)}`,
+    '',
+    `✅ ${estado.servico.nome}`,
+    `✅ ${formatarDataEnquete(estado.data)}`,
+    `✅ ${estado.hora}`,
+  ];
 
-  return [
-    'Resumo do agendamento:',
-    `Cliente: ${nomeCliente}`,
-    `Servico: ${estado.servico.nome}`,
-    `Preco: ${formatarPreco(estado.servico.preco)}`,
-    `Data: ${new Date(`${estado.data}T00:00:00`).toLocaleDateString('pt-BR')}`,
-    `Horario: ${estado.hora}`,
-  ].join('\n');
+  if (estado.reservaParaTerceiro) {
+    linhas.push('✅ Reserva para terceiro');
+  }
+
+  if (estado.observacao) {
+    linhas.push(`✅ Observacao: ${estado.observacao}`);
+  }
+
+  linhas.push('', 'confirme na proxima mensagem caso esteja tudo correto');
+  return linhas.join('\n');
 }
 
 function converterHorarioParaMinutos(horario) {
@@ -774,58 +806,65 @@ async function enviarListaInterativa(client, user, options, fallbackTexto, sessi
   }
 }
 
+function criarLinhasFallback(opcoes = []) {
+  return opcoes.map((opcao, index) => `${index + 1}. ${opcao}`).join('\n');
+}
+
+function mapearDatasParaOpcoes(datas = []) {
+  return datas.map((item) => ({
+    ...item,
+    opcao: formatarDataEnquete(item.valor),
+  }));
+}
+
+function obterOpcoesPaginaHorario(estado) {
+  const paginaAtual = Number(estado.horarioPaginaAtual || 0);
+  const tamanhoPagina = 8;
+  const inicio = paginaAtual * tamanhoPagina;
+  const fim = inicio + tamanhoPagina;
+  const horariosBase = (estado.horariosLivres || []).slice(inicio, fim);
+  const opcoes = [...horariosBase];
+  const possuiMais = fim < (estado.horariosLivres || []).length;
+
+  if (possuiMais) {
+    opcoes.push('➕ Mais opções');
+  }
+
+  if (paginaAtual > 0) {
+    opcoes.push('↩️ Voltar');
+  }
+
+  return opcoes;
+}
+
 async function enviarMenuPrincipal(client, user, sessionKey) {
   resetarEstado(sessionKey, user);
   const estados = getEstados(sessionKey);
   estados[user].etapa = 'menu';
-  const fallbackMenu = 'Ola! Como posso te ajudar?\n1. AGENDAR\n2. PRECOS\n3. ENDERECO';
+  const opcoesMenu = [
+    '🗓️ Realizar agendamento',
+    '💰 Preços',
+    '📍 Endereço',
+    '❌ Cancelar agendamento',
+  ];
+  const fallbackMenu = `Ola! Como posso te ajudar?\n${criarLinhasFallback(opcoesMenu)}`;
 
   const enqueteEnviada = await enviarEnqueteInterativa(
     client,
     user,
     'Como posso te ajudar?\n\nEssa pergunta sera apagada apos a resposta',
-    ['🗓️ Realizar agendamento', '💰 Preços', '📍 Endereço'],
+    opcoesMenu,
     sessionKey
   );
 
   if (!enqueteEnviada) {
-    await enviarListaInterativa(
+    await enviarTextoCompatibilidade(
       client,
       user,
-      {
-        buttonText: 'Abrir menu',
-        description: 'Ola! Escolha uma opcao abaixo para continuar.',
-        title: 'Barbearia',
-        footer: 'Selecione uma opcao',
-        sections: [
-          {
-            title: 'Atendimento',
-            rows: [
-              {
-                rowId: 'menu_agendar',
-                title: 'Agendar horario',
-                description: 'Escolher servico, dia e horario',
-              },
-              {
-                rowId: 'menu_precos',
-                title: 'Ver precos',
-                description: 'Consultar valores de corte e barba',
-              },
-              {
-                rowId: 'menu_endereco',
-                title: 'Endereco',
-                description: 'Ver onde fica a barbearia',
-              },
-            ],
-          },
-        ],
-      },
-      fallbackMenu,
+      `${fallbackMenu}\n\nSe as opcoes nao aparecerem, responda com AGENDAR, PRECOS, ENDERECO ou CANCELAR AGENDAMENTO.`,
       sessionKey
     );
   }
-
-  await enviarTextoCompatibilidade(client, user, `${fallbackMenu}\n\nSe as opcoes nao aparecerem, responda com AGENDAR, PRECOS ou ENDERECO.`, sessionKey);
 }
 
 async function enviarPrecos(client, user, servicos, sessionKey) {
@@ -834,37 +873,7 @@ async function enviarPrecos(client, user, servicos, sessionKey) {
   estados[user].etapa = 'menu';
 
   await enviarTexto(client, user, `Tabela de precos:\n\n${montarListaPrecos(servicos)}`, sessionKey);
-
-  await enviarListaInterativa(client, user, {
-    buttonText: 'Escolher proxima etapa',
-    description: 'Agora voce pode agendar seu horario ou voltar ao menu.',
-    title: 'Precos da barbearia',
-    footer: 'Selecione uma opcao',
-    sections: [
-      {
-        title: 'Atendimento',
-        rows: [
-          {
-            rowId: 'menu_agendar',
-            title: 'Agendar horario',
-            description: 'Escolher servico, dia e horario',
-          },
-          {
-            rowId: 'menu_voltar',
-            title: 'Voltar ao menu',
-            description: 'Ver as opcoes iniciais novamente',
-          },
-        ],
-      },
-    ],
-  }, null, sessionKey);
-
-  await enviarTextoCompatibilidade(
-    client,
-    user,
-    `Tabela de precos em texto:\n\n${montarListaPrecos(servicos)}\n\n1. AGENDAR\n2. MENU\n3. ENDERECO`,
-    sessionKey
-  );
+  await enviarMenuPrincipal(client, user, sessionKey);
 }
 
 async function enviarEndereco(client, user, assinaturaId, sessionKey) {
@@ -883,45 +892,32 @@ async function enviarEndereco(client, user, assinaturaId, sessionKey) {
 
 async function enviarListaServicos(client, user, estado, servicos, sessionKey) {
   estado.etapa = 'servico';
+  estado.servicosDisponiveis = servicos.map((servico) => ({
+    ...servico,
+    opcao: servico.nome,
+  }));
   const fallbackTexto = `Qual o servico?\n${montarMenuServicosFallback(servicos)}`;
 
-  const enviado = await enviarListaInterativa(
+  const enviado = await enviarEnqueteInterativa(
     client,
     user,
-    {
-      buttonText: 'Escolher servico',
-      description: 'Toque para ver os servicos e os precos antes de agendar.',
-      title: 'Qual servico voce quer?',
-      footer: 'Selecione uma opcao',
-      sections: [
-        {
-          title: 'Servicos disponiveis',
-          rows: servicos.map((servico) => ({
-            rowId: `servico:${servico.id}`,
-            title: servico.nome,
-            description: formatarPreco(servico.preco),
-          })),
-        },
-      ],
-    },
-    fallbackTexto,
-    sessionKey
-  );
-
-  await enviarTextoCompatibilidade(
-    client,
-    user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o nome do servico.`,
+    'Qual o serviço?',
+    estado.servicosDisponiveis.map((servico) => servico.opcao),
     sessionKey
   );
 
   if (!enviado) {
-    estado.usandoFallbackTexto = true;
+    await enviarTextoCompatibilidade(
+      client,
+      user,
+      `${fallbackTexto}\n\nSe a enquete nao aparecer no seu celular, responda com o numero ou com o nome do servico.`,
+      sessionKey
+    );
   }
 }
 
 async function enviarListaDatas(client, user, estado, configuracaoAgenda, sessionKey) {
-  const datas = await buscarDatasDisponiveis(configuracaoAgenda, sessionKey);
+  const datas = mapearDatasParaOpcoes(await buscarDatasDisponiveis(configuracaoAgenda, sessionKey));
   estado.etapa = 'data';
   estado.datasDisponiveis = datas;
 
@@ -934,81 +930,46 @@ async function enviarListaDatas(client, user, estado, configuracaoAgenda, sessio
     return;
   }
 
-  const fallbackTexto = `Qual o dia?\n${datas.map((item, index) => `${index + 1}. ${item.titulo}`).join('\n')}`;
+  const fallbackTexto = `Qual o dia?\n${datas.map((item, index) => `${index + 1}. ${item.opcao}`).join('\n')}`;
 
-  const enviado = await enviarListaInterativa(
+  const enviado = await enviarEnqueteInterativa(
     client,
     user,
-    {
-      buttonText: 'Escolher dia',
-      description: 'Selecione o melhor dia para voce.',
-      title: 'Datas disponiveis',
-      footer: 'Escolha uma data',
-      sections: [
-        {
-          title: 'Proximos 7 dias',
-          rows: datas.map((item) => ({
-            rowId: `data:${item.valor}`,
-            title: item.titulo,
-            description: item.descricao,
-          })),
-        },
-      ],
-    },
-    fallbackTexto,
-    sessionKey
-  );
-
-  await enviarTextoCompatibilidade(
-    client,
-    user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero do dia ou com o dia escrito.`,
+    'Escolha o dia',
+    datas.map((item) => item.opcao),
     sessionKey
   );
 
   if (!enviado) {
-    estado.usandoFallbackTexto = true;
+    await enviarTextoCompatibilidade(
+      client,
+      user,
+      `${fallbackTexto}\n\nSe a enquete nao aparecer no seu celular, responda com o numero do dia ou com o dia escrito.`,
+      sessionKey
+    );
   }
 }
 
 async function enviarListaHorarios(client, user, estado, sessionKey) {
   estado.etapa = 'hora';
-  const fallbackTexto = `Qual o horario?\n${estado.horariosLivres
-    .map((hora, index) => `${index + 1}. ${hora}`)
-    .join('\n')}`;
+  const opcoes = obterOpcoesPaginaHorario(estado);
+  const fallbackTexto = `Qual o horario?\n${criarLinhasFallback(opcoes)}`;
 
-  const enviado = await enviarListaInterativa(
+  const enviado = await enviarEnqueteInterativa(
     client,
     user,
-    {
-      buttonText: 'Escolher horario',
-      description: `Horarios livres para ${formatarData(estado.data)}.`,
-      title: 'Escolha seu horario',
-      footer: 'Toque em um horario',
-      sections: [
-        {
-          title: 'Horarios disponiveis',
-          rows: estado.horariosLivres.map((hora) => ({
-            rowId: `hora:${hora}`,
-            title: hora,
-            description: 'Horario disponivel',
-          })),
-        },
-      ],
-    },
-    fallbackTexto,
-    sessionKey
-  );
-
-  await enviarTextoCompatibilidade(
-    client,
-    user,
-    `${fallbackTexto}\n\nSe a lista nao aparecer no seu celular, responda com o numero ou com o horario.`,
+    `Horarios para ${formatarDataEnquete(estado.data)}`,
+    opcoes,
     sessionKey
   );
 
   if (!enviado) {
-    estado.usandoFallbackTexto = true;
+    await enviarTextoCompatibilidade(
+      client,
+      user,
+      `${fallbackTexto}\n\nSe a enquete nao aparecer no seu celular, responda com o numero ou com o horario.`,
+      sessionKey
+    );
   }
 }
 
@@ -1016,25 +977,30 @@ async function enviarConfirmacao(client, user, estado, sessionKey) {
   estado.etapa = 'confirmar';
   const resumo = montarResumoAgendamento(user, estado);
 
-  const enviado = await enviarTextoComBotoes(
+  await enviarTexto(client, user, resumo, sessionKey);
+
+  const enviado = await enviarEnqueteInterativa(
     client,
     user,
-    resumo,
+    'Essa pergunta sera apagada apos a resposta',
     [
-      { id: 'confirmar:sim', text: 'Confirmar' },
-      { id: 'confirmar:nao', text: 'Cancelar' },
+      '⚠️ Essa reserva é para um terceiro',
+      '💬 Incluir observação',
+      '🖊️ Alterar meu nome',
+      '✅ Confirmar agendamento',
+      '❌ Recomeçar',
     ],
-    'Confirme seu horario',
-    'Revise antes de finalizar',
     sessionKey
   );
 
   if (!enviado) {
-    await enviarTexto(client, user, `${resumo}\n\nResponda CONFIRMAR ou CANCELAR.`, sessionKey);
-    return;
+    await enviarTexto(
+      client,
+      user,
+      'Responda com: CONFIRMAR, ALTERAR NOME, OBSERVACAO, TERCEIRO ou RECOMECAR.',
+      sessionKey
+    );
   }
-
-  await enviarTextoCompatibilidade(client, user, `${resumo}\n\n1. CONFIRMAR\n2. CANCELAR`, sessionKey);
 }
 
 function encontrarServico(servicos, payload, body) {
@@ -1047,7 +1013,11 @@ function encontrarServico(servicos, payload, body) {
   if (servicos[indice]) return servicos[indice];
 
   const textoNormalizado = normalizarTexto(body);
-  return servicos.find((servico) => normalizarTexto(servico.nome) === textoNormalizado);
+  return servicos.find(
+    (servico) =>
+      normalizarTexto(servico.nome) === textoNormalizado ||
+      normalizarTexto(servico.opcao || '') === textoNormalizado
+  );
 }
 
 function encontrarData(estado, payload, body) {
@@ -1060,7 +1030,11 @@ function encontrarData(estado, payload, body) {
   if (estado.datasDisponiveis?.[indice]) return estado.datasDisponiveis[indice];
 
   const textoNormalizado = normalizarTexto(body);
-  return estado.datasDisponiveis?.find((item) => normalizarTexto(item.titulo) === textoNormalizado);
+  return estado.datasDisponiveis?.find(
+    (item) =>
+      normalizarTexto(item.titulo) === textoNormalizado ||
+      normalizarTexto(item.opcao || '') === textoNormalizado
+  );
 }
 
 function encontrarHorario(estado, payload, body) {
@@ -1070,9 +1044,13 @@ function encontrarHorario(estado, payload, body) {
   }
 
   const indice = Number.parseInt(body, 10) - 1;
-  if (estado.horariosLivres?.[indice]) return estado.horariosLivres[indice];
+  const opcoesPagina = obterOpcoesPaginaHorario(estado);
+  if (opcoesPagina?.[indice]) return opcoesPagina[indice];
 
-  return estado.horariosLivres?.find((item) => item === body);
+  const textoNormalizado = normalizarTexto(removerEmojiInicial(body));
+  return opcoesPagina?.find(
+    (item) => item === body || normalizarTexto(removerEmojiInicial(item)) === textoNormalizado
+  );
 }
 
 function ehComandoMenu(normalizado, payload) {
@@ -1081,6 +1059,18 @@ function ehComandoMenu(normalizado, payload) {
 
 function ehComandoCancelarAgendamento(normalizado) {
   return ['excluir', 'cancelar agendamento', 'cancelar horario', 'desmarcar'].includes(normalizado);
+}
+
+function ehOpcaoAgendar(normalizado, payload) {
+  return payload === 'menu_agendar' || ['1', 'agendar', 'realizar agendamento'].includes(normalizado);
+}
+
+function ehOpcaoPrecos(normalizado, payload) {
+  return payload === 'menu_precos' || ['2', 'precos'].includes(normalizado);
+}
+
+function ehOpcaoEndereco(normalizado, payload) {
+  return payload === 'menu_endereco' || ['3', 'endereco'].includes(normalizado);
 }
 
 function extrairOpcaoEnquete(data = {}) {
@@ -1092,21 +1082,13 @@ function extrairOpcaoEnquete(data = {}) {
       primeiraOpcao?.value ||
       ''
   ).trim();
-  const normalizado = normalizarTexto(texto);
+  if (!texto) return null;
 
-  if (normalizado.includes('agendamento') || normalizado.includes('agendar')) {
-    return { body: 'AGENDAR', payload: 'menu_agendar', normalizado: 'agendar' };
-  }
-
-  if (normalizado.includes('preco')) {
-    return { body: 'PRECOS', payload: 'menu_precos', normalizado: 'precos' };
-  }
-
-  if (normalizado.includes('endereco')) {
-    return { body: 'ENDERECO', payload: 'menu_endereco', normalizado: 'endereco' };
-  }
-
-  return null;
+  return {
+    body: texto,
+    payload: texto,
+    normalizado: normalizarTexto(removerEmojiInicial(texto)),
+  };
 }
 
 function attachBotHandlers(client, options = {}) {
@@ -1153,23 +1135,17 @@ function attachBotHandlers(client, options = {}) {
       }
 
       if (estado.etapa === 'inicio') {
-        if (normalizado === 'agendar' || normalizado === '1') {
-          const podeContinuar = await pedirNomeCliente(client, user, estado, sessionKey);
-
-          if (!podeContinuar) {
-            return;
-          }
-
+        if (ehOpcaoAgendar(normalizado, payload)) {
           await enviarListaServicos(client, user, estado, servicos, sessionKey);
           return;
         }
 
-        if (normalizado === 'precos' || normalizado === '2') {
+        if (ehOpcaoPrecos(normalizado, payload)) {
           await enviarPrecos(client, user, servicos, sessionKey);
           return;
         }
 
-        if (normalizado === 'endereco' || normalizado === '3') {
+        if (ehOpcaoEndereco(normalizado, payload)) {
           await enviarEndereco(client, user, assinaturaId, sessionKey);
           return;
         }
@@ -1204,24 +1180,39 @@ function attachBotHandlers(client, options = {}) {
       }
 
       if (estado.etapa === 'menu') {
-        if (payload === 'menu_agendar' || normalizado === '1' || normalizado === 'agendar') {
-          const podeContinuar = await pedirNomeCliente(client, user, estado, sessionKey);
-
-          if (!podeContinuar) {
-            return;
-          }
-
+        if (ehOpcaoAgendar(normalizado, payload)) {
           await enviarListaServicos(client, user, estado, servicos, sessionKey);
           return;
         }
 
-        if (payload === 'menu_precos' || normalizado === '2' || normalizado === 'precos') {
+        if (ehOpcaoPrecos(normalizado, payload)) {
           await enviarPrecos(client, user, servicos, sessionKey);
           return;
         }
 
-        if (payload === 'menu_endereco' || normalizado === '3' || normalizado === 'endereco') {
+        if (ehOpcaoEndereco(normalizado, payload)) {
           await enviarEndereco(client, user, assinaturaId, sessionKey);
+          return;
+        }
+
+        if (normalizado === 'cancelar agendamento' || normalizado === '4') {
+          const agendamentoCancelado = await cancelarAgendamentoDoCliente(user, sessionKey);
+
+          if (!agendamentoCancelado) {
+            await enviarTexto(client, user, 'Voce nao tem nenhum agendamento confirmado para cancelar agora.', sessionKey);
+            await enviarMenuPrincipal(client, user, sessionKey);
+            return;
+          }
+
+          await enviarTexto(
+            client,
+            user,
+            `Seu agendamento foi cancelado com sucesso.\nServico: ${agendamentoCancelado.servico || '-'}\nData: ${new Date(
+              `${agendamentoCancelado.data}T00:00:00`
+            ).toLocaleDateString('pt-BR')}\nHorario: ${agendamentoCancelado.hora}`,
+            sessionKey
+          );
+          await enviarMenuPrincipal(client, user, sessionKey);
           return;
         }
 
@@ -1233,13 +1224,26 @@ function attachBotHandlers(client, options = {}) {
         const nomeCliente = body.trim();
 
         if (nomeCliente.length < 3 || /^\d+$/.test(nomeCliente)) {
-          await enviarTexto(client, user, 'Me envie seu nome para eu salvar o agendamento certinho.', sessionKey);
+          await enviarTexto(client, user, 'Agora me informe o seu nome completo\ndigite abaixo', sessionKey);
           return;
         }
 
         estado.nomeCliente = nomeCliente;
-        await enviarTexto(client, user, `Perfeito, ${nomeCliente}. Agora vamos escolher seu servico.`, sessionKey);
-        await enviarListaServicos(client, user, estado, servicos, sessionKey);
+        estado.nomeRetornoEtapa = null;
+        await enviarConfirmacao(client, user, estado, sessionKey);
+        return;
+      }
+
+      if (estado.etapa === 'observacao') {
+        const observacao = body.trim();
+
+        if (observacao.length < 2) {
+          await enviarTexto(client, user, 'Digite a observacao abaixo para continuar.', sessionKey);
+          return;
+        }
+
+        estado.observacao = observacao;
+        await enviarConfirmacao(client, user, estado, sessionKey);
         return;
       }
 
@@ -1266,6 +1270,7 @@ function attachBotHandlers(client, options = {}) {
 
         estado.data = dataSelecionada.valor;
         estado.horariosLivres = await buscarHorariosLivres(estado.data, configuracaoAgenda, sessionKey);
+        estado.horarioPaginaAtual = 0;
 
         if (!estado.horariosLivres.length) {
           await enviarTexto(client, user, 'Nao ha horarios livres nesse dia. Vamos escolher outra data.', sessionKey);
@@ -1285,13 +1290,26 @@ function attachBotHandlers(client, options = {}) {
           return;
         }
 
+        if (horario === '➕ Mais opções') {
+          estado.horarioPaginaAtual = Number(estado.horarioPaginaAtual || 0) + 1;
+          await enviarListaHorarios(client, user, estado, sessionKey);
+          return;
+        }
+
+        if (horario === '↩️ Voltar') {
+          estado.horarioPaginaAtual = Math.max(0, Number(estado.horarioPaginaAtual || 0) - 1);
+          await enviarListaHorarios(client, user, estado, sessionKey);
+          return;
+        }
+
         estado.hora = horario;
-        await enviarConfirmacao(client, user, estado, sessionKey);
+        estado.etapa = 'nome';
+        await enviarTexto(client, user, 'Agora me informe o seu nome completo\ndigite abaixo', sessionKey);
         return;
       }
 
       if (estado.etapa === 'confirmar') {
-        if (payload === 'confirmar:sim' || normalizado === '1' || normalizado === 'confirmar') {
+        if (normalizado === 'confirmar agendamento' || normalizado === 'confirmar' || normalizado === '1') {
           await salvarAgendamento(user, estado, sessionKey);
           const localizacaoSalao = await carregarLocalizacaoSalao(assinaturaId, sessionKey);
           const textoLocalizacao = montarTextoLocalizacao(localizacaoSalao);
@@ -1312,9 +1330,28 @@ function attachBotHandlers(client, options = {}) {
           return;
         }
 
-        if (payload === 'confirmar:nao' || normalizado === '2' || normalizado === 'cancelar') {
-          await enviarTexto(client, user, 'Tudo bem! Seu agendamento nao foi salvo. Digite Menu para comecar de novo.', sessionKey);
+        if (normalizado === 'alterar meu nome' || normalizado === 'alterar nome') {
+          estado.etapa = 'nome';
+          await enviarTexto(client, user, 'Agora me informe o seu nome completo\ndigite abaixo', sessionKey);
+          return;
+        }
+
+        if (normalizado === 'incluir observacao' || normalizado === 'observacao') {
+          estado.etapa = 'observacao';
+          await enviarTexto(client, user, 'Digite a observacao abaixo', sessionKey);
+          return;
+        }
+
+        if (normalizado === 'essa reserva e para um terceiro' || normalizado === 'reserva para um terceiro' || normalizado === 'terceiro') {
+          estado.reservaParaTerceiro = true;
+          estado.etapa = 'nome';
+          await enviarTexto(client, user, 'Me informe o nome completo da pessoa que sera atendida\ndigite abaixo', sessionKey);
+          return;
+        }
+
+        if (normalizado === 'recomecar' || normalizado === 'cancelar') {
           resetarEstado(sessionKey, user);
+          await enviarMenuPrincipal(client, user, sessionKey);
           return;
         }
 
