@@ -7,6 +7,7 @@ require('./loadEnv');
 
 const asaas = require('./asaas');
 const apiRoutes = require('./routes');
+const { handleWhatsappWebhook } = require('./whatsappWebhook');
 
 const app = express();
 app.set('trust proxy', true);
@@ -1589,6 +1590,20 @@ app.post('/criar-assinatura', async (req, res) => {
 });
 
 app.post('/webhook', (req, res) => {
+  if (req.body?.telefone || req.body?.phone || req.body?.from) {
+    handleWhatsappWebhook({
+      body: req.body,
+      headers: req.headers,
+    })
+      .then((resultado) => {
+        res.json(resultado);
+      })
+      .catch((error) => {
+        res.status(400).json({ error: error.message });
+      });
+    return;
+  }
+
   const evento = String(req.body?.event || '').trim().toUpperCase();
   const assinaturaAtualizada = atualizarStatusAssinaturaPorEvento(req.body);
 

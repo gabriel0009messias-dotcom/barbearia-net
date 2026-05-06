@@ -147,11 +147,17 @@ db.serialize(() => {
 
   db.run(`CREATE TABLE IF NOT EXISTS agendamentos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assinatura_id INTEGER,
     cliente_id INTEGER,
     servico_id INTEGER,
+    nome_cliente TEXT,
+    telefone TEXT,
+    servico_nome TEXT,
+    preco REAL,
     data TEXT,
     hora TEXT,
     status TEXT,
+    FOREIGN KEY(assinatura_id) REFERENCES assinaturas(id),
     FOREIGN KEY(cliente_id) REFERENCES clientes(id),
     FOREIGN KEY(servico_id) REFERENCES servicos(id)
   )`);
@@ -162,8 +168,24 @@ db.serialize(() => {
 
   db.run(`CREATE TABLE IF NOT EXISTS bloqueios (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assinatura_id INTEGER,
     data TEXT,
-    hora TEXT
+    hora TEXT,
+    FOREIGN KEY(assinatura_id) REFERENCES assinaturas(id)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS sessoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assinatura_id INTEGER NOT NULL,
+    telefone TEXT NOT NULL,
+    etapa TEXT NOT NULL,
+    servico TEXT,
+    preco REAL,
+    nome TEXT,
+    data TEXT,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(assinatura_id) REFERENCES assinaturas(id) ON DELETE CASCADE,
+    UNIQUE(assinatura_id, telefone)
   )`);
 
   db.run(`CREATE TABLE IF NOT EXISTS assinaturas (
@@ -261,6 +283,12 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'mercado_last_payload', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_15_enviado_em', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_7_enviado_em', 'TEXT');
+  garantirColuna('agendamentos', 'assinatura_id', 'INTEGER');
+  garantirColuna('agendamentos', 'nome_cliente', 'TEXT');
+  garantirColuna('agendamentos', 'telefone', 'TEXT');
+  garantirColuna('agendamentos', 'servico_nome', 'TEXT');
+  garantirColuna('agendamentos', 'preco', 'REAL');
+  garantirColuna('bloqueios', 'assinatura_id', 'INTEGER');
 
   db.run(`UPDATE assinaturas
           SET metodo_pagamento = 'pix'

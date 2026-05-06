@@ -23,6 +23,7 @@ const {
   reiniciarSessao: reiniciarSessaoWhatsappLocal,
   statusSessao: statusSessaoWhatsappLocal,
 } = require('./whatsappManager');
+const { handleWhatsappWebhook } = require('./whatsappWebhook');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -860,6 +861,54 @@ async function obterOuCriarServicoPadrao(nome, preco) {
   await runAsync('INSERT INTO servicos (id, nome, preco) VALUES (?, ?, ?)', [novoId, nomeNormalizado, precoNormalizado]);
 
   return novoId;
+}
+
+async function buscarServicoDaAssinatura(assinaturaId, servicoId, servicoNome, servicoPreco) {
+  const idNumerico = Number(servicoId);
+
+  if (Number.isInteger(idNumerico) && idNumerico > 0) {
+    const servicoAssinatura = await getAsync(
+      `SELECT id, nome, preco
+       FROM servicos_assinatura
+       WHERE assinatura_id = ?
+         AND id = ?`,
+      [assinaturaId, idNumerico]
+    );
+
+    if (servicoAssinatura) {
+      return servicoAssinatura;
+    }
+  }
+
+  const nomeNormalizado = String(servicoNome || '').trim();
+  const precoNormalizado = Number(servicoPreco);
+
+  if (!nomeNormalizado || !Number.isFinite(precoNormalizado) || precoNormalizado <= 0) {
+    return null;
+  }
+
+  const servicoPorNome = await getAsync(
+    `SELECT id, nome, preco
+     FROM servicos_assinatura
+     WHERE assinatura_id = ?
+       AND lower(nome) = lower(?)
+     ORDER BY id ASC
+     LIMIT 1`,
+    [assinaturaId, nomeNormalizado]
+  );
+
+  if (servicoPorNome) {
+    return {
+      ...servicoPorNome,
+      preco: Number(servicoPorNome.preco || precoNormalizado),
+    };
+  }
+
+  return {
+    id: null,
+    nome: nomeNormalizado,
+    preco: precoNormalizado,
+  };
 }
 
 function criarSessaoBarbeiro(assinaturaId) {
@@ -1826,10 +1875,10 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
   const query = `
     SELECT
       a.id,
-      c.nome AS cliente,
-      c.telefone,
-      s.nome AS servico,
-      s.preco,
+      COALESCE(a.nome_cliente, c.nome) AS cliente,
+      COALESCE(a.telefone, c.telefone) AS telefone,
+      COALESCE(a.servico_nome, s.nome) AS servico,
+      COALESCE(a.preco, s.preco, 0) AS preco,
       a.data,
       a.hora,
       a.status,
@@ -1838,10 +1887,11 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
     FROM agendamentos a
     LEFT JOIN clientes c ON c.id = a.cliente_id
     LEFT JOIN servicos s ON s.id = a.servico_id
+    WHERE a.assinatura_id = ?
     ORDER BY a.data ASC, a.hora ASC
   `;
 
-  db.all(query, [], (err, rows) => {
+  db.all(query, [req.assinatura.id], (err, rows) => {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -1861,6 +1911,7 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
 
   try {
     await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [cliente || telefone, telefone]);
+    await runAsync('UPDATE clientes SET nome = ? WHERE telefone = ?', [cliente || telefone, telefone]);
     const clienteRow = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [telefone]);
 
     if (!clienteRow?.id) {
@@ -1868,25 +1919,37 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
       return;
     }
 
-    const servicoIdFinal =
-      servicoNome && Number.isFinite(Number(servicoPreco))
-        ? await obterOuCriarServicoPadrao(servicoNome, servicoPreco)
-        : Number(servicoId);
+    const servico = await buscarServicoDaAssinatura(req.assinatura.id, servicoId, servicoNome, servicoPreco);
 
-    if (!Number.isInteger(servicoIdFinal) || servicoIdFinal <= 0) {
+    if (!servico?.nome || !Number.isFinite(Number(servico.preco)) || Number(servico.preco) <= 0) {
       res.status(400).json({ error: 'Servico invalido para salvar o agendamento.' });
       return;
     }
 
+    const servicoIdFinal = await obterOuCriarServicoPadrao(servico.nome, servico.preco);
+
     const resultado = await runAsync(
-      'INSERT INTO agendamentos (cliente_id, servico_id, data, hora, status) VALUES (?, ?, ?, ?, ?)',
-      [clienteRow.id, servicoIdFinal, data, hora, 'confirmado']
+      `INSERT INTO agendamentos (
+        assinatura_id,
+        cliente_id,
+        servico_id,
+        nome_cliente,
+        telefone,
+        servico_nome,
+        preco,
+        data,
+        hora,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.assinatura.id, clienteRow.id, servicoIdFinal, cliente || telefone, telefone, servico.nome, Number(servico.preco), data, hora, 'confirmado']
     );
 
     res.status(201).json({
       id: resultado.lastID,
       cliente: cliente || telefone,
       telefone,
+      servico: servico.nome,
+      preco: Number(servico.preco),
       servicoId: servicoIdFinal,
       data,
       hora,
@@ -1905,7 +1968,7 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
 router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
-  db.run('DELETE FROM agendamentos WHERE id = ?', [id], function onDelete(err) {
+  db.run('DELETE FROM agendamentos WHERE id = ? AND assinatura_id = ?', [id, req.assinatura.id], function onDelete(err) {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -1929,8 +1992,9 @@ router.post('/agendamentos/:id/lembrete-15', requirePainelOuBridge, async (req, 
       `UPDATE agendamentos
        SET lembrete_15_enviado_em = ?
        WHERE id = ?
+         AND assinatura_id = ?
          AND lembrete_15_enviado_em IS NULL`,
-      [enviadoEm, id]
+      [enviadoEm, id, req.assinatura.id]
     );
 
     if (!resultado.changes) {
@@ -1953,8 +2017,9 @@ router.post('/agendamentos/:id/lembrete-7', requirePainelOuBridge, async (req, r
       `UPDATE agendamentos
        SET lembrete_7_enviado_em = ?
        WHERE id = ?
+         AND assinatura_id = ?
          AND lembrete_7_enviado_em IS NULL`,
-      [enviadoEm, id]
+      [enviadoEm, id, req.assinatura.id]
     );
 
     if (!resultado.changes) {
@@ -1971,11 +2036,13 @@ router.post('/agendamentos/:id/lembrete-7', requirePainelOuBridge, async (req, r
 router.get('/faturamento', requireBarbeiro, (req, res) => {
   const { periodo } = req.query;
   let query = `
-    SELECT SUM(s.preco) AS total
+    SELECT SUM(COALESCE(a.preco, s.preco, 0)) AS total
     FROM agendamentos a
-    JOIN servicos s ON a.servico_id = s.id
+    LEFT JOIN servicos s ON a.servico_id = s.id
     WHERE a.status = 'confirmado'
+      AND a.assinatura_id = ?
   `;
+  const params = [req.assinatura.id];
 
   if (periodo === 'dia') {
     query += " AND date(a.data) = date('now')";
@@ -1989,7 +2056,7 @@ router.get('/faturamento', requireBarbeiro, (req, res) => {
     query += " AND strftime('%Y', a.data) = strftime('%Y', 'now')";
   }
 
-  db.get(query, [], (err, row) => {
+  db.get(query, params, (err, row) => {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -2000,14 +2067,31 @@ router.get('/faturamento', requireBarbeiro, (req, res) => {
 });
 
 router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
-  db.all('SELECT * FROM bloqueios ORDER BY data ASC, hora ASC', [], (err, rows) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+  db.all(
+    'SELECT * FROM bloqueios WHERE assinatura_id = ? ORDER BY data ASC, hora ASC',
+    [req.assinatura.id],
+    (err, rows) => {
+      if (err) {
+        res.status(500).json({ error: err.message });
+        return;
+      }
 
-    res.json(rows);
-  });
+      res.json(rows);
+    }
+  );
+});
+
+router.post('/webhook', async (req, res) => {
+  try {
+    const resultado = await handleWhatsappWebhook({
+      body: req.body,
+      headers: req.headers,
+    });
+
+    res.json(resultado);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
@@ -2018,20 +2102,24 @@ router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
     return;
   }
 
-  db.run('INSERT INTO bloqueios (data, hora) VALUES (?, ?)', [data, hora], function onInsert(err) {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
+  db.run(
+    'INSERT INTO bloqueios (assinatura_id, data, hora) VALUES (?, ?, ?)',
+    [req.assinatura.id, data, hora],
+    function onInsert(err) {
+      if (err) {
+        res.status(500).json({ error: err.message });
+        return;
+      }
 
-    res.status(201).json({ id: this.lastID, data, hora });
-  });
+      res.status(201).json({ id: this.lastID, data, hora });
+    }
+  );
 });
 
 router.delete('/bloqueios/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
-  db.run('DELETE FROM bloqueios WHERE id = ?', [id], function onDelete(err) {
+  db.run('DELETE FROM bloqueios WHERE id = ? AND assinatura_id = ?', [id, req.assinatura.id], function onDelete(err) {
     if (err) {
       res.status(500).json({ error: err.message });
       return;

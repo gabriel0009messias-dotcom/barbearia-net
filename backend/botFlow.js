@@ -77,6 +77,29 @@ function erroHorarioJaOcupado(error) {
   return error?.code === 'SQLITE_CONSTRAINT' || /ja foi agendado|unique|constraint/i.test(String(error?.message || ''));
 }
 
+async function obterOuCriarServicoPadrao(nome, preco) {
+  const nomeNormalizado = String(nome || '').trim();
+  const precoNormalizado = Number(preco);
+
+  if (!nomeNormalizado || !Number.isFinite(precoNormalizado) || precoNormalizado <= 0) {
+    throw new Error('Servico invalido para criar o agendamento.');
+  }
+
+  const servicoExistente = await getAsync(
+    'SELECT id FROM servicos WHERE nome = ? AND preco = ? ORDER BY id ASC LIMIT 1',
+    [nomeNormalizado, precoNormalizado]
+  );
+
+  if (servicoExistente?.id) {
+    return servicoExistente.id;
+  }
+
+  const proximo = await getAsync('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM servicos');
+  const novoId = Number(proximo?.id || 1);
+  await runAsync('INSERT INTO servicos (id, nome, preco) VALUES (?, ?, ?)', [novoId, nomeNormalizado, precoNormalizado]);
+  return novoId;
+}
+
 function getAsync(sql, params = []) {
   return new Promise((resolve, reject) => {
     getDb().get(sql, params, (err, row) => {
@@ -405,11 +428,23 @@ async function buscarHorariosLivres(data, configuracaoAgenda, sessionKey) {
     return horariosPadrao(configuracaoAgenda).filter((hora) => !ocupados.includes(hora));
   }
 
+  const contexto = getContextoSessao(sessionKey);
+  const assinaturaId = Number(contexto.assinaturaId || 0);
   const agendamentos = await allAsync(
-    'SELECT hora FROM agendamentos WHERE data = ? AND status = "confirmado"',
-    [data]
+    `SELECT hora
+     FROM agendamentos
+     WHERE data = ?
+       AND status = "confirmado"
+       AND (? <= 0 OR assinatura_id = ?)`,
+    [data, assinaturaId, assinaturaId]
   );
-  const bloqueios = await allAsync('SELECT hora FROM bloqueios WHERE data = ?', [data]);
+  const bloqueios = await allAsync(
+    `SELECT hora
+     FROM bloqueios
+     WHERE data = ?
+       AND (? <= 0 OR assinatura_id = ?)`,
+    [data, assinaturaId, assinaturaId]
+  );
 
   const ocupados = [...agendamentos.map((item) => item.hora), ...bloqueios.map((item) => item.hora)];
   return horariosPadrao(configuracaoAgenda).filter((hora) => !ocupados.includes(hora));
@@ -460,6 +495,8 @@ async function pedirNomeCliente(client, user, estado, sessionKey) {
 
 async function salvarAgendamento(user, estado, sessionKey) {
   const nomeCliente = estado.nomeCliente || user;
+  const contexto = getContextoSessao(sessionKey);
+  const assinaturaId = Number(contexto.assinaturaId || 0);
 
   try {
     if (usarApiRemota(sessionKey)) {
@@ -481,9 +518,32 @@ async function salvarAgendamento(user, estado, sessionKey) {
     await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [nomeCliente, user]);
     await runAsync('UPDATE clientes SET nome = ? WHERE telefone = ?', [nomeCliente, user]);
     const cliente = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [user]);
+    const servicoPadraoId = await obterOuCriarServicoPadrao(estado.servico.nome, estado.servico.preco);
     await runAsync(
-      'INSERT INTO agendamentos (cliente_id, servico_id, data, hora, status) VALUES (?, ?, ?, ?, ?)',
-      [cliente.id, estado.servico.id, estado.data, estado.hora, 'confirmado']
+      `INSERT INTO agendamentos (
+        assinatura_id,
+        cliente_id,
+        servico_id,
+        nome_cliente,
+        telefone,
+        servico_nome,
+        preco,
+        data,
+        hora,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        assinaturaId || null,
+        cliente.id,
+        servicoPadraoId,
+        nomeCliente,
+        user,
+        estado.servico.nome,
+        Number(estado.servico.preco || 0),
+        estado.data,
+        estado.hora,
+        'confirmado',
+      ]
     );
   } catch (error) {
     if (erroHorarioJaOcupado(error)) {
@@ -507,20 +567,23 @@ async function buscarUltimoAgendamentoConfirmado(user, sessionKey) {
       })[0];
   }
 
+  const contexto = getContextoSessao(sessionKey);
+  const assinaturaId = Number(contexto.assinaturaId || 0);
   return getAsync(
     `SELECT
        a.id,
        a.data,
        a.hora,
-       s.nome AS servico
+       COALESCE(a.servico_nome, s.nome) AS servico
      FROM agendamentos a
      JOIN clientes c ON c.id = a.cliente_id
      LEFT JOIN servicos s ON s.id = a.servico_id
      WHERE c.telefone = ?
+       AND (? <= 0 OR a.assinatura_id = ?)
        AND a.status = 'confirmado'
      ORDER BY a.data DESC, a.hora DESC, a.id DESC
      LIMIT 1`,
-    [user]
+    [user, assinaturaId, assinaturaId]
   );
 }
 

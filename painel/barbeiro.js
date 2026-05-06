@@ -89,6 +89,7 @@ let activeSectionId = 'inicio';
 let qrRequestInFlight = false;
 let ultimoQrGeradoEm = 0;
 let ultimoStatusWhatsapp = 'nao_configurado';
+let painelAutoRefresh = null;
 
 function formatarData(data) {
   if (!data) return '-';
@@ -257,7 +258,7 @@ function preencherConfiguracoesPainel(assinatura) {
 }
 
 function renderizarAgendamentos(agendamentos) {
-  const htmlSemItens = '<tr><td colspan="6">Nenhum agendamento encontrado.</td></tr>';
+  const htmlSemItens = '<tr><td colspan="7">Nenhum agendamento encontrado.</td></tr>';
   const html = !agendamentos.length
     ? htmlSemItens
     : agendamentos
@@ -266,6 +267,7 @@ function renderizarAgendamentos(agendamentos) {
             <tr>
               <td>${escaparHtml(item.cliente || item.telefone || 'Sem nome')}</td>
               <td>${escaparHtml(item.servico || '-')}</td>
+              <td>${currency.format(Number(item.preco || 0))}</td>
               <td>${formatarData(item.data)}</td>
               <td>${escaparHtml(item.hora || '-')}</td>
               <td>${escaparHtml(item.status || '-')}</td>
@@ -612,6 +614,18 @@ function iniciarPollingWhatsapp() {
   }
 
   whatsappPolling = setInterval(consultarStatusWhatsapp, 5000);
+}
+
+function iniciarAutoRefreshPainel() {
+  if (painelAutoRefresh) {
+    clearInterval(painelAutoRefresh);
+  }
+
+  painelAutoRefresh = setInterval(() => {
+    if (!document.hidden && authToken) {
+      void carregarPainelBarbeiro();
+    }
+  }, 30000);
 }
 
 async function solicitarQrWhatsapp({ silencioso = false } = {}) {
@@ -1028,4 +1042,5 @@ mesFaturamentoInput?.addEventListener('change', () => {
 
 renderizarDiasFuncionamento(diasFuncionamentoPainel, [1, 2, 3, 4, 5, 6]);
 setActiveSection('inicio');
+iniciarAutoRefreshPainel();
 carregarPainelBarbeiro();
