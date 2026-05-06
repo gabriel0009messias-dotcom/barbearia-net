@@ -17,6 +17,7 @@ const {
   conectarInstancia,
   obterEstadoConexao,
   desconectarInstancia,
+  configurarWebhookInstancia,
 } = require('./evolutionApi');
 const {
   iniciarSessao: iniciarSessaoWhatsappLocal,
@@ -24,6 +25,7 @@ const {
   statusSessao: statusSessaoWhatsappLocal,
 } = require('./whatsappManager');
 const { handleWhatsappWebhook } = require('./whatsappWebhook');
+const { processarWebhookEvolution } = require('./evolutionWebhook');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -1021,6 +1023,11 @@ function emAmbienteHospedado() {
   return Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
 }
 
+function usarEvolutionWhatsapp() {
+  const evolution = getEvolutionConfig();
+  return Boolean(evolution.enabled && emAmbienteHospedado());
+}
+
 function withTimeout(promise, timeoutMs, timeoutMessage) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -1658,6 +1665,20 @@ async function resetarSessaoWhatsapp(assinaturaId) {
   });
 }
 
+async function configurarWebhookEvolutionSePossivel(instanceName) {
+  const appUrl = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim().replace(/\/$/, '');
+
+  if (!appUrl) {
+    return;
+  }
+
+  try {
+    await configurarWebhookInstancia(instanceName, `${appUrl}/api/webhook/evolution`);
+  } catch (error) {
+    logEvolutionError(`configuracao de webhook da instancia ${instanceName}`, error);
+  }
+}
+
 async function garantirInstanciaWhatsapp(assinatura) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
 
@@ -1666,6 +1687,8 @@ async function garantirInstanciaWhatsapp(assinatura) {
   const existente = await buscarInstancia(instanceName);
 
   if (existente?.instance?.instanceName) {
+    await configurarWebhookEvolutionSePossivel(instanceName);
+
     if (instanceName !== assinatura?.whatsapp_session) {
       await persistirSessaoWhatsapp(assinatura.id, {
         whatsappSession: instanceName,
@@ -1691,6 +1714,8 @@ async function garantirInstanciaWhatsapp(assinatura) {
       whatsappSession: instanceName,
     });
   }
+
+  await configurarWebhookEvolutionSePossivel(instanceName);
 
   return instanceName;
 }
@@ -2094,6 +2119,15 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
+router.post('/webhook/evolution', async (req, res) => {
+  try {
+    const resultado = await processarWebhookEvolution(req.body || {});
+    res.json(resultado);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
   const { data, hora } = req.body;
 
@@ -2150,15 +2184,19 @@ router.get('/publico/assinatura-config', async (req, res) => {
     const suporteNumero = await getConfiguracao('suporte_numero');
     const evolution = getEvolutionConfig();
     const pix = obterDadosPix(VALOR_MENSAL_PADRAO, suporteNumero);
+    const provider = usarEvolutionWhatsapp() ? 'evolution_api' : 'wppconnect_local';
 
     res.json({
       suporteNumero,
       valorMensal: VALOR_MENSAL_PADRAO,
       whatsappBridgeUrl: null,
-      whatsappLocalOnly: true,
-      whatsappProvider: 'wppconnect_local',
+      whatsappLocalOnly: provider === 'wppconnect_local',
+      whatsappProvider: provider,
       whatsappEnabled: true,
-      whatsappSetupMessage: '',
+      whatsappSetupMessage:
+        provider === 'evolution_api'
+          ? 'Conecte o WhatsApp por QR Code para ativar o atendimento automatico publicado.'
+          : '',
       whatsappRetry: {
         attempts: evolution.retryAttempts,
         delayMs: evolution.retryDelayMs,
@@ -2760,6 +2798,19 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
       return;
     }
 
+    if (usarEvolutionWhatsapp()) {
+      const resultado = await gerarQrWhatsappEvolution(assinatura);
+      res.json({
+        status: resultado.status === 'error' ? 'error' : 'success',
+        qr: resultado.qr || resultado.qrCode || null,
+        message: resultado.mensagem || '',
+        conectado: Boolean(resultado.conectado),
+        whatsappStatus: resultado.status || 'nao_configurado',
+        retryable: !resultado.conectado && !resultado.qr,
+      });
+      return;
+    }
+
     let statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
 
     if (statusLocalPareceTravado(statusInicial)) {
@@ -2974,7 +3025,9 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
       return;
     }
 
-    const sessao = await consultarStatusWhatsappLocal(Number(id));
+    const sessao = usarEvolutionWhatsapp()
+      ? await consultarStatusWhatsappEvolution(assinatura)
+      : await consultarStatusWhatsappLocal(Number(id));
     res.json(sessao);
   } catch (error) {
     res.status(500).json({ error: error.message });

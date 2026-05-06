@@ -334,6 +334,57 @@ async function desconectarInstancia(instanceName) {
   });
 }
 
+async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']) {
+  return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      enabled: true,
+      url,
+      webhook_by_events: false,
+      webhook_base64: false,
+      events,
+    }),
+    retryAttempts: 1,
+  });
+}
+
+async function enviarTextoInstancia(instanceName, number, text) {
+  return evolutionRequest(`/message/sendText/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      number,
+      textMessage: {
+        text,
+      },
+      options: {
+        delay: 300,
+        presence: 'composing',
+        linkPreview: false,
+      },
+    }),
+  });
+}
+
+async function enviarListaInstancia(instanceName, number, options = {}) {
+  return evolutionRequest(`/message/sendList/${encodeURIComponent(instanceName)}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      number,
+      options: {
+        delay: 300,
+        presence: 'composing',
+      },
+      listMessage: {
+        title: options.title || 'Atendimento',
+        description: options.description || '',
+        buttonText: options.buttonText || 'Selecionar',
+        footerText: options.footerText || '',
+        sections: options.sections || [],
+      },
+    }),
+  });
+}
+
 module.exports = {
   getEvolutionConfig,
   ensureEvolutionConfigured,
@@ -349,4 +400,7 @@ module.exports = {
   conectarInstancia,
   obterEstadoConexao,
   desconectarInstancia,
+  configurarWebhookInstancia,
+  enviarTextoInstancia,
+  enviarListaInstancia,
 };

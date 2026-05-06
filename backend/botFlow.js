@@ -1091,12 +1091,12 @@ function extrairOpcaoEnquete(data = {}) {
   };
 }
 
-function attachBotHandlers(client, options = {}) {
+function createMessageProcessor(client, options = {}) {
   const sessionKey = options.sessionKey || 'default';
   const assinaturaId = options.assinaturaId || null;
   definirContextoSessao(sessionKey, options);
 
-  async function processarEntrada(entrada) {
+  return async function processarEntrada(entrada) {
     const user = entrada.from;
     const { body, payload, normalizado, fromMe = false, type = 'unknown' } = entrada;
     const estados = getEstados(sessionKey);
@@ -1370,7 +1370,11 @@ function attachBotHandlers(client, options = {}) {
       );
       resetarEstado(sessionKey, user);
     }
-  }
+  };
+}
+
+function attachBotHandlers(client, options = {}) {
+  const processarEntrada = createMessageProcessor(client, options);
 
   client.onMessage(async (message) => {
     if (foiEnviadaPeloBot(message)) return;
@@ -1403,4 +1407,6 @@ function attachBotHandlers(client, options = {}) {
 
 module.exports = {
   attachBotHandlers,
+  createMessageProcessor,
+  extrairSelecao,
 };
