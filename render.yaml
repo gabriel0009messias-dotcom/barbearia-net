@@ -3,7 +3,7 @@ services:
     name: barbearia-net
     runtime: node
     rootDir: backend
-    buildCommand: npm ci
+    buildCommand: PUPPETEER_SKIP_DOWNLOAD=true npm ci
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
@@ -30,6 +30,8 @@ services:
         value: false
       - key: EVOLUTION_READ_STATUS
         value: false
+      - key: PUPPETEER_SKIP_DOWNLOAD
+        value: true
     disk:
       name: barbearia-data
       mountPath: /var/data
