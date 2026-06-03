@@ -22,6 +22,14 @@ services:
         value: 3
       - key: EVOLUTION_API_RETRY_DELAY_MS
         value: 2000
+      - key: RESEND_API_KEY
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: Salaoflix
       - key: EVOLUTION_ALWAYS_ONLINE
         value: true
       - key: EVOLUTION_SYNC_FULL_HISTORY

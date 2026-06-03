@@ -1019,6 +1019,18 @@ function emailRecuperacaoConfigurado() {
   return Boolean(criarProvedorEmailApi() || criarTransporteEmail());
 }
 
+function smtpProvavelmenteBloqueadoNaHospedagem() {
+  return emAmbienteHospedado() && !criarProvedorEmailApi() && Boolean(criarTransporteEmail());
+}
+
+function criarErroConfiguracaoEmailHospedado() {
+  const error = new Error(
+    'Este servidor hospedado nao consegue enviar recuperacao por SMTP do Gmail. Configure RESEND_API_KEY ou BREVO_API_KEY nas variaveis do servidor para liberar o envio de e-mail.'
+  );
+  error.statusCode = 503;
+  return error;
+}
+
 function emAmbienteHospedado() {
   return Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
 }
@@ -1142,6 +1154,10 @@ async function enviarEmail(payload) {
     );
     error.statusCode = 501;
     throw error;
+  }
+
+  if (smtpProvavelmenteBloqueadoNaHospedagem()) {
+    throw criarErroConfiguracaoEmailHospedado();
   }
 
   return withTimeout(
@@ -2378,10 +2394,14 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
 
     if (!emailRecuperacaoConfigurado()) {
       const error = new Error(
-        'Recuperacao por Gmail ainda nao esta configurada neste servidor. Adicione GMAIL_USER e GMAIL_APP_PASSWORD no servidor.'
+        'Recuperacao por e-mail ainda nao esta configurada neste servidor. Adicione RESEND_API_KEY, BREVO_API_KEY ou credenciais SMTP.'
       );
       error.statusCode = 501;
       throw error;
+    }
+
+    if (smtpProvavelmenteBloqueadoNaHospedagem()) {
+      throw criarErroConfiguracaoEmailHospedado();
     }
 
     const token = criarTokenRecuperacaoSeguro();
