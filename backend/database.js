@@ -246,7 +246,7 @@ db.serialize(() => {
   )`);
 
   db.run(
-    `INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('suporte_numero', '(11) 99999-9999')`
+    `INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES ('suporte_numero', '+55 75 8317-9933')`
   );
 
   db.run(
