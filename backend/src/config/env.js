@@ -28,6 +28,11 @@ const env = {
   mercadoPagoBaseUrl: process.env.MERCADO_PAGO_BASE_URL || 'https://api.mercadopago.com',
   evolutionApiUrl: process.env.EVOLUTION_API_URL || '',
   evolutionApiKey: process.env.EVOLUTION_API_KEY || '',
+  // Instancias gratuitas podem ficar inativas e levar algum tempo para acordar.
+  // Estes valores podem ser ajustados no ambiente sem alterar o codigo.
+  evolutionApiTimeoutMs: toNumber(process.env.EVOLUTION_API_TIMEOUT_MS, 90000),
+  evolutionApiRetryAttempts: toNumber(process.env.EVOLUTION_API_RETRY_ATTEMPTS, 3),
+  evolutionApiRetryDelayMs: toNumber(process.env.EVOLUTION_API_RETRY_DELAY_MS, 3000),
   superAdminName: process.env.SUPER_ADMIN_NAME || 'Super Admin',
   superAdminEmail: process.env.SUPER_ADMIN_EMAIL || 'admin@barbearia.local',
   superAdminPassword: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123456',
