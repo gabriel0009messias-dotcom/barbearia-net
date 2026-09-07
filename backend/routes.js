@@ -1860,7 +1860,7 @@ async function configurarWebhookEvolutionSePossivel(instanceName) {
   }
 }
 
-async function garantirInstanciaWhatsapp(assinatura) {
+async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '') {
   const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
 
   await validarEvolutionApiDisponivel();
@@ -1880,7 +1880,7 @@ async function garantirInstanciaWhatsapp(assinatura) {
   }
 
   try {
-    await criarInstancia(instanceName);
+    await criarInstancia(instanceName, phoneNumber);
   } catch (error) {
     const statusCode = Number(error.statusCode || 0);
     const mensagem = String(error.message || '');
@@ -2931,10 +2931,18 @@ router.post('/publico/assinaturas', async (req, res) => {
 
 async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.id, async () => {
-    const instanceName = await garantirInstanciaWhatsapp(assinatura);
+    const instanceName = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp);
     const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName });
     if (estadoAtual.conectado) {
       return { ...estadoAtual, pairingCode: null, numeroWhatsapp };
+    }
+
+    // A Evolution v2.3.7 devolve apenas o QR existente quando a instancia ja
+    // esta em "connecting". Reiniciamos somente esta sessao desconectada para
+    // que o connect com numero gere um novo Pairing Code.
+    if (estadoAtual.status === 'iniciando') {
+      await desconectarInstancia(instanceName);
+      await sleep(1000);
     }
 
     const resposta = await conectarInstancia(instanceName, numeroWhatsapp);

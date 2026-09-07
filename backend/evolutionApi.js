@@ -307,7 +307,7 @@ async function buscarInstancia(instanceName) {
   );
 }
 
-async function criarInstancia(instanceName) {
+async function criarInstancia(instanceName, phoneNumber = '') {
   const alwaysOnline = parseBooleanEnv(process.env.EVOLUTION_ALWAYS_ONLINE, true);
   const readMessages = parseBooleanEnv(process.env.EVOLUTION_READ_MESSAGES, false);
   const readStatus = parseBooleanEnv(process.env.EVOLUTION_READ_STATUS, false);
@@ -317,6 +317,7 @@ async function criarInstancia(instanceName) {
     method: 'POST',
     body: JSON.stringify({
       instanceName,
+      ...(String(phoneNumber || '').trim() ? { number: String(phoneNumber).trim() } : {}),
       qrcode: true,
       integration: 'WHATSAPP-BAILEYS',
       alwaysOnline,
@@ -338,7 +339,15 @@ async function conectarInstancia(instanceName, phoneNumber = '') {
 }
 
 function extrairPairingCode(payload = null) {
-  const candidatos = [payload?.pairingCode, payload?.pairingcode, payload?.data?.pairingCode, payload?.response?.pairingCode];
+  const candidatos = [
+    payload?.pairingCode,
+    payload?.pairingcode,
+    payload?.qrcode?.pairingCode,
+    payload?.qrCode?.pairingCode,
+    payload?.data?.pairingCode,
+    payload?.data?.qrcode?.pairingCode,
+    payload?.response?.pairingCode,
+  ];
   const codigo = candidatos.find((item) => typeof item === 'string' && item.trim());
   return codigo ? String(codigo).trim() : '';
 }
