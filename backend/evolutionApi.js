@@ -1,7 +1,8 @@
-// A Evolution hospedada no plano gratuito pode levar mais de 50 segundos para acordar.
-const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_API_TIMEOUT_MS || 70000);
-const DEFAULT_RETRY_ATTEMPTS = Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS || 3);
-const DEFAULT_RETRY_DELAY_MS = Number(process.env.EVOLUTION_API_RETRY_DELAY_MS || 2000);
+// Uma instancia hibernada pode levar mais de um minuto para ficar disponivel.
+// Nao usamos menos de 90 segundos, mesmo se houver um valor antigo no Render.
+const DEFAULT_TIMEOUT_MS = Math.max(90000, Number(process.env.EVOLUTION_API_TIMEOUT_MS) || 90000);
+const DEFAULT_RETRY_ATTEMPTS = Math.max(1, Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS) || 3);
+const DEFAULT_RETRY_DELAY_MS = Math.max(0, Number(process.env.EVOLUTION_API_RETRY_DELAY_MS) || 3000);
 
 function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/$/, '');

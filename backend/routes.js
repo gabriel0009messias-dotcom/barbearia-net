@@ -1981,7 +1981,9 @@ async function gerarQrWhatsappEvolution(assinatura) {
   return compartilharGeracaoQr(assinatura.id, async () => {
     let ultimaFalha = null;
 
-    for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+    // evolutionRequest ja faz as tentativas configuradas. Repetir aqui multiplicava
+    // cada espera e deixava o painel em "Gerando QR" por varios minutos.
+    for (let tentativa = 1; tentativa <= 1; tentativa += 1) {
       try {
         const instanceName = await garantirInstanciaWhatsapp(assinatura);
         const estadoAtual = await consultarStatusWhatsappEvolution({
@@ -2032,7 +2034,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
         });
       } catch (error) {
         ultimaFalha = error;
-        logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/3`, error);
+        logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/1`, error);
 
         await persistirSessaoWhatsapp(assinatura.id, {
           whatsappStatus: 'erro',
@@ -2044,7 +2046,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
           await resetarSessaoWhatsapp(assinatura.id);
         }
 
-        if (tentativa < 3) {
+        if (tentativa < 1) {
           await sleep(2000);
         }
       }

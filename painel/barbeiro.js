@@ -645,7 +645,9 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
   let ultimaFalha = null;
 
   try {
-    for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
+    // O backend ja tenta novamente quando a Evolution esta iniciando. Repetir a
+    // chamada no navegador fazia a tela parecer travada por varios minutos.
+    for (let tentativa = 1; tentativa <= 1; tentativa += 1) {
       try {
         const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
           method: 'POST',
@@ -670,9 +672,9 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
         ultimaFalha = error;
       }
 
-      if (tentativa < 3) {
+      if (tentativa < 1) {
         if (!silencioso) {
-          qrStatusMessage.textContent = `Tentando novamente gerar o QR Code (${tentativa}/3)...`;
+          qrStatusMessage.textContent = `Tentando novamente gerar o QR Code (${tentativa}/1)...`;
         }
         await esperar(2000);
       }
