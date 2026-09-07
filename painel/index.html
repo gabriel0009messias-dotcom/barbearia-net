@@ -1,12 +1,74 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Barbearia SaaS</title>
+    <title>Salãoflix</title>
+    <link rel="stylesheet" href="./styles.css?v=20260330e" />
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <section id="authLanding" class="auth-landing">
+      <div class="landing-overlay"></div>
+      <header class="landing-topbar">
+        <div class="landing-brand">SALÃOFLIX</div>
+        <div class="landing-topbar-actions">
+          <button class="landing-topbar-button" type="button" data-open-cadastro>Fazer cadastro</button>
+        </div>
+      </header>
+
+      <div class="landing-grid">
+        <div class="landing-copy">
+          <p class="landing-kicker">Assinatura mensal com WhatsApp integrado</p>
+          <h1>Agendamentos, QR Code e painel do barbeiro em um so lugar</h1>
+          <p class="landing-subcopy">
+            Entre no seu painel ou clique em fazer cadastro para criar sua assinatura e liberar o acesso apos o pagamento.
+          </p>
+        </div>
+
+        <div class="landing-panel">
+          <p class="eyebrow">Login do barbeiro</p>
+          <h2>Entre para continuar</h2>
+          <p class="landing-panel-copy">Use seu Gmail cadastrado para abrir seu painel.</p>
+
+          <form id="loginBarbeiroForm" class="landing-login-form">
+            <input id="loginIdentificadorInput" type="email" placeholder="Seu Gmail" required />
+            <div class="password-field">
+              <input id="loginSenhaInput" type="password" placeholder="Senha" required />
+              <button class="password-toggle" type="button" data-toggle-password="loginSenhaInput">Mostrar</button>
+            </div>
+            <button type="submit" class="landing-login-button">Entrar</button>
+          </form>
+
+          <p id="loginBarbeiroMessage" class="form-message light-message"></p>
+
+          <div id="loginBlockedPixCard" class="support-note blocked-pix-card" hidden>
+            <strong>Pagamento via Pix</strong>
+            <p id="loginBlockedPixValorLabel">Valor: R$ 0,00</p>
+            <p id="loginBlockedPixFavorecidoLabel">Favorecido: --</p>
+            <div id="loginBlockedPixQrPanel" class="pix-qr-panel" hidden>
+              <img id="loginBlockedPixQrImage" alt="QR Code do pagamento Pix" hidden />
+            </div>
+            <p id="loginBlockedPixChaveLabel">Chave Pix: --</p>
+            <p id="loginBlockedPixCopiaColaLabel" class="table-subcopy">Pix copia e cola: --</p>
+            <div class="payment-actions">
+              <a id="loginBlockedWhatsappButton" class="landing-login-button" href="#" target="_blank" rel="noopener noreferrer">
+                Enviar comprovante no WhatsApp
+              </a>
+            </div>
+          </div>
+
+          <button id="abrirRecuperacaoButton" class="landing-secondary-button forgot-link" type="button">
+            Esqueci minha senha
+          </button>
+
+          <div class="landing-cta-row">
+            <span>Ainda nao tem acesso?</span>
+            <button class="landing-secondary-button" type="button" data-open-cadastro>Quero fazer meu cadastro</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script src="./landing.js?v=20260408c"></script>
   </body>
 </html>
