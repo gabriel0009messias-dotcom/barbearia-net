@@ -32,7 +32,8 @@ const { processarWebhookEvolution } = require('./evolutionWebhook');
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
 const METODOS_PAGAMENTO = ['mercado_pago'];
-const STATUS_ASSINATURA = ['pendente', 'ativa', 'atrasada', 'bloqueada', 'cancelada', 'autorizada', 'pausada'];
+// O painel legado usa "ativo"; mantemos "ativa" para registros antigos.
+const STATUS_ASSINATURA = ['pendente', 'ativo', 'ativa', 'atrasada', 'bloqueado', 'bloqueada', 'cancelada', 'autorizada', 'pausada'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
