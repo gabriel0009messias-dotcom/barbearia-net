@@ -1,14 +1,14 @@
 {
   "name": "barbearia-backend",
   "version": "1.0.0",
-  "main": "src/server.js",
+  "main": "app.js",
   "engines": {
     "node": "20.x"
   },
   "scripts": {
     "postinstall": "node -e \"console.log('SaaS pronto para PostgreSQL e Mercado Pago.')\"",
     "migrate": "node src/database/migrateRunner.js",
-    "start": "node src/server.js",
+    "start": "node app.js",
     "dev": "node --watch src/server.js",
     "bot": "node wppconnect.js"
   },
