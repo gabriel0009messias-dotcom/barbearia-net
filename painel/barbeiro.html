@@ -54,9 +54,13 @@
             <div class="whatsapp-connect-grid">
               <div>
                 <p id="whatsappHelpText" class="table-subcopy">
-                  Gere o QR Code e escaneie com o WhatsApp da barbearia sempre que precisar conectar o atendimento.
+                  Conecte seu WhatsApp para receber automaticamente os agendamentos dos clientes.
                 </p>
-                <button id="generateQrButton" class="primary-button" type="button" disabled>Gerar QR Code</button>
+                <label for="whatsappPairingNumber">Numero do WhatsApp</label>
+                <input id="whatsappPairingNumber" type="tel" inputmode="numeric" autocomplete="tel" placeholder="(75) 99999-9999" />
+                <button id="generatePairingButton" class="primary-button" type="button" disabled>Conectar WhatsApp</button>
+                <button id="copyPairingCodeButton" class="secondary-pill-button" type="button" hidden>Copiar codigo</button>
+                <button id="generateQrButton" class="secondary-pill-button" type="button" disabled>Conectar usando QR Code</button>
                 <button id="openLocalWhatsappButton" class="secondary-pill-button" type="button" hidden>
                   Conectar no sistema local
                 </button>
@@ -64,6 +68,7 @@
 
               <div class="qr-panel">
                 <img id="qrCodeImage" alt="QR Code do WhatsApp" hidden />
+                <strong id="pairingCodeValue" class="pairing-code" hidden></strong>
                 <p id="qrStatusMessage" class="form-message">Nenhum QR Code gerado ainda.</p>
               </div>
             </div>

@@ -17,6 +17,7 @@ const {
   buscarInstancia,
   criarInstancia,
   conectarInstancia,
+  extrairPairingCode,
   obterEstadoConexao,
   desconectarInstancia,
   configurarWebhookInstancia,
@@ -1720,6 +1721,13 @@ async function consultarStatusWhatsappLocal(assinaturaId) {
   });
 }
 
+function normalizarNumeroWhatsappBrasil(numero = '') {
+  let digitos = String(numero || '').replace(/\D/g, '');
+  if (digitos.startsWith('00')) digitos = digitos.slice(2);
+  if (!digitos.startsWith('55')) digitos = `55${digitos}`;
+  return /^55\d{10,11}$/.test(digitos) ? digitos : null;
+}
+
 function iniciarSessaoWhatsappLocalSemBloquear(assinaturaId) {
   iniciarSessaoWhatsappLocal(assinaturaId).catch((error) => {
     console.error(`Erro ao iniciar sessao local do WhatsApp da assinatura ${assinaturaId}:`, error.message);
@@ -1838,6 +1846,11 @@ async function configurarWebhookEvolutionSePossivel(instanceName) {
 
   if (!appUrl) {
     return;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappNumero')) {
+    campos.push('whatsapp_numero = ?');
+    params.push(valores.whatsappNumero || null);
   }
 
   try {
@@ -2913,6 +2926,61 @@ router.post('/publico/assinaturas', async (req, res) => {
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({ error: error.message });
+  }
+});
+
+async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
+  return compartilharGeracaoQr(assinatura.id, async () => {
+    const instanceName = await garantirInstanciaWhatsapp(assinatura);
+    const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName });
+    if (estadoAtual.conectado) {
+      return { ...estadoAtual, pairingCode: null, numeroWhatsapp };
+    }
+
+    const resposta = await conectarInstancia(instanceName, numeroWhatsapp);
+    const pairingCode = extrairPairingCode(resposta);
+    if (!pairingCode) {
+      throw createEvolutionError(
+        'Nao foi possivel gerar o codigo de conexao. Tente novamente ou use o QR Code.',
+        502,
+        'EVOLUTION_PAIRING_CODE_EMPTY',
+        resposta || null
+      );
+    }
+
+    await persistirSessaoWhatsapp(assinatura.id, {
+      whatsappSession: instanceName,
+      whatsappNumero: numeroWhatsapp,
+      whatsappStatus: 'iniciando',
+      whatsappUltimoErro: null,
+      whatsappUltimoCheckEm: agoraIso(),
+    });
+
+    return { ...respostaStatusWhatsapp({
+      status: 'iniciando', instancia: instanceName, conectado: false, precisaQr: false,
+      mensagem: 'Codigo gerado. Conclua a vinculacao pelo WhatsApp.',
+    }), pairingCode, numeroWhatsapp };
+  });
+}
+
+router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, async (req, res) => {
+  const { id } = req.params;
+  const numeroWhatsapp = normalizarNumeroWhatsappBrasil(req.body?.numero);
+  if (!numeroWhatsapp) {
+    res.status(400).json({ error: 'Numero de WhatsApp invalido. Informe DDD e numero.' });
+    return;
+  }
+
+  try {
+    if (!assinaturaPertenceAoBarbeiro(req, res)) return;
+    const assinatura = await carregarAssinaturaAtualizada(id);
+    if (!assinatura) return res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    const acesso = avaliarAcessoAssinatura(assinatura);
+    if (!acesso.liberado) return res.status(403).json({ error: acesso.mensagem });
+    res.json({ ok: true, ...(await gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp)) });
+  } catch (error) {
+    logEvolutionError(`pairing code da assinatura ${id}`, error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Nao foi possivel gerar o codigo de conexao.' });
   }
 });
 

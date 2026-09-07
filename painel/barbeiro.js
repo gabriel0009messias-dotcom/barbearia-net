@@ -39,6 +39,10 @@ const supportNumberLabel = document.getElementById('supportNumberLabel');
 const menuButtons = Array.from(document.querySelectorAll('[data-section-target]'));
 const panelViews = Array.from(document.querySelectorAll('.panel-view'));
 const generateQrButton = document.getElementById('generateQrButton');
+const generatePairingButton = document.getElementById('generatePairingButton');
+const whatsappPairingNumber = document.getElementById('whatsappPairingNumber');
+const pairingCodeValue = document.getElementById('pairingCodeValue');
+const copyPairingCodeButton = document.getElementById('copyPairingCodeButton');
 const openLocalWhatsappButton = document.getElementById('openLocalWhatsappButton');
 const qrCodeImage = document.getElementById('qrCodeImage');
 const qrStatusMessage = document.getElementById('qrStatusMessage');
@@ -90,6 +94,7 @@ let qrRequestInFlight = false;
 let ultimoQrGeradoEm = 0;
 let ultimoStatusWhatsapp = 'nao_configurado';
 let painelAutoRefresh = null;
+let pairingCodeAtual = '';
 
 function formatarData(data) {
   if (!data) return '-';
@@ -525,15 +530,16 @@ async function carregarPainelBarbeiro() {
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
     generateQrButton.disabled = !whatsappEnabled;
+    generatePairingButton.disabled = !whatsappEnabled;
     generateQrButton.hidden = false;
     openLocalWhatsappButton.hidden = true;
     whatsappHelpText.textContent = whatsappEnabled
-      ? 'Seu acesso esta liberado. Gere o QR Code diretamente por este painel para conectar o WhatsApp.'
+      ? 'Seu acesso esta liberado. Informe seu numero para conectar o WhatsApp por codigo.'
       : (config.whatsappSetupMessage || 'O WhatsApp nao esta disponivel no momento.');
     whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
     qrCodeImage.hidden = true;
     qrStatusMessage.textContent = whatsappEnabled
-      ? 'Clique em Gerar QR Code para iniciar a conexao do WhatsApp.'
+      ? 'Informe seu numero e clique em Conectar WhatsApp.'
       : 'O WhatsApp nao esta disponivel no momento.';
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
@@ -690,6 +696,40 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
   }
 }
 
+function numeroWhatsappValido(numero = '') {
+  let digitos = String(numero).replace(/\D/g, '');
+  if (digitos.startsWith('55')) digitos = digitos.slice(2);
+  return /^\d{10,11}$/.test(digitos);
+}
+
+async function solicitarPairingCode() {
+  const numero = whatsappPairingNumber.value.trim();
+  if (!numeroWhatsappValido(numero)) throw new Error('Numero de WhatsApp invalido. Informe DDD e numero.');
+
+  generatePairingButton.disabled = true;
+  generatePairingButton.textContent = 'Gerando codigo...';
+  qrStatusMessage.textContent = 'Solicitando codigo de conexao...';
+  try {
+    const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/pairing-code`, {
+      method: 'POST', body: JSON.stringify({ numero }),
+    });
+    pairingCodeAtual = resposta.pairingCode || '';
+    if (!pairingCodeAtual && !resposta.conectado) throw new Error('Nao foi possivel gerar o codigo de conexao.');
+    pairingCodeValue.hidden = !pairingCodeAtual;
+    pairingCodeValue.textContent = pairingCodeAtual;
+    copyPairingCodeButton.hidden = !pairingCodeAtual;
+    qrCodeImage.hidden = true;
+    atualizarStatusWhatsapp(resposta.status, null);
+    qrStatusMessage.textContent = resposta.conectado
+      ? 'WhatsApp conectado com sucesso.'
+      : 'Use o codigo no WhatsApp em Dispositivos conectados. Os nomes podem variar conforme a versao do aplicativo.';
+    iniciarPollingWhatsapp();
+  } finally {
+    generatePairingButton.disabled = !whatsappEnabled;
+    generatePairingButton.textContent = 'Conectar WhatsApp';
+  }
+}
+
 async function salvarBloqueio({ data, hora, form, messageNode }) {
   await buscarJson('/api/bloqueios', {
     method: 'POST',
@@ -842,6 +882,26 @@ menuButtons.forEach((button) => {
   button.addEventListener('click', () => {
     setActiveSection(button.dataset.sectionTarget || 'inicio');
   });
+});
+
+generatePairingButton?.addEventListener('click', async () => {
+  if (!assinaturaAtualId || !whatsappEnabled) return;
+  try {
+    await solicitarPairingCode();
+  } catch (error) {
+    qrStatusMessage.textContent = error.message || 'Nao foi possivel gerar o codigo de conexao.';
+    whatsappStatusBadge.textContent = 'Erro';
+  }
+});
+
+copyPairingCodeButton?.addEventListener('click', async () => {
+  if (!pairingCodeAtual) return;
+  try {
+    await navigator.clipboard.writeText(pairingCodeAtual);
+    qrStatusMessage.textContent = 'Codigo copiado.';
+  } catch (_) {
+    qrStatusMessage.textContent = 'Nao foi possivel copiar. Selecione o codigo e copie manualmente.';
+  }
 });
 
 generateQrButton.addEventListener('click', async () => {

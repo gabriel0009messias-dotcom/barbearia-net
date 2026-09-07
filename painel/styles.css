@@ -782,6 +782,15 @@ th {
   padding: 12px;
 }
 
+.pairing-code {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #7ff0b6;
+  font-size: 1.35rem;
+  letter-spacing: 0.12em;
+}
+
 label {
   display: grid;
   gap: 8px;

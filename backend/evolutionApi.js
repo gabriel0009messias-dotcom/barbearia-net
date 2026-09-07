@@ -329,10 +329,18 @@ async function criarInstancia(instanceName) {
   });
 }
 
-async function conectarInstancia(instanceName) {
-  return evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}`, {
+async function conectarInstancia(instanceName, phoneNumber = '') {
+  const numero = String(phoneNumber || '').trim();
+  const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
+  return evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
     method: 'GET',
   });
+}
+
+function extrairPairingCode(payload = null) {
+  const candidatos = [payload?.pairingCode, payload?.pairingcode, payload?.data?.pairingCode, payload?.response?.pairingCode];
+  const codigo = candidatos.find((item) => typeof item === 'string' && item.trim());
+  return codigo ? String(codigo).trim() : '';
 }
 
 async function obterEstadoConexao(instanceName) {
@@ -413,6 +421,7 @@ module.exports = {
   buscarInstancia,
   criarInstancia,
   conectarInstancia,
+  extrairPairingCode,
   obterEstadoConexao,
   desconectarInstancia,
   configurarWebhookInstancia,
