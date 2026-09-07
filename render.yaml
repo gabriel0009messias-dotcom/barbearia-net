@@ -3,44 +3,30 @@ services:
     name: barbearia-net
     runtime: node
     rootDir: backend
-    buildCommand: PUPPETEER_SKIP_DOWNLOAD=true npm ci
+    buildCommand: cd .. && cd painel && npm ci && npm run build && cd .. && cd backend && npm ci
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: DATABASE_PATH
-        value: /var/data/barbearia.db
-      - key: PUBLIC_APP_URL
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
         value: https://barbearia-net.onrender.com
+      - key: APP_URL
+        value: https://barbearia-net.onrender.com
+      - key: DEFAULT_PLAN_AMOUNT_CENTS
+        value: 6500
+      - key: DEFAULT_PLAN_NAME
+        value: Plano Mensal SaaS
+      - key: GRACE_DAYS
+        value: 4
       - key: EVOLUTION_API_URL
-        value: https://evolution-api-3-bp28.onrender.com
+        sync: false
       - key: EVOLUTION_API_KEY
         sync: false
-      - key: EVOLUTION_API_TIMEOUT_MS
-        value: 15000
-      - key: EVOLUTION_API_RETRY_ATTEMPTS
-        value: 3
-      - key: EVOLUTION_API_RETRY_DELAY_MS
-        value: 2000
-      - key: RESEND_API_KEY
+      - key: MERCADO_PAGO_ACCESS_TOKEN
         sync: false
-      - key: BREVO_API_KEY
+      - key: MERCADO_PAGO_WEBHOOK_SECRET
         sync: false
-      - key: EMAIL_FROM
-        sync: false
-      - key: EMAIL_FROM_NAME
-        value: Salaoflix
-      - key: EVOLUTION_ALWAYS_ONLINE
-        value: true
-      - key: EVOLUTION_SYNC_FULL_HISTORY
-        value: true
-      - key: EVOLUTION_READ_MESSAGES
-        value: false
-      - key: EVOLUTION_READ_STATUS
-        value: false
-      - key: PUPPETEER_SKIP_DOWNLOAD
-        value: true
-    disk:
-      name: barbearia-data
-      mountPath: /var/data
-      sizeGB: 1

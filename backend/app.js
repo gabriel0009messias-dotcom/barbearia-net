@@ -9,6 +9,18 @@ const asaas = require('./asaas');
 const apiRoutes = require('./routes');
 const { handleWhatsappWebhook } = require('./whatsappWebhook');
 
+function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
+  for (const chave of chaves) {
+    const valor = String(process.env[chave] || '').trim();
+
+    if (valor) {
+      return valor;
+    }
+  }
+
+  return fallback;
+}
+
 const app = express();
 app.set('trust proxy', true);
 const PORT = Number(process.env.PORT) || 3000;
@@ -17,16 +29,18 @@ const runtimeErrorLogPath = path.join(__dirname, 'server-error.log');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();
 const adminSessions = new Map();
-const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
-const ADMIN_PASSWORD = 'rios123456';
+const ADMIN_EMAIL = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_EMAIL', 'ADMIN_EMAIL', 'SUPER_ADMIN_EMAIL']);
+const ADMIN_PASSWORD = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_PASSWORD', 'ADMIN_PASSWORD', 'SUPER_ADMIN_PASSWORD']);
+const LEGACY_DEMO_EMAIL = obterPrimeiroEnvPreenchido(['LEGACY_DEMO_EMAIL']);
+const LEGACY_DEMO_PASSWORD = obterPrimeiroEnvPreenchido(['LEGACY_DEMO_PASSWORD']);
 let suporteNumeroAdmin = '--';
 const ACESSO_VITALICIO = {
   id: 1,
-  email: 'gabriel0009messias@gmail.com',
-  senha: 'rios123456',
+  email: LEGACY_DEMO_EMAIL,
+  senha: LEGACY_DEMO_PASSWORD,
   barbeariaNome: 'Salão Demo',
-  responsavelNome: 'Gabriel',
-  telefone: '11999999999',
+  responsavelNome: 'Administrador Demo',
+  telefone: '',
   status: 'ativo',
   whatsapp_status: 'nao_configurado',
   dias_funcionamento: [1, 2, 3, 4, 5, 6],
@@ -65,6 +79,14 @@ process.on('uncaughtException', (erro) => {
 
 function normalizarEmail(email = '') {
   return String(email || '').trim().toLowerCase();
+}
+
+function credenciaisAdminConfiguradas() {
+  return Boolean(ADMIN_EMAIL && ADMIN_PASSWORD);
+}
+
+function demoLegadoConfigurado() {
+  return Boolean(ACESSO_VITALICIO.email && ACESSO_VITALICIO.senha);
 }
 
 function normalizarServicosPainel(servicos = []) {
@@ -532,17 +554,17 @@ app.get('/controle-interno', (req, res) => {
         <h1>Painel administrativo</h1>
         <p>Entre com o Gmail e a senha do admin para gerenciar assinaturas.</p>
         <div class="help">
-          <strong>Acesso do admin configurado</strong>
-          <p style="margin:8px 0 0">Use o Gmail e a senha do admin ou clique em Entrar rápido.</p>
+          <strong>Acesso do admin protegido</strong>
+          <p style="margin:8px 0 0">Configure as credenciais do admin via variaveis de ambiente para liberar este painel.</p>
         </div>
         <form id="loginForm" class="grid">
           <label>
             Gmail do admin
-            <input id="emailInput" type="email" value="gabriel0009messias@gmail.com" placeholder="Digite o Gmail do admin" required />
+            <input id="emailInput" type="email" value="" placeholder="Digite o Gmail do admin" required />
           </label>
           <label>
             Senha do admin
-            <input id="senhaInput" type="password" value="rios123456" placeholder="Digite a senha do admin" required />
+            <input id="senhaInput" type="password" value="" placeholder="Digite a senha do admin" required />
           </label>
           <button class="primary" type="submit">Entrar</button>
           <button id="quickButton" class="secondary" type="button">Entrar rápido</button>
@@ -763,17 +785,8 @@ app.get('/controle-interno', (req, res) => {
       });
 
       quickButton.addEventListener('click', async () => {
-        emailInput.value = 'gabriel0009messias@gmail.com';
-        senhaInput.value = 'rios123456';
-        loginMessage.textContent = 'Entrando...';
-        loginMessage.classList.remove('error');
-        try {
-          await enterAdmin('gabriel0009messias@gmail.com', 'rios123456');
-          loginMessage.textContent = '';
-        } catch (error) {
-          loginMessage.textContent = error.message;
-          loginMessage.classList.add('error');
-        }
+        loginMessage.textContent = 'Preencha as credenciais configuradas no ambiente para entrar.';
+        loginMessage.classList.add('error');
       });
 
       saveSupportButton.addEventListener('click', async () => {
@@ -982,7 +995,7 @@ app.post('/api/barbeiro/login', (req, res) => {
   let assinatura = null;
   let tipo = 'assinatura';
 
-  if (identificador === normalizarEmail(ACESSO_VITALICIO.email) && senha === ACESSO_VITALICIO.senha) {
+  if (demoLegadoConfigurado() && identificador === normalizarEmail(ACESSO_VITALICIO.email) && senha === ACESSO_VITALICIO.senha) {
     assinatura = ACESSO_VITALICIO;
     tipo = 'acesso_vitalicio';
   } else {
@@ -1019,6 +1032,11 @@ app.post('/api/barbeiro/login', (req, res) => {
 app.post('/api/admin/login', (req, res) => {
   const email = normalizarEmail(req.body?.email || '');
   const senha = String(req.body?.senha || '');
+
+  if (!credenciaisAdminConfiguradas()) {
+    res.status(503).json({ error: 'Credenciais do admin nao configuradas neste ambiente.' });
+    return;
+  }
 
   if (email !== normalizarEmail(ADMIN_EMAIL) || senha !== ADMIN_PASSWORD) {
     res.status(401).json({ error: 'Email ou senha incorretos.' });
@@ -1094,6 +1112,11 @@ app.patch('/api/admin/assinaturas/:id', requireAdmin, (req, res) => {
 });
 
 app.delete('/api/admin/assinaturas/:id', requireAdmin, (req, res) => {
+  if (process.env.RENDER || process.env.RENDER_SERVICE_ID) {
+    res.status(410).json({ error: 'Remocao legado-admin desativada no ambiente hospedado.' });
+    return;
+  }
+
   const id = Number(req.params.id);
 
   if (id === ACESSO_VITALICIO.id) {

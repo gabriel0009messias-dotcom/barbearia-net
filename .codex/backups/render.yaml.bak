@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: barbearia-net
+    runtime: node
+    rootDir: .
+    buildCommand: cd painel && npm ci && npm run build && cd .. && cd backend && npm ci
+    startCommand: cd backend && npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://barbearia-net.onrender.com
+      - key: APP_URL
+        value: https://barbearia-net.onrender.com
+      - key: DEFAULT_PLAN_AMOUNT_CENTS
+        value: 6500
+      - key: DEFAULT_PLAN_NAME
+        value: Plano Mensal SaaS
+      - key: GRACE_DAYS
+        value: 4
+      - key: EVOLUTION_API_URL
+        sync: false
+      - key: EVOLUTION_API_KEY
+        sync: false
+      - key: MERCADO_PAGO_ACCESS_TOKEN
+        sync: false
+      - key: MERCADO_PAGO_WEBHOOK_SECRET
+        sync: false

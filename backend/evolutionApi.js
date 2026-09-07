@@ -1,4 +1,5 @@
-const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_API_TIMEOUT_MS || 15000);
+// A Evolution hospedada no plano gratuito pode levar mais de 50 segundos para acordar.
+const DEFAULT_TIMEOUT_MS = Number(process.env.EVOLUTION_API_TIMEOUT_MS || 70000);
 const DEFAULT_RETRY_ATTEMPTS = Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS || 3);
 const DEFAULT_RETRY_DELAY_MS = Number(process.env.EVOLUTION_API_RETRY_DELAY_MS || 2000);
 
@@ -20,21 +21,18 @@ function obterPrimeiroEnvPreenchido(chaves = []) {
 
 function getEvolutionConfig() {
   const baseUrl = normalizarBaseUrl(
-    obterPrimeiroEnvPreenchido(['EVOLUTION_API_URL', 'WHATSAPP_EVOLUTION_API_URL']) ||
-      'https://evolution-api-3-bp28.onrender.com'
+    obterPrimeiroEnvPreenchido(['EVOLUTION_API_URL', 'WHATSAPP_EVOLUTION_API_URL'])
   );
   const apiKey = obterPrimeiroEnvPreenchido([
     'EVOLUTION_API_KEY',
     'WHATSAPP_EVOLUTION_API_KEY',
-    'AUTHENTICATION_API_KEY',
-    'API_KEY',
   ]);
 
   return {
     baseUrl,
     apiKey,
     enabled: Boolean(baseUrl && apiKey),
-    timeoutMs: Number.isFinite(DEFAULT_TIMEOUT_MS) ? DEFAULT_TIMEOUT_MS : 15000,
+    timeoutMs: Number.isFinite(DEFAULT_TIMEOUT_MS) ? DEFAULT_TIMEOUT_MS : 70000,
     retryAttempts: Number.isFinite(DEFAULT_RETRY_ATTEMPTS) ? DEFAULT_RETRY_ATTEMPTS : 3,
     retryDelayMs: Number.isFinite(DEFAULT_RETRY_DELAY_MS) ? DEFAULT_RETRY_DELAY_MS : 3000,
   };
@@ -62,7 +60,7 @@ function logEvolutionError(contexto, error) {
     message: error?.message || String(error),
     code: error?.code || null,
     statusCode: error?.statusCode || null,
-    details: detalhes,
+    detailKeys: detalhes && typeof detalhes === 'object' ? Object.keys(detalhes) : [],
   });
 }
 
@@ -131,6 +129,8 @@ async function evolutionRequest(path, options = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs ?? config.timeoutMs));
 
+    const startedAt = Date.now();
+
     try {
       const response = await fetch(`${config.baseUrl}${path}`, {
         ...options,
@@ -141,6 +141,8 @@ async function evolutionRequest(path, options = {}) {
           ...(options.headers || {}),
         },
       });
+
+      console.info(`[Evolution API] resposta HTTP ${response.status} em ${path} (${Date.now() - startedAt}ms)`);
 
       const payload = await response.json().catch(() => ({}));
 
@@ -220,11 +222,19 @@ function extrairConteudoQr(payload = null) {
     payload?.code,
     payload?.base64,
     payload?.qrcode,
+    payload?.qrcode?.base64,
+    payload?.qrcode?.code,
     payload?.qr,
     payload?.data?.code,
+    payload?.data?.base64,
     payload?.data?.qrcode,
+    payload?.data?.qrcode?.base64,
+    payload?.data?.qrcode?.code,
     payload?.response?.code,
+    payload?.response?.base64,
     payload?.response?.qrcode,
+    payload?.response?.qrcode?.base64,
+    payload?.response?.qrcode?.code,
     payload?.response?.qr,
   ];
 
@@ -242,6 +252,10 @@ function construirQrCodeUrl(code = '') {
 
   if (conteudo.startsWith('data:image/')) {
     return conteudo;
+  }
+
+  if (/^[A-Za-z0-9+/=\r\n]+$/.test(conteudo) && conteudo.length > 100) {
+    return `data:image/png;base64,${conteudo.replace(/\s/g, '')}`;
   }
 
   return `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(conteudo)}`;

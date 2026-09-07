@@ -647,17 +647,18 @@ async function solicitarQrWhatsapp({ silencioso = false } = {}) {
   try {
     for (let tentativa = 1; tentativa <= 3; tentativa += 1) {
       try {
-        const resposta = await buscarJson('/api/whatsapp/qr', {
-          method: 'GET',
+        const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
+          method: 'POST',
         });
 
-        if (resposta.status === 'success') {
+        if (resposta.status === 'success' || resposta.ok) {
+          const qr = resposta.qr || resposta.qrCode || null;
           const statusRecebido =
-            resposta.whatsappStatus || (resposta.conectado ? 'conectado' : resposta.qr ? 'qr_pronto' : 'iniciando');
-          atualizarStatusWhatsapp(statusRecebido, resposta.qr);
+            resposta.whatsappStatus || (resposta.conectado ? 'conectado' : qr ? 'qr_pronto' : 'iniciando');
+          atualizarStatusWhatsapp(statusRecebido, qr);
           qrStatusMessage.textContent = resposta.message || 'QR Code atualizado com sucesso.';
 
-          if (resposta.qr) {
+          if (qr) {
             ultimoQrGeradoEm = Date.now();
           }
 

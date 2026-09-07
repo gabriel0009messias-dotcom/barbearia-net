@@ -2,11 +2,18 @@
   "name": "barbearia-painel",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "dependencies": {
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.10"
   },
   "scripts": {
-    "start": "echo \"Painel web: configure com create-react-app ou Vite\""
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   }
 }

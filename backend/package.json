@@ -1,22 +1,32 @@
 {
   "name": "barbearia-backend",
   "version": "1.0.0",
-  "main": "app.js",
+  "main": "src/server.js",
   "engines": {
     "node": "20.x"
   },
   "scripts": {
-    "postinstall": "node -e \"console.log('WhatsApp configurado para Evolution API; sem instalacao de Chrome no deploy.')\"",
-    "start": "node app.js",
+    "postinstall": "node -e \"console.log('SaaS pronto para PostgreSQL e Mercado Pago.')\"",
+    "migrate": "node src/database/migrateRunner.js",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
     "bot": "node wppconnect.js"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^1.41.1",
     "axios": "^1.14.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
     "express": "^4.22.1",
+    "express-rate-limit": "^7.5.1",
+    "express-validator": "^7.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
     "nodemailer": "^6.10.1",
+    "pg": "^8.16.3",
     "puppeteer": "^24.40.0",
     "sharp": "^0.34.5",
-    "sqlite3": "5.1.7"
+    "sqlite3": "5.1.7",
+    "xss": "^1.0.15"
   }
 }

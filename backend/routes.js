@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
 
+require('./loadEnv');
+
 const db = require('./database');
 const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas } = require('./asaas');
 const {
@@ -29,25 +31,38 @@ const { processarWebhookEvolution } = require('./evolutionWebhook');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
-const METODOS_PAGAMENTO = ['pix'];
-const STATUS_ASSINATURA = ['pendente', 'ativo', 'bloqueado'];
+const METODOS_PAGAMENTO = ['mercado_pago'];
+const STATUS_ASSINATURA = ['pendente', 'ativa', 'atrasada', 'bloqueada', 'cancelada', 'autorizada', 'pausada'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
 const VALOR_MENSAL_PADRAO = 65;
-const TOLERANCIA_ATRASO_DIAS = 3;
-const MENSAGEM_COMPROVANTE_WHATSAPP = 'Ola, acabei de fazer o pagamento e estou enviando o comprovante.';
-const MENSAGEM_COBRANCA_PADRAO = 'Seu pagamento venceu, favor regularizar para evitar bloqueio.';
+const TOLERANCIA_ATRASO_DIAS = 4;
+const NOME_PLANO_PADRAO = 'Plano Profissional';
+const MENSAGEM_COMPROVANTE_WHATSAPP = 'Ola, regularizei a assinatura e preciso confirmar a liberacao do acesso.';
+const MENSAGEM_COBRANCA_PADRAO = 'Sua assinatura esta em atraso. Regularize o pagamento para continuar usando o sistema.';
+function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
+  for (const chave of chaves) {
+    const valor = String(process.env[chave] || '').trim();
+
+    if (valor) {
+      return valor;
+    }
+  }
+
+  return fallback;
+}
+
 const PIX_CONFIG = {
-  chave: '11906363528',
-  chaveExibicao: '11906363528',
-  favorecido: 'Gabriel Messias Rios',
-  cidade: 'SAO PAULO',
-  copiaColaFixo: '11906363528',
-  qrCodeImageUrl: '/assets/pix-qr-fixo.png',
+  chave: obterPrimeiroEnvPreenchido(['PIX_KEY']),
+  chaveExibicao: obterPrimeiroEnvPreenchido(['PIX_KEY_DISPLAY', 'PIX_KEY']),
+  favorecido: obterPrimeiroEnvPreenchido(['PIX_HOLDER_NAME', 'PIX_FAVORECIDO']),
+  cidade: obterPrimeiroEnvPreenchido(['PIX_CITY'], 'SAO PAULO'),
+  copiaColaFixo: obterPrimeiroEnvPreenchido(['PIX_COPY_PASTE']),
+  qrCodeImageUrl: obterPrimeiroEnvPreenchido(['PIX_QR_CODE_IMAGE_URL'], '/assets/pix-qr-fixo.png'),
 };
-const ADMIN_EMAIL = 'gabriel0009messias@gmail.com';
-const ADMIN_PASSWORD = 'rios123456';
+const ADMIN_EMAIL = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_EMAIL', 'ADMIN_EMAIL', 'SUPER_ADMIN_EMAIL']);
+const ADMIN_PASSWORD = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_PASSWORD', 'ADMIN_PASSWORD', 'SUPER_ADMIN_PASSWORD']);
 const adminSessions = new Map();
 const barberSessions = new Map();
 const whatsappQrJobs = new Map();
@@ -218,6 +233,11 @@ router.get('/sistema', verificarAssinatura, (req, res) => {
 
 // Endpoint para excluir assinatura (admin)
 router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
+  if (emAmbienteHospedado()) {
+    res.status(410).json({ error: 'Remocao legado-admin desativada no ambiente hospedado.' });
+    return;
+  }
+
   const { id } = req.params;
   try {
     // Remove serviços vinculados
@@ -303,9 +323,21 @@ function mapearAssinatura(assinatura) {
     return assinatura;
   }
 
+  const statusAssinatura = String(assinatura.status_assinatura || assinatura.status || 'pendente').toUpperCase();
+  const bloqueado = Number(assinatura.bloqueado || 0) === 1;
+
   return {
     ...assinatura,
     nome: assinatura.barbearia_nome,
+    plano: assinatura.plano || NOME_PLANO_PADRAO,
+    valor_plano: Number(assinatura.valor_plano || assinatura.valor_mensal || VALOR_MENSAL_PADRAO),
+    subscription_id: assinatura.subscription_id || assinatura.mercado_preapproval_id || null,
+    customer_id: assinatura.customer_id || null,
+    payment_id: assinatura.payment_id || null,
+    status_assinatura: statusAssinatura,
+    bloqueado,
+    dias_atraso: Number(assinatura.dias_atraso || 0),
+    data_bloqueio: assinatura.data_bloqueio || null,
     data_vencimento: assinatura.proximo_vencimento,
     data_ultimo_pagamento: assinatura.ultimo_pagamento,
     observacao: assinatura.observacoes || '',
@@ -341,11 +373,19 @@ function criarLinkWhatsApp(numero, mensagem) {
 }
 
 function criarPayloadPix(valor = VALOR_MENSAL_PADRAO) {
+  if (!pixManualConfigurado()) {
+    return '';
+  }
+
   return PIX_CONFIG.copiaColaFixo;
 }
 
 function obterDadosPix(valor = VALOR_MENSAL_PADRAO, suporteNumero = '') {
   const copiaCola = criarPayloadPix(valor);
+
+  if (!copiaCola) {
+    return null;
+  }
 
   return {
     chave: PIX_CONFIG.chave,
@@ -368,9 +408,11 @@ function calcularResumoPagamento(assinatura) {
       venceHoje: false,
       bloqueiaHoje: false,
       statusSugerido: assinatura?.status || 'pendente',
+      statusAssinaturaSugerido: assinatura?.status_assinatura || 'PENDENTE',
+      bloqueado: Number(assinatura?.bloqueado || 0) === 1,
       indicadorAtraso: 'Sem vencimento definido',
       mensagemAdmin: 'Sem vencimento definido.',
-      mensagemCliente: 'Pagamento pendente. Aguarde a confirmacao manual do admin.',
+      mensagemCliente: 'Pagamento pendente. Conclua a assinatura para liberar o sistema.',
     };
   }
 
@@ -384,6 +426,8 @@ function calcularResumoPagamento(assinatura) {
       venceHoje: false,
       bloqueiaHoje: false,
       statusSugerido: assinatura.status,
+      statusAssinaturaSugerido: assinatura.status_assinatura || 'PENDENTE',
+      bloqueado: Number(assinatura?.bloqueado || 0) === 1,
       indicadorAtraso: 'Data invalida',
       mensagemAdmin: 'Data de vencimento invalida.',
       mensagemCliente: 'Nao foi possivel verificar o vencimento da assinatura.',
@@ -396,29 +440,53 @@ function calcularResumoPagamento(assinatura) {
   const venceHoje = diasParaVencer === 0;
   const bloqueiaHoje = diasAtraso === TOLERANCIA_ATRASO_DIAS;
   const bloqueadoAutomatico = diasAtraso > TOLERANCIA_ATRASO_DIAS;
+  const statusGateway = String(assinatura.gateway_status || '').toLowerCase();
+  const cancelada = ['cancelled', 'canceled'].includes(statusGateway) || String(assinatura.status_assinatura || '').toUpperCase() === 'CANCELADA';
 
   let statusSugerido = assinatura.status;
+  let statusAssinaturaSugerido = String(assinatura.status_assinatura || '').toUpperCase() || 'PENDENTE';
+  let bloqueado = Number(assinatura.bloqueado || 0) === 1;
 
-  if (assinatura.status !== 'bloqueado') {
+  if (cancelada) {
+    statusSugerido = 'cancelada';
+    statusAssinaturaSugerido = 'CANCELADA';
+    bloqueado = true;
+  } else if (String(assinatura.status || '').toLowerCase() === 'ativa' || String(assinatura.status || '').toLowerCase() === 'ativo') {
     if (bloqueadoAutomatico) {
-      statusSugerido = 'bloqueado';
-    } else if (venceHoje || atrasado) {
-      statusSugerido = 'pendente';
+      statusSugerido = 'bloqueada';
+      statusAssinaturaSugerido = 'BLOQUEADA';
+      bloqueado = true;
+    } else if (atrasado || venceHoje) {
+      statusSugerido = 'atrasada';
+      statusAssinaturaSugerido = 'ATRASADA';
+      bloqueado = false;
+    } else {
+      statusSugerido = 'ativa';
+      statusAssinaturaSugerido = 'ATIVA';
+      bloqueado = false;
     }
+  } else if (bloqueadoAutomatico) {
+    statusSugerido = 'bloqueada';
+    statusAssinaturaSugerido = 'BLOQUEADA';
+    bloqueado = true;
   }
 
   let indicadorAtraso = 'Em dia';
   let mensagemAdmin = 'Pagamento em dia.';
   let mensagemCliente = 'Seu acesso esta ativo.';
 
-  if (bloqueadoAutomatico) {
+  if (cancelada) {
+    indicadorAtraso = 'Cancelada';
+    mensagemAdmin = 'Assinatura cancelada no Mercado Pago.';
+    mensagemCliente = 'Sua assinatura foi cancelada. Regularize para voltar a usar o sistema.';
+  } else if (bloqueadoAutomatico) {
     indicadorAtraso = `${diasAtraso} dias atrasado`;
-    mensagemAdmin = `Pagamento atrasado ha ${diasAtraso} dias. Cliente deve permanecer bloqueado ate confirmacao manual.`;
-    mensagemCliente = 'Seu acesso foi bloqueado por pagamento pendente.';
+    mensagemAdmin = `Pagamento atrasado ha ${diasAtraso} dias. O sistema deve permanecer bloqueado.`;
+    mensagemCliente = 'Sua assinatura esta em atraso. Regularize o pagamento para voltar a usar o sistema.';
   } else if (bloqueiaHoje) {
-    indicadorAtraso = '3 dias (bloquear hoje)';
-    mensagemAdmin = 'Cliente com 3 dias de atraso. Se nao houver pagamento confirmado, bloqueie hoje.';
-    mensagemCliente = 'Seu pagamento esta com 3 dias de atraso. Regularize hoje para evitar bloqueio.';
+    indicadorAtraso = '4 dias (bloquear hoje)';
+    mensagemAdmin = 'Cliente no ultimo dia de tolerancia. Se o Mercado Pago nao aprovar, o bloqueio acontece hoje.';
+    mensagemCliente = 'Sua assinatura esta no ultimo dia de tolerancia. Regularize hoje para evitar o bloqueio.';
   } else if (diasAtraso === 2) {
     indicadorAtraso = '2 dias atrasado';
     mensagemAdmin = 'Cliente com 2 dias de atraso.';
@@ -445,6 +513,8 @@ function calcularResumoPagamento(assinatura) {
     bloqueiaHoje,
     bloqueadoAutomatico,
     statusSugerido,
+    statusAssinaturaSugerido,
+    bloqueado,
     indicadorAtraso,
     mensagemAdmin,
     mensagemCliente,
@@ -474,13 +544,35 @@ async function sincronizarStatusPorVencimento(assinatura) {
 
   const resumo = calcularResumoPagamento(assinatura);
 
-  if (resumo.statusSugerido !== assinatura.status) {
+  if (
+    resumo.statusSugerido !== assinatura.status ||
+    resumo.statusAssinaturaSugerido !== String(assinatura.status_assinatura || '').toUpperCase() ||
+    Number(assinatura.dias_atraso || 0) !== resumo.diasAtraso ||
+    Number(assinatura.bloqueado || 0) !== (resumo.bloqueado ? 1 : 0)
+  ) {
     await runAsync(
       `UPDATE assinaturas
        SET status = ?,
+           status_assinatura = ?,
+           dias_atraso = ?,
+           bloqueado = ?,
+           data_bloqueio = CASE
+             WHEN ? = 1 AND data_bloqueio IS NULL THEN CURRENT_TIMESTAMP
+             WHEN ? = 0 THEN NULL
+             ELSE data_bloqueio
+           END,
+           data_vencimento = COALESCE(proximo_vencimento, data_vencimento),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [resumo.statusSugerido, assinatura.id]
+      [
+        resumo.statusSugerido,
+        resumo.statusAssinaturaSugerido,
+        resumo.diasAtraso,
+        resumo.bloqueado ? 1 : 0,
+        resumo.bloqueado ? 1 : 0,
+        resumo.bloqueado ? 1 : 0,
+        assinatura.id,
+      ]
     );
 
     return getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinatura.id]);
@@ -532,7 +624,15 @@ function avaliarAcessoAssinatura(assinatura) {
 
   const resumo = calcularResumoPagamento(assinatura);
 
-  if (assinatura.status === 'ativo') {
+  if (assinatura.bloqueado || assinatura.status === 'bloqueada' || assinatura.status === 'cancelada') {
+    return {
+      liberado: false,
+      motivo: 'bloqueado',
+      mensagem: resumo.mensagemCliente,
+    };
+  }
+
+  if (assinatura.status === 'ativa' || assinatura.status === 'ativo') {
     return {
       liberado: true,
       motivo: 'assinatura_ativa',
@@ -540,14 +640,19 @@ function avaliarAcessoAssinatura(assinatura) {
     };
   }
 
-  if (assinatura.status === 'teste' || assinatura.status === 'pendente') {
+  if (assinatura.status === 'atrasada') {
+    return {
+      liberado: true,
+      motivo: 'grace_period',
+      mensagem: resumo.mensagemCliente,
+    };
+  }
+
+  if (assinatura.status === 'teste' || assinatura.status === 'pendente' || assinatura.status === 'autorizada' || assinatura.status === 'pausada') {
     return {
       liberado: false,
       motivo: 'pagamento_pendente',
-      mensagem:
-        resumo.atrasado || resumo.venceHoje
-          ? resumo.mensagemCliente
-          : 'Pagamento pendente. Envie o comprovante e aguarde a confirmacao manual do admin.',
+      mensagem: 'Cadastro concluido. Finalize a assinatura para liberar o sistema.',
     };
   }
 
@@ -564,6 +669,7 @@ function montarEstadoPagamento(assinatura) {
 
   return {
     status: assinatura.status,
+    statusAssinatura: String(assinatura.status_assinatura || assinatura.status || 'PENDENTE').toUpperCase(),
     liberado: acesso.liberado,
     motivo: acesso.motivo,
     mensagem: acesso.mensagem,
@@ -572,7 +678,11 @@ function montarEstadoPagamento(assinatura) {
       indicador: resumo.indicadorAtraso,
       bloqueiaHoje: resumo.bloqueiaHoje,
     },
-    pix: obterDadosPix(assinatura.valor_mensal || VALOR_MENSAL_PADRAO, assinatura.suporte_numero),
+    bloqueado: resumo.bloqueado,
+    plano: assinatura.plano || NOME_PLANO_PADRAO,
+    valor: Number(assinatura.valor_plano || assinatura.valor_mensal || VALOR_MENSAL_PADRAO),
+    gatewayCheckoutUrl: assinatura.gateway_checkout_url || null,
+    gatewayProvider: assinatura.gateway_provider || 'mercado_pago',
     mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
     whatsappLink: criarLinkWhatsApp(assinatura.suporte_numero, MENSAGEM_COMPROVANTE_WHATSAPP),
   };
@@ -1035,6 +1145,14 @@ function emAmbienteHospedado() {
   return Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
 }
 
+function credenciaisAdminConfiguradas() {
+  return Boolean(ADMIN_EMAIL && ADMIN_PASSWORD);
+}
+
+function pixManualConfigurado() {
+  return Boolean(PIX_CONFIG.chave && PIX_CONFIG.copiaColaFixo && PIX_CONFIG.favorecido);
+}
+
 function usarEvolutionWhatsapp() {
   const evolution = getEvolutionConfig();
   return Boolean(evolution.enabled && emAmbienteHospedado());
@@ -1357,50 +1475,83 @@ async function requestMercadoPago(path, options = {}) {
 function mapearStatusMercadoPagoParaAssinatura(status) {
   switch (String(status || '').toLowerCase()) {
     case 'authorized':
-      return 'ativo';
+      return 'ativa';
+    case 'paused':
+      return 'pausada';
+    case 'cancelled':
+    case 'canceled':
+      return 'cancelada';
     case 'pending':
     case 'in_process':
       return 'pendente';
-    case 'paused':
-    case 'cancelled':
-      return 'bloqueado';
     default:
       return 'pendente';
+  }
+}
+
+function mapearStatusMercadoPagoParaStatusAssinatura(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'authorized':
+      return 'ATIVA';
+    case 'paused':
+      return 'PAUSADA';
+    case 'cancelled':
+    case 'canceled':
+      return 'CANCELADA';
+    default:
+      return 'PENDENTE';
   }
 }
 
 async function salvarRetornoMercadoPago(assinaturaId, preapproval) {
   const gatewayStatus = String(preapproval?.status || 'pending');
   const assinaturaStatus = mapearStatusMercadoPagoParaAssinatura(gatewayStatus);
+  const statusAssinatura = mapearStatusMercadoPagoParaStatusAssinatura(gatewayStatus);
   const proximoVencimento = String(preapproval?.next_payment_date || '').slice(0, 10) || null;
   const ultimoPagamento =
-    assinaturaStatus === 'ativo' ? new Date().toISOString().slice(0, 10) : null;
+    assinaturaStatus === 'ativa' ? new Date().toISOString().slice(0, 10) : null;
+  const bloqueado = ['cancelada', 'bloqueada'].includes(assinaturaStatus) ? 1 : 0;
 
   await runAsync(
     `UPDATE assinaturas
      SET status = ?,
+         status_assinatura = ?,
          gateway_provider = 'mercado_pago',
          gateway_status = ?,
          gateway_external_reference = ?,
          gateway_checkout_url = ?,
          mercado_preapproval_id = ?,
+         subscription_id = ?,
          mercado_payer_email = ?,
          mercado_next_payment_date = ?,
          mercado_last_payload = ?,
+         bloqueado = ?,
+         data_bloqueio = CASE
+           WHEN ? = 1 AND data_bloqueio IS NULL THEN CURRENT_TIMESTAMP
+           WHEN ? = 0 THEN NULL
+           ELSE data_bloqueio
+         END,
          ultimo_pagamento = COALESCE(?, ultimo_pagamento),
          proximo_vencimento = COALESCE(?, proximo_vencimento),
+         data_vencimento = COALESCE(?, data_vencimento),
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
     [
       assinaturaStatus,
+      statusAssinatura,
       gatewayStatus,
       preapproval?.external_reference || null,
       preapproval?.init_point || preapproval?.sandbox_init_point || null,
       preapproval?.id || null,
+      preapproval?.id || null,
       preapproval?.payer_email || null,
       preapproval?.next_payment_date || null,
       JSON.stringify(preapproval || {}),
+      bloqueado,
+      bloqueado,
+      bloqueado,
       ultimoPagamento,
+      proximoVencimento,
       proximoVencimento,
       assinaturaId,
     ]
@@ -2238,10 +2389,20 @@ router.get('/publico/assinatura-config', async (req, res) => {
 });
 
 router.get('/publico/pix/chave', (req, res) => {
+  if (!pixManualConfigurado()) {
+    res.status(503).json({ error: 'Pix manual nao configurado neste ambiente.' });
+    return;
+  }
+
   res.json({ chave: PIX_CONFIG.chave, tipo: 'cpf' });
 });
 
 router.post('/publico/pix/qrcode', async (req, res) => {
+  if (!pixManualConfigurado()) {
+    res.status(503).json({ error: 'Pix manual nao configurado neste ambiente.' });
+    return;
+  }
+
   const { valor, descricao } = req.body;
   const pix = obterDadosPix(valor || VALOR_MENSAL_PADRAO);
   res.json({
@@ -3115,6 +3276,11 @@ router.post('/admin/login', async (req, res) => {
   }
 
   try {
+    if (!credenciaisAdminConfiguradas()) {
+      res.status(503).json({ error: 'Credenciais do admin nao configuradas neste ambiente.' });
+      return;
+    }
+
     if (email !== normalizarEmail(ADMIN_EMAIL) || senha !== ADMIN_PASSWORD) {
       res.status(401).json({ error: 'Gmail ou senha do admin invalidos.' });
       return;

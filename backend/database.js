@@ -196,7 +196,7 @@ db.serialize(() => {
     email TEXT,
     metodo_pagamento TEXT NOT NULL,
     dia_vencimento INTEGER NOT NULL,
-    valor_mensal REAL NOT NULL DEFAULT 1,
+    valor_mensal REAL NOT NULL DEFAULT 60,
     status TEXT NOT NULL DEFAULT 'pendente',
     suporte_numero TEXT NOT NULL,
     ultimo_pagamento TEXT,
@@ -281,6 +281,18 @@ db.serialize(() => {
   garantirColuna('assinaturas', 'mercado_payer_email', 'TEXT');
   garantirColuna('assinaturas', 'mercado_next_payment_date', 'TEXT');
   garantirColuna('assinaturas', 'mercado_last_payload', 'TEXT');
+  garantirColuna('assinaturas', 'plano', "TEXT NOT NULL DEFAULT 'Plano Profissional'");
+  garantirColuna('assinaturas', 'valor_plano', 'REAL NOT NULL DEFAULT 65');
+  garantirColuna('assinaturas', 'status_assinatura', "TEXT NOT NULL DEFAULT 'PENDENTE'");
+  garantirColuna('assinaturas', 'subscription_id', 'TEXT');
+  garantirColuna('assinaturas', 'customer_id', 'TEXT');
+  garantirColuna('assinaturas', 'payment_id', 'TEXT');
+  garantirColuna('assinaturas', 'dias_atraso', 'INTEGER NOT NULL DEFAULT 0');
+  garantirColuna('assinaturas', 'bloqueado', 'INTEGER NOT NULL DEFAULT 0');
+  garantirColuna('assinaturas', 'data_bloqueio', 'TEXT');
+  garantirColuna('assinaturas', 'trial', 'INTEGER NOT NULL DEFAULT 0');
+  garantirColuna('assinaturas', 'data_vencimento', 'TEXT');
+  garantirColuna('assinaturas', 'notification_history', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_15_enviado_em', 'TEXT');
   garantirColuna('agendamentos', 'lembrete_7_enviado_em', 'TEXT');
   garantirColuna('agendamentos', 'assinatura_id', 'INTEGER');
@@ -294,6 +306,19 @@ db.serialize(() => {
           SET metodo_pagamento = 'pix'
           WHERE metodo_pagamento IS NULL
              OR lower(metodo_pagamento) <> 'pix'`);
+
+  db.run(`UPDATE assinaturas
+          SET plano = COALESCE(NULLIF(plano, ''), 'Plano Profissional'),
+              valor_plano = COALESCE(valor_plano, 65),
+              status_assinatura = CASE
+                WHEN status = 'ativo' THEN 'ATIVA'
+                WHEN status = 'bloqueado' THEN 'BLOQUEADA'
+                ELSE COALESCE(NULLIF(status_assinatura, ''), 'PENDENTE')
+              END,
+              dias_atraso = COALESCE(dias_atraso, 0),
+              bloqueado = CASE WHEN status = 'bloqueado' THEN 1 ELSE COALESCE(bloqueado, 0) END,
+              trial = COALESCE(trial, 0),
+              data_vencimento = COALESCE(data_vencimento, proximo_vencimento)`);
 
   db.run(`UPDATE assinaturas
           SET dia_vencimento = CASE
