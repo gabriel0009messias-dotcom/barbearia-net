@@ -26,6 +26,9 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     if (failure && (!failure.path || failure.path === req.path)) return res.status(failure.status).json(failure.body);
     const name = req.path.split('/').pop();
     if (req.path === '/instance/fetchInstances') {
+      if (req.query.instanceName && !instances.has(req.query.instanceName)) {
+        return res.status(404).json({ status: 404, error: 'Not Found', response: { message: [`Instance "${req.query.instanceName}" not found`] } });
+      }
       return res.json([...instances.keys()].map((name) => ({ name })));
     }
     if (req.path === '/instance/create') {

@@ -39,6 +39,14 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
     reply(200, { error: true, message: 'internal socket failure token=other-secret' });
     await assert.rejects(api.conectarInstancia('barbearia-1'), { code: 'EVOLUTION_CONNECT_FAILED' });
   });
+  await t.test('404 de instancia ausente permite criar; erro de rota e autenticacao nao', async () => {
+    reply(404, { error: 'Not Found', response: { message: ['Instance "barbearia-1" not found'] } });
+    assert.equal(await api.buscarInstancia('barbearia-1'), null);
+    reply(404, { message: 'Cannot GET /instance/fetchInstances' });
+    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_ENDPOINT_NOT_FOUND' });
+    reply(401, { message: 'Unauthorized' });
+    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_KEY' });
+  });
   await t.test('resposta invalida nao vira lista vazia nem cria outra instancia', async () => {
     reply(200, '<html>Render loading</html>');
     await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_RESPONSE' });

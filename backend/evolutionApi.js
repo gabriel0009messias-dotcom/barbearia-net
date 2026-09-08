@@ -243,7 +243,18 @@ async function buscarInstancias(instanceName = '', options = {}) {
 }
 
 async function buscarInstancia(instanceName, options = {}) {
-  const instancias = await buscarInstancias(instanceName, options);
+  let instancias;
+  try {
+    instancias = await buscarInstancias(instanceName, options);
+  } catch (error) {
+    // Na 2.3.7, a busca filtrada retorna 404 (nao []), se o nome nao existe.
+    // Apenas essa resposta autoriza o chamador a seguir para a criacao.
+    if (error.code === 'EVOLUTION_INSTANCE_NOT_FOUND' && error.upstreamStatus === 404) {
+      logEvolution('instance_absent', { requestId: options.requestId, instance: instanceName });
+      return null;
+    }
+    throw error;
+  }
 
   return (
     instancias.find((item) => String(item?.instance?.instanceName || item?.instanceName || item?.name || '').trim() === String(instanceName || '').trim()) ||

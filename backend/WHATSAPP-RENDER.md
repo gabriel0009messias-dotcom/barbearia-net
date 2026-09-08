@@ -1,5 +1,13 @@
 # Diagnóstico e atualização do WhatsApp
 
+## Correção complementar: instância não encontrada
+
+Os logs de produção mostraram `origin: https://evolution-api-3.onrender.com`, diferente da URL correta com `-bp28`. Após orientar a correção da variável no backend, o painel passou a exibir instância não encontrada.
+
+A Evolution 2.3.7 retorna HTTP 404 com `Instance "nome" not found` na busca filtrada quando a instância não existe. O backend agora converte somente essa resposta em ausência e segue para criar a instância. Erros de endpoint e autenticação continuam sendo propagados. A simulação dos testes de integração foi corrigida para reproduzir esse comportamento, cobrindo criação por código, QR e reconexão. O diagnóstico consulta a lista sem filtro para não falhar por um nome de teste inexistente.
+
+Fonte: [instanceInfo da Evolution 2.3.7](https://github.com/EvolutionAPI/evolution-api/blob/2.3.7/src/api/services/monitor.service.ts).
+
 ## Evidências desta análise
 
 - O Blueprint executa `npm start` em `backend`, que inicia `app.js` e usa `routes.js` / `evolutionApi.js`. A implementação em `src/services/evolutionApiService.js` pertence ao outro servidor (`npm run dev`), não ao fluxo de `barbeiro.html` iniciado pelo Blueprint.

@@ -15,7 +15,7 @@ async function main() {
   logEvolution('diagnostic_dns_ok', { host: url.hostname, durationMs: Date.now() - start });
   // A raiz verifica se a aplicacao iniciou; fetchInstances verifica a chave global
   // e acesso ao banco. Nao cria, conecta, desconecta nem modifica instancias.
-  for (const endpoint of ['/', '/instance/fetchInstances?instanceName=barbearia-diagnostico']) {
+  for (const endpoint of ['/', '/instance/fetchInstances']) {
     try {
       await evolutionRequest(endpoint, { retryAttempts: 1, timeoutMs: config.timeoutMs });
     } catch (error) {
