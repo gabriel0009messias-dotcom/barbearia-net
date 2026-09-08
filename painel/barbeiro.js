@@ -38,13 +38,11 @@ const bloqueioFormInicio = document.getElementById('bloqueioFormInicio');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const menuButtons = Array.from(document.querySelectorAll('[data-section-target]'));
 const panelViews = Array.from(document.querySelectorAll('.panel-view'));
-const generateQrButton = document.getElementById('generateQrButton');
 const generatePairingButton = document.getElementById('generatePairingButton');
 const whatsappPairingNumber = document.getElementById('whatsappPairingNumber');
 const pairingCodeValue = document.getElementById('pairingCodeValue');
 const copyPairingCodeButton = document.getElementById('copyPairingCodeButton');
 const openLocalWhatsappButton = document.getElementById('openLocalWhatsappButton');
-const qrCodeImage = document.getElementById('qrCodeImage');
 const qrStatusMessage = document.getElementById('qrStatusMessage');
 const whatsappStatusBadge = document.getElementById('whatsappStatusBadge');
 const whatsappHelpText = document.getElementById('whatsappHelpText');
@@ -90,9 +88,6 @@ let pixConfig = null;
 let valorMensalAtual = 1;
 let whatsappEnabled = false;
 let activeSectionId = 'inicio';
-let qrRequestInFlight = false;
-let ultimoQrGeradoEm = 0;
-let ultimoStatusWhatsapp = 'nao_configurado';
 let painelAutoRefresh = null;
 let pairingCodeAtual = '';
 
@@ -153,10 +148,6 @@ function mostrarMensagemTopo(mensagem = '') {
   if (topbarActionMessage) {
     topbarActionMessage.textContent = mensagem;
   }
-}
-
-function esperar(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function renderizarDiasFuncionamento(container, selecionados = [1, 2, 3, 4, 5, 6]) {
@@ -360,12 +351,11 @@ function renderizarBloqueios(bloqueios) {
   }
 }
 
-function atualizarStatusWhatsapp(status, qrCode) {
-  ultimoStatusWhatsapp = status || 'nao_configurado';
+function atualizarStatusWhatsapp(status) {
   const mapa = {
     nao_configurado: 'Aguardando cadastro',
-    iniciando: 'Preparando QR',
-    qr_pronto: 'QR pronto',
+    iniciando: 'Conectando',
+    qr_pronto: 'Aguardando conexao',
     conectado: 'Conectado',
     isLogged: 'Conectado',
     qrReadSuccess: 'Conectado',
@@ -374,24 +364,9 @@ function atualizarStatusWhatsapp(status, qrCode) {
 
   whatsappStatusBadge.textContent = mapa[status] || status || 'Aguardando cadastro';
 
-  if (qrCode) {
-    qrCodeImage.hidden = false;
-    qrCodeImage.src = qrCode;
-    qrStatusMessage.textContent = 'Escaneie este QR Code com o WhatsApp da barbearia.';
-    return;
-  }
-
   if (status === 'conectado' || status === 'isLogged' || status === 'qrReadSuccess') {
-    qrCodeImage.hidden = true;
     qrStatusMessage.textContent = 'WhatsApp conectado com sucesso. Os agendamentos ja podem funcionar.';
-    return;
   }
-
-  if (status === 'erro') {
-    qrCodeImage.hidden = true;
-  }
-
-  qrCodeImage.hidden = true;
 }
 
 function obterPixPagamentoAtual(estado = {}) {
@@ -438,7 +413,6 @@ function mostrarEstadoPagamento(estado = {}) {
   paymentReminderCard.hidden = false;
   painelBloqueadoMessage.hidden = estado?.status !== 'bloqueado';
   blockedMessageText.textContent = estado?.status === 'bloqueado' ? 'Pagamento pendente.' : estado?.mensagem || 'Pagamento pendente.';
-  generateQrButton.disabled = true;
   preencherPagamentoPendente(estado);
   setActiveSection('atualizacao');
 }
@@ -484,7 +458,6 @@ async function mostrarPainelBloqueado(mensagem) {
   paymentReminderCard.hidden = true;
   painelBloqueadoMessage.hidden = false;
   blockedMessageText.textContent = mensagem;
-  generateQrButton.disabled = true;
   setActiveSection('atualizacao');
   await atualizarPixBloqueado();
 }
@@ -534,15 +507,12 @@ async function carregarPainelBarbeiro() {
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generateQrButton.disabled = !whatsappEnabled;
     generatePairingButton.disabled = !whatsappEnabled;
-    generateQrButton.hidden = false;
     openLocalWhatsappButton.hidden = true;
     whatsappHelpText.textContent = whatsappEnabled
       ? 'Seu acesso esta liberado. Informe seu numero para conectar o WhatsApp por codigo.'
       : (config.whatsappSetupMessage || 'O WhatsApp nao esta disponivel no momento.');
     whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
-    qrCodeImage.hidden = true;
     qrStatusMessage.textContent = whatsappEnabled
       ? 'Informe seu numero e clique em Conectar WhatsApp.'
       : 'O WhatsApp nao esta disponivel no momento.';
@@ -595,14 +565,10 @@ async function consultarStatusWhatsapp() {
 
   try {
     const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
-    atualizarStatusWhatsapp(status.status, status.qrCode);
+    atualizarStatusWhatsapp(status.status);
 
-    if (status.mensagem) {
+    if (status.mensagem && !/qr/i.test(status.mensagem)) {
       qrStatusMessage.textContent = status.mensagem;
-    }
-
-    if (status.qrCode) {
-      ultimoQrGeradoEm = Date.now();
     }
 
     if (status.status === 'erro') {
@@ -639,68 +605,6 @@ function iniciarAutoRefreshPainel() {
   }, 30000);
 }
 
-async function solicitarQrWhatsapp({ silencioso = false } = {}) {
-  if (qrRequestInFlight) {
-    return null;
-  }
-
-  qrRequestInFlight = true;
-
-  if (!silencioso) {
-    generateQrButton.disabled = true;
-    generateQrButton.textContent = 'Gerando QR...';
-    qrStatusMessage.textContent = 'Gerando QR Code do WhatsApp...';
-    whatsappStatusBadge.textContent = 'Preparando QR';
-  }
-
-  let ultimaFalha = null;
-
-  try {
-    // O backend ja tenta novamente quando a Evolution esta iniciando. Repetir a
-    // chamada no navegador fazia a tela parecer travada por varios minutos.
-    for (let tentativa = 1; tentativa <= 1; tentativa += 1) {
-      try {
-        const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/iniciar`, {
-          method: 'POST',
-        });
-
-        if (resposta.status === 'success' || resposta.ok) {
-          const qr = resposta.qr || resposta.qrCode || null;
-          const statusRecebido =
-            resposta.whatsappStatus || (resposta.conectado ? 'conectado' : qr ? 'qr_pronto' : 'iniciando');
-          atualizarStatusWhatsapp(statusRecebido, qr);
-          qrStatusMessage.textContent = resposta.message || 'QR Code atualizado com sucesso.';
-
-          if (qr) {
-            ultimoQrGeradoEm = Date.now();
-          }
-
-          return resposta;
-        }
-
-        ultimaFalha = new Error(resposta.message || 'Falha ao gerar QR Code.');
-      } catch (error) {
-        ultimaFalha = error;
-      }
-
-      if (tentativa < 1) {
-        if (!silencioso) {
-          qrStatusMessage.textContent = `Tentando novamente gerar o QR Code (${tentativa}/1)...`;
-        }
-        await esperar(2000);
-      }
-    }
-
-    throw ultimaFalha || new Error('Falha ao gerar QR Code do WhatsApp.');
-  } finally {
-    qrRequestInFlight = false;
-    if (!silencioso) {
-      generateQrButton.disabled = !whatsappEnabled;
-      generateQrButton.textContent = 'Gerar QR Code';
-    }
-  }
-}
-
 function numeroWhatsappValido(numero = '') {
   let digitos = String(numero).replace(/\D/g, '');
   if (digitos.startsWith('55')) digitos = digitos.slice(2);
@@ -723,8 +627,7 @@ async function solicitarPairingCode() {
     pairingCodeValue.hidden = !pairingCodeAtual;
     pairingCodeValue.textContent = pairingCodeAtual;
     copyPairingCodeButton.hidden = !pairingCodeAtual;
-    qrCodeImage.hidden = true;
-    atualizarStatusWhatsapp(resposta.status, null);
+    atualizarStatusWhatsapp(resposta.status);
     qrStatusMessage.textContent = resposta.conectado
       ? 'WhatsApp conectado com sucesso.'
       : 'Use o codigo no WhatsApp em Dispositivos conectados. Os nomes podem variar conforme a versao do aplicativo.';
@@ -906,45 +809,6 @@ copyPairingCodeButton?.addEventListener('click', async () => {
     qrStatusMessage.textContent = 'Codigo copiado.';
   } catch (_) {
     qrStatusMessage.textContent = 'Nao foi possivel copiar. Selecione o codigo e copie manualmente.';
-  }
-});
-
-generateQrButton.addEventListener('click', async () => {
-  if (!assinaturaAtualId) {
-    qrStatusMessage.textContent = 'Entre no painel antes de gerar o QR Code.';
-    return;
-  }
-
-  if (!whatsappEnabled) {
-    qrStatusMessage.textContent = 'O WhatsApp nao esta disponivel no momento.';
-    whatsappStatusBadge.textContent = 'Configurar';
-    return;
-  }
-
-  try {
-    if (ultimoStatusWhatsapp === 'iniciando') {
-      qrStatusMessage.textContent = 'A conexao ja esta em andamento. Aguarde alguns segundos para o QR aparecer.';
-      iniciarPollingWhatsapp();
-      return;
-    }
-
-    const resposta = await solicitarQrWhatsapp();
-
-    if (resposta?.conectado) {
-      clearInterval(whatsappPolling);
-      whatsappPolling = null;
-      return;
-    }
-
-    await consultarStatusWhatsapp();
-    iniciarPollingWhatsapp();
-  } catch (error) {
-    console.error(error);
-    if (tratarErroSessao(error)) {
-      return;
-    }
-    qrStatusMessage.textContent = error.message || 'Nao consegui gerar o QR Code apos 3 tentativas.';
-    whatsappStatusBadge.textContent = 'Erro';
   }
 });
 
