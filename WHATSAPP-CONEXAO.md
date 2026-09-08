@@ -67,8 +67,13 @@ resultado existente. Se a tentativa foi iniciada por QR, o usuario pode usar
 `render.yaml` ja declara disco em `/var/data` e
 `DATABASE_PATH=/var/data/barbearia.db`. A associacao entre assinatura, numero e
 nome da instancia fica nesse SQLite. O banco local do usuario nao foi incluido
-nas alteracoes. Em Render, falha de permissao do disco nao deve provocar troca
-silenciosa para banco temporario.
+nas alteracoes. O servico existente no Render usa o plano Free, sem disco
+persistente. Quando o diretorio configurado nao pode ser criado por falta de
+permissao, o backend conserva o fallback legado para o banco local e registra
+um aviso explicito: esse armazenamento e temporario e nao garante preservacao
+em reinicios/deploys. Declarar um disco no YAML nao o instala em um servico
+Free ja criado. A persistencia definitiva exige configurar armazenamento
+compativel; esta correcao de inicializacao nao substitui essa configuracao.
 
 As credenciais de autenticacao do WhatsApp ficam na **Evolution**, nao no disco
 do painel. E necessario que o servico Evolution tenha seu banco persistente

@@ -16,8 +16,8 @@ function garantirDiretorioDoBanco() {
       fs.mkdirSync(dbDir, { recursive: true });
     }
   } catch (error) {
-    const emRender = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-    const deveUsarFallback = !emRender && dbPath !== legacyDbPath && ['EACCES', 'EPERM', 'EROFS'].includes(error.code);
+    // Mantem compatibilidade com o servico existente sem disco montado.
+    const deveUsarFallback = dbPath !== legacyDbPath && ['EACCES', 'EPERM', 'EROFS'].includes(error.code);
 
     if (!deveUsarFallback) {
       throw error;
@@ -31,6 +31,9 @@ function garantirDiretorioDoBanco() {
     }
 
     console.warn(`Sem permissao para usar ${dbDir}. Fallback para banco local em ${dbPath}.`);
+    if (process.env.RENDER || process.env.RENDER_SERVICE_ID) {
+      console.warn('[BANCO] Armazenamento local temporario no Render: alteracoes podem ser perdidas em reinicios e deploys. Configure um disco persistente ou banco externo para preservar os dados.');
+    }
   }
 }
 
