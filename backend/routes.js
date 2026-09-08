@@ -29,6 +29,7 @@ const {
 } = require('./whatsappManager');
 const { handleWhatsappWebhook } = require('./whatsappWebhook');
 const { processarWebhookEvolution } = require('./evolutionWebhook');
+const { logEvolution } = require('./evolutionLog');
 
 const router = express.Router();
 const DIAS_VENCIMENTO = [5, 12, 24];
@@ -1881,12 +1882,9 @@ async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '', options =
   try {
     await criarInstancia(instanceName, phoneNumber, options);
   } catch (error) {
-    const statusCode = Number(error.statusCode || 0);
-    const mensagem = String(error.message || '');
-
-    if (statusCode !== 409 && !/already|exists|duplicate|duplicada|existe/i.test(mensagem)) {
-      throw error;
-    }
+    if (error.code !== 'EVOLUTION_INSTANCE_EXISTS') throw error;
+    // Outra requisicao/processo pode ter criado a instancia entre fetch e create.
+    if (!(await buscarInstancia(instanceName, options))) throw error;
   }
 
   if (instanceName !== assinatura?.whatsapp_session) {
@@ -1989,92 +1987,34 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}) {
 
 async function gerarQrWhatsappEvolution(assinatura) {
   return compartilharGeracaoQr(assinatura.id, async () => {
-    let ultimaFalha = null;
-
-    // evolutionRequest ja faz as tentativas configuradas. Repetir aqui multiplicava
-    // cada espera e deixava o painel em "Gerando QR" por varios minutos.
-    for (let tentativa = 1; tentativa <= 1; tentativa += 1) {
-      try {
-        const options = { deadline: Date.now() + 60000, retryAttempts: 1 };
-        const instanceName = await garantirInstanciaWhatsapp(assinatura, '', options);
-        const estadoAtual = await consultarStatusWhatsappEvolution({
-          ...assinatura,
-          whatsapp_session: instanceName,
-        }, options);
-
-        if (estadoAtual.conectado) {
-          return respostaStatusWhatsapp({
-            ...estadoAtual,
-            status: 'success',
-            qrCode: null,
-            qr: null,
-            precisaQr: false,
-            mensagem: 'WhatsApp ja esta conectado. Nao foi necessario gerar um novo QR Code.',
-          });
+    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
+    logEvolution('connection_start', { requestId: options.requestId, mode: 'qr', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
+    try {
+      const instanceName = await garantirInstanciaWhatsapp(assinatura, '', options);
+      const estado = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options);
+      if (!estado.success) throw createEvolutionError(estado.message, estado.httpStatus, estado.errorCode);
+      if (estado.conectado) return { ...estado, qrCode: null, qr: null };
+      let conexao;
+      for (let tentativa = 0; tentativa < 6; tentativa += 1) {
+        conexao = await conectarInstancia(instanceName, '', options);
+        if (['open', 'connected'].includes(conexao?.instance?.state || conexao?.state)) {
+          return respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado.' });
         }
-
-        if (!estadoAtual.success) throw createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode);
-        const conexao = await conectarInstancia(instanceName, '', options);
-        void configurarWebhookEvolutionSePossivel(instanceName);
         const qrCode = construirQrCodeUrl(extrairConteudoQr(conexao));
-
-        if (!qrCode) {
-          throw createEvolutionError(
-            'Nao foi possivel obter o QR Code da Evolution API. Tente novamente em alguns segundos.',
-            502,
-            'EVOLUTION_QR_EMPTY',
-            conexao || null
-          );
+        if (qrCode) {
+          await persistirSessaoWhatsapp(assinatura.id, { whatsappSession: instanceName, whatsappStatus: 'qr_pronto',
+            whatsappUltimoErro: null, whatsappUltimoCheckEm: agoraIso(), whatsappUltimoQrEm: agoraIso() });
+          void configurarWebhookEvolutionSePossivel(instanceName);
+          return respostaStatusWhatsapp({ status: 'success', qrCode, qr: qrCode, instancia: instanceName,
+            conectado: false, precisaQr: true, mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.' });
         }
-
-        await persistirSessaoWhatsapp(assinatura.id, {
-          whatsappSession: instanceName,
-          whatsappStatus: 'qr_pronto',
-          whatsappUltimoErro: null,
-          whatsappUltimoCheckEm: agoraIso(),
-          whatsappUltimoQrEm: agoraIso(),
-        });
-
-        return respostaStatusWhatsapp({
-          status: 'success',
-          qrCode,
-          qr: qrCode,
-          ultimoErro: null,
-          instancia: instanceName,
-          conectado: false,
-          precisaQr: true,
-          mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.',
-        });
-      } catch (error) {
-        ultimaFalha = error;
-        logEvolutionError(`geracao de QR da assinatura ${assinatura.id} tentativa ${tentativa}/1`, error);
-
-        await persistirSessaoWhatsapp(assinatura.id, {
-          whatsappStatus: 'erro',
-          whatsappUltimoErro: error.message || 'Falha ao gerar QR Code do WhatsApp.',
-          whatsappUltimoCheckEm: agoraIso(),
-        });
-
-        if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
-          await resetarSessaoWhatsapp(assinatura.id);
-        }
-
-        if (tentativa < 1) {
-          await sleep(2000);
-        }
+        if (tentativa < 5) await sleep(1000);
       }
+      throw createEvolutionError('Nao foi possivel gerar o QR Code. Aguarde e tente novamente.', 503, 'EVOLUTION_QR_EMPTY', conexao);
+    } catch (error) {
+      await persistirSessaoWhatsapp(assinatura.id, { whatsappStatus: 'erro', whatsappUltimoErro: error.message, whatsappUltimoCheckEm: agoraIso() });
+      throw error;
     }
-
-    return respostaStatusWhatsapp({
-      status: 'error',
-      qrCode: null,
-      qr: null,
-      ultimoErro: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
-      instancia: String(assinatura?.whatsapp_session || '').trim() || null,
-      conectado: false,
-      precisaQr: false,
-      mensagem: ultimaFalha?.message || 'Falha ao gerar QR Code do WhatsApp.',
-    });
   });
 }
 
@@ -2930,7 +2870,8 @@ router.post('/publico/assinaturas', async (req, res) => {
 
 async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.id, async () => {
-    const options = { deadline: Date.now() + 60000, retryAttempts: 1 };
+    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
+    logEvolution('connection_start', { requestId: options.requestId, mode: 'pairing', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     const instanceName = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
     const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options);
     if (!estadoAtual.success) throw createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode);
@@ -3016,7 +2957,7 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
     res.json({ ok: resultado.status !== 'error', ...resultado });
   } catch (error) {
     logEvolutionError(`inicio do whatsapp da assinatura ${id}`, error);
-    res.status(error.statusCode || 500).json({ error: error.message });
+    responderErroWhatsapp(res, error);
   }
 });
 
@@ -3039,7 +2980,7 @@ router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, 
     res.json(resultado);
   } catch (error) {
     logEvolutionError(`endpoint qr da assinatura ${id}`, error);
-    res.status(error.statusCode || 500).json({ error: error.message });
+    responderErroWhatsapp(res, error);
   }
 });
 
@@ -3321,7 +3262,7 @@ router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async
 
     await compartilharGeracaoQr(id, async () => {
       try { await desconectarInstancia(instanceName); }
-      catch (error) { if (error.code !== 'EVOLUTION_INSTANCE_NOT_FOUND') throw error; }
+      catch (error) { if (!['EVOLUTION_INSTANCE_NOT_FOUND', 'EVOLUTION_ALREADY_DISCONNECTED'].includes(error.code)) throw error; }
     }, 'logout');
     await persistirSessaoWhatsapp(id, {
       whatsappStatus: 'nao_configurado',

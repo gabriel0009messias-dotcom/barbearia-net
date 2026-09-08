@@ -1,11 +1,8 @@
-// Uma instancia hibernada pode levar mais de um minuto para ficar disponivel.
-// Nao usamos menos de 90 segundos, mesmo se houver um valor antigo no Render.
-const DEFAULT_TIMEOUT_MS = Math.max(90000, Number(process.env.EVOLUTION_API_TIMEOUT_MS) || 90000);
-const DEFAULT_RETRY_ATTEMPTS = Math.max(1, Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS) || 3);
-const DEFAULT_RETRY_DELAY_MS = Math.max(0, Number(process.env.EVOLUTION_API_RETRY_DELAY_MS) || 3000);
+const { randomUUID } = require('node:crypto');
+const { logEvolution, sanitize } = require('./evolutionLog');
 
 function normalizarBaseUrl(url = '') {
-  return String(url || '').trim().replace(/\/$/, '');
+  return String(url || '').trim().replace(/\/+$/, '');
 }
 
 function obterPrimeiroEnvPreenchido(chaves = []) {
@@ -33,9 +30,9 @@ function getEvolutionConfig() {
     baseUrl,
     apiKey,
     enabled: Boolean(baseUrl && apiKey),
-    timeoutMs: Number.isFinite(DEFAULT_TIMEOUT_MS) ? DEFAULT_TIMEOUT_MS : 70000,
-    retryAttempts: Number.isFinite(DEFAULT_RETRY_ATTEMPTS) ? DEFAULT_RETRY_ATTEMPTS : 3,
-    retryDelayMs: Number.isFinite(DEFAULT_RETRY_DELAY_MS) ? DEFAULT_RETRY_DELAY_MS : 3000,
+    timeoutMs: Math.max(1000, Number(process.env.EVOLUTION_API_TIMEOUT_MS) || 20000),
+    retryAttempts: Math.max(1, Number(process.env.EVOLUTION_API_RETRY_ATTEMPTS) || 1),
+    retryDelayMs: Math.max(0, Number(process.env.EVOLUTION_API_RETRY_DELAY_MS) || 2000),
   };
 }
 
@@ -51,20 +48,13 @@ function createEvolutionError(message, statusCode = 500, code = 'EVOLUTION_ERROR
   const error = new Error(message);
   error.statusCode = statusCode;
   error.code = code;
-  error.details = details;
+  // Consumidores legados tambem podem registrar o Error diretamente.
+  error.details = sanitize(details);
   return error;
 }
 
 function logEvolutionError(contexto, error) {
-  const detalhes = error?.details || error?.payload || null;
-  console.error(`[Evolution API] ${contexto}:`, {
-    message: error?.message || String(error),
-    code: error?.code || null,
-    statusCode: error?.statusCode || null,
-    stack: error?.stack || null,
-    cause: error?.cause?.code || null,
-    detailKeys: detalhes && typeof detalhes === 'object' ? Object.keys(detalhes) : [],
-  });
+  logEvolution('failure', { context: contexto, error }, 'error');
 }
 
 function ensureEvolutionConfigured() {
@@ -78,6 +68,13 @@ function ensureEvolutionConfigured() {
     );
   }
 
+  try {
+    const url = new URL(config.baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || /\/(manager|instance)(\/|$)/i.test(url.pathname)) throw new Error('invalid');
+  } catch {
+    throw createEvolutionError('URL da Evolution API invalida. Configure o endereco base do servico.', 503, 'EVOLUTION_INVALID_URL');
+  }
+
   return config;
 }
 
@@ -85,141 +82,80 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isRetryableStatus(statusCode) {
-  return [408, 409, 425, 429, 500, 502, 503, 504].includes(Number(statusCode || 0));
-}
-
-function traduzirMensagemErro(payload, fallbackMessage) {
-  const detalhe = payload?.response?.message || payload?.message || payload?.error || fallbackMessage;
-  const mensagem = Array.isArray(detalhe) ? detalhe.join('; ') : String(detalhe);
-
-  if (/apikey|unauthorized|forbidden|not authorized|invalid key/i.test(String(mensagem || ''))) {
-    return {
-      message: 'A chave da Evolution API parece invalida ou sem permissao.',
-      code: 'EVOLUTION_INVALID_KEY',
-      statusCode: 401,
-    };
-  }
-
-  if (/timeout|timed out|aborted/i.test(String(mensagem || ''))) {
-    return {
-      message: 'A Evolution API demorou para responder.',
-      code: 'EVOLUTION_TIMEOUT',
-      statusCode: 504,
-    };
-  }
-
-  if (/not found|instance.*not.*found|does not exist|nao encontrada|inexistente/i.test(String(mensagem || ''))) {
-    return {
-      message: 'A instancia do WhatsApp nao foi encontrada na Evolution API.',
-      code: 'EVOLUTION_INSTANCE_NOT_FOUND',
-      statusCode: 404,
-    };
-  }
-
-  return {
-    message: mensagem || fallbackMessage,
-    code: 'EVOLUTION_REQUEST_FAILED',
-    statusCode: 502,
-  };
+function classifyFailure(status, payload, path) {
+  const technical = JSON.stringify(payload || {});
+  // O guard oficial da 2.3.7 usa 403 para nome duplicado, nao apenas 409.
+  if (path === '/instance/create' && status === 403 && /this name.*is already in use/i.test(technical)) return ['A instancia ja existe na Evolution API.', 409, 'EVOLUTION_INSTANCE_EXISTS'];
+  if ([401, 403].includes(status)) return ['Erro de autenticacao com a Evolution API. Verifique a chave no servidor.', 502, 'EVOLUTION_INVALID_KEY'];
+  if ([502, 503].includes(status)) return ['Evolution API esta offline ou indisponivel.', 503, 'EVOLUTION_OFFLINE'];
+  if ([408, 504].includes(status)) return ['Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT'];
+  if (status === 429) return ['Evolution API recebeu muitas solicitacoes. Aguarde e tente novamente.', 503, 'EVOLUTION_RATE_LIMIT'];
+  if (status === 400 && path.startsWith('/instance/logout/') && /instance.*is not connected/i.test(technical)) return ['WhatsApp ja esta desconectado.', 400, 'EVOLUTION_ALREADY_DISCONNECTED'];
+  if (/instance.*(?:not.*found|does not exist|nao encontrada|inexistente)/i.test(technical)) return ['A instancia do WhatsApp nao foi encontrada na Evolution API.', 404, 'EVOLUTION_INSTANCE_NOT_FOUND'];
+  if (path === '/instance/create' && (status === 409 || /already|duplicate|already in use/i.test(technical))) return ['A instancia ja existe na Evolution API.', 409, 'EVOLUTION_INSTANCE_EXISTS'];
+  if (status === 404) return ['Endpoint da Evolution API nao encontrado. Verifique a URL e a versao do servico.', 502, 'EVOLUTION_ENDPOINT_NOT_FOUND'];
+  if (path === '/instance/create') return ['Nao foi possivel criar a instancia.', 502, 'EVOLUTION_CREATE_FAILED'];
+  if (path.startsWith('/instance/connect/')) return ['Nao foi possivel gerar o codigo de conexao.', 502, 'EVOLUTION_CONNECT_FAILED'];
+  return ['Nao foi possivel concluir a solicitacao na Evolution API.', 502, 'EVOLUTION_REQUEST_FAILED'];
 }
 
 async function evolutionRequest(path, options = {}) {
   const config = ensureEvolutionConfigured();
-  const totalTentativas = Math.max(1, Number(options.retryAttempts ?? config.retryAttempts));
-  const retryDelayMs = Math.max(0, Number(options.retryDelayMs ?? config.retryDelayMs));
-
-  for (let tentativa = 1; tentativa <= totalTentativas; tentativa += 1) {
+  const { retryAttempts = config.retryAttempts, retryDelayMs = config.retryDelayMs,
+    timeoutMs = config.timeoutMs, deadline, requestId = randomUUID(), instanceName,
+    ...fetchOptions } = options;
+  // Criacao e outras mutacoes nao podem ser repetidas cegamente apos timeout.
+  const attempts = (fetchOptions.method || 'GET') === 'GET' ? Math.max(1, retryAttempts) : 1;
+  const endpoint = path.split('?')[0];
+  const instance = instanceName || endpoint.split('/')[3] || null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const remaining = deadline ? deadline - Date.now() : Infinity;
+    const budget = Math.min(remaining, timeoutMs);
+    if (budget <= 0) throw createEvolutionError('Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT');
+    const started = Date.now();
     const controller = new AbortController();
-    const restante = options.deadline ? options.deadline - Date.now() : Infinity;
-    if (restante <= 0) throw createEvolutionError('Servidor do WhatsApp ainda esta iniciando ou demorou para responder. Tente novamente.', 504, 'EVOLUTION_TIMEOUT');
-    const timeout = setTimeout(() => controller.abort(), Math.min(restante, Number(options.timeoutMs ?? config.timeoutMs)));
-
-    const startedAt = Date.now();
-
+    const timer = setTimeout(() => controller.abort(), budget);
+    let httpStatus = null;
+    const context = { requestId, endpoint, instance, method: fetchOptions.method || 'GET', attempt,
+      origin: new URL(config.baseUrl).origin, timeoutMs: budget };
+    logEvolution('request_start', context);
     try {
       const response = await fetch(`${config.baseUrl}${path}`, {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          apikey: config.apiKey,
-          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-          ...(options.headers || {}),
-        },
+        ...fetchOptions, redirect: 'manual', signal: controller.signal,
+        headers: { apikey: config.apiKey, ...(fetchOptions.body ? { 'Content-Type': 'application/json' } : {}), ...(fetchOptions.headers || {}) },
       });
-
-      console.info(`[Evolution API] resposta HTTP ${response.status} em ${path.split('?')[0]} (${Date.now() - startedAt}ms)`);
-
-      const payload = await response.json().catch((error) => {
-        if (error.name === 'AbortError') throw error;
-        throw createEvolutionError('O servidor do WhatsApp retornou uma resposta invalida.', 502, 'EVOLUTION_INVALID_RESPONSE');
-      });
-
-      if (!response.ok) {
-        const traducao = traduzirMensagemErro(payload, `Falha ao acessar Evolution API em ${path.split('?')[0]}.`);
-        const error = createEvolutionError(
-          traducao.message,
-          traducao.statusCode || response.status || 502,
-          traducao.code,
-          payload
-        );
-
-        if (tentativa < totalTentativas && isRetryableStatus(response.status)) {
-          logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path.split('?')[0]}`, error);
-          await sleep(retryDelayMs);
-          continue;
-        }
-
-        throw error;
+      httpStatus = response.status;
+      const raw = await response.text();
+      let payload;
+      try { payload = JSON.parse(raw); }
+      catch { payload = { nonJson: true, body: raw }; }
+      logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started, response: payload });
+      if (!response.ok || payload?.error) {
+        const [message, status, code] = classifyFailure(httpStatus, payload, endpoint);
+        throw Object.assign(createEvolutionError(message, status, code, payload), { upstreamStatus: httpStatus });
       }
-
+      if (payload?.nonJson || payload === null || typeof payload !== 'object') {
+        throw createEvolutionError('Evolution API retornou uma resposta invalida. Verifique a URL e a inicializacao do servico.', 502, 'EVOLUTION_INVALID_RESPONSE', payload);
+      }
       return payload;
-    } catch (error) {
-      const isAbort = error?.name === 'AbortError';
-      const isFetchError = error instanceof TypeError;
-      const networkCode = String(error?.cause?.code || error?.code || '').trim().toUpperCase();
-
-      if (tentativa < totalTentativas && (isAbort || isFetchError)) {
-        logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path.split('?')[0]}`, error);
-        await sleep(retryDelayMs);
-        continue;
+    } catch (original) {
+      let error = original;
+      if (original.name === 'AbortError' || original.name === 'TimeoutError') {
+        error = createEvolutionError('Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT');
+      } else if (original instanceof TypeError) {
+        const code = original.cause?.code;
+        error = createEvolutionError(code === 'ENOTFOUND' ? 'Nao foi possivel resolver o endereco da Evolution API.' : 'Evolution API esta offline ou inacessivel pela rede.', 503,
+          code === 'ENOTFOUND' ? 'EVOLUTION_DNS_ERROR' : 'EVOLUTION_OFFLINE');
       }
-
-      if (isAbort) {
-        throw createEvolutionError('A Evolution API demorou para responder.', 504, 'EVOLUTION_TIMEOUT');
-      }
-
-      if (isFetchError) {
-        if (networkCode === 'ENOTFOUND') {
-          throw createEvolutionError(
-            'Nao foi possivel resolver o DNS da Evolution API. Verifique a URL configurada no servidor.',
-            503,
-            'EVOLUTION_DNS_ERROR'
-          );
-        }
-
-        if (networkCode === 'ECONNREFUSED') {
-          throw createEvolutionError(
-            'A conexao com a Evolution API foi recusada. Verifique se o servico esta online e aceitando conexoes.',
-            503,
-            'EVOLUTION_CONNECTION_REFUSED'
-          );
-        }
-
-        throw createEvolutionError(
-          'Nao foi possivel conectar na Evolution API. Verifique a URL do servidor e se ele esta online.',
-          503,
-          'EVOLUTION_OFFLINE'
-        );
-      }
-
-      throw error;
+      if (error !== original) error.cause = original;
+      logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started, error }, 'error');
+      const retryable = ['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE', 'EVOLUTION_RATE_LIMIT'].includes(error.code);
+      if (attempt >= attempts || !retryable || (deadline && deadline - Date.now() <= retryDelayMs)) throw error;
     } finally {
-      clearTimeout(timeout);
+      clearTimeout(timer);
     }
+    await sleep(retryDelayMs);
   }
-
-  throw createEvolutionError('Falha ao acessar Evolution API.', 502, 'EVOLUTION_REQUEST_FAILED');
 }
 
 function gerarNomeInstancia(assinaturaId) {
@@ -228,10 +164,10 @@ function gerarNomeInstancia(assinaturaId) {
 
 function extrairConteudoQr(payload = null) {
   const candidatos = [
-    payload?.code,
     payload?.base64,
-    payload?.qrcode,
     payload?.qrcode?.base64,
+    payload?.code,
+    payload?.qrcode,
     payload?.qrcode?.code,
     payload?.qr,
     payload?.data?.code,
@@ -280,7 +216,7 @@ async function validarConexaoApi() {
 async function buscarInstancias(instanceName = '', options = {}) {
   const query = instanceName ? `?instanceName=${encodeURIComponent(instanceName)}` : '';
   const payload = await evolutionRequest(`/instance/fetchInstances${query}`, {
-    ...options, method: 'GET',
+    ...options, instanceName, method: 'GET',
   });
 
   if (Array.isArray(payload)) {
@@ -303,7 +239,7 @@ async function buscarInstancias(instanceName = '', options = {}) {
     return [payload];
   }
 
-  return [];
+  throw createEvolutionError('Resposta de instancias incompativel com a Evolution API.', 502, 'EVOLUTION_INVALID_RESPONSE', payload);
 }
 
 async function buscarInstancia(instanceName, options = {}) {
@@ -322,7 +258,7 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
   const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, true);
 
   return evolutionRequest('/instance/create', {
-    ...options, method: 'POST',
+    ...options, instanceName, method: 'POST',
     body: JSON.stringify({
       instanceName,
       ...(String(phoneNumber || '').trim() ? { number: String(phoneNumber).trim() } : {}),
@@ -425,6 +361,7 @@ async function enviarListaInstancia(instanceName, number, options = {}) {
 }
 
 module.exports = {
+  evolutionRequest,
   getEvolutionConfig,
   ensureEvolutionConfigured,
   createEvolutionError,

@@ -17,11 +17,13 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
   let failure = null;
   let emptyCodes = 0;
   let delayConnect = 0;
+  let createConflict = false;
   const mock = express();
   mock.use(express.json());
   mock.use(async (req, res) => {
     calls.push({ method: req.method, path: req.path, query: req.query, body: req.body });
-    if (failure) return res.status(failure.status).json(failure.body);
+    assert.equal(req.headers.apikey, 'test-only-key');
+    if (failure && (!failure.path || failure.path === req.path)) return res.status(failure.status).json(failure.body);
     const name = req.path.split('/').pop();
     if (req.path === '/instance/fetchInstances') {
       return res.json([...instances.keys()].map((name) => ({ name })));
@@ -29,6 +31,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     if (req.path === '/instance/create') {
       assert.equal(req.body.qrcode, false, 'Criar instancia nao deve iniciar QR antes do pareamento');
       instances.set(req.body.instanceName, { state: 'close' });
+      if (createConflict) return res.status(403).json({ response: { message: [`This name ${req.body.instanceName} is already in use.`] } });
       return res.json({ instance: { instanceName: req.body.instanceName } });
     }
     if (req.path.startsWith('/webhook/')) {
@@ -99,7 +102,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     for (const phone of ['', '123', '55123', '5500983179933']) {
       assert.equal((await request(route + '/pairing-code', tokens[0], { phone })).status, 400);
     }
-    for (const [phone, expected] of [['75983179933', '5575983179933'], ['+55 (75) 98317-9933', '5575983179933'], ['55983179933', '5555983179933']]) {
+    for (const [phone, expected] of [['5575981218107', '5575981218107'], ['75983179933', '5575983179933'], ['+55 (75) 98317-9933', '5575983179933'], ['55983179933', '5555983179933']]) {
       if (instances.has('barbearia-1')) instances.get('barbearia-1').state = 'close';
       const result = await request(route + '/pairing-code', tokens[0], { phone });
       assert.equal(result.status, 200, JSON.stringify(result.body));
@@ -178,13 +181,55 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(logout.status, 200);
     assert.equal(instances.get('barbearia-1').state, 'close');
   });
+  await t.test('logout de instancia ja desconectada na Evolution 2.3.7 e idempotente', async () => {
+    failure = { path: '/instance/logout/barbearia-1', status: 400, body: { message: 'The barbearia-1 instance is not connected' } };
+    assert.equal((await request(route + '/logout', tokens[0], null, 'DELETE')).status, 200);
+    failure = null;
+  });
+  await t.test('reconectar reutiliza a instancia apos logout', async () => {
+    const before = calls.filter((call) => call.path === '/instance/create').length;
+    const result = await request(route + '/pairing-code', tokens[0], { phone: '5575981218107' });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.pairingCode, 'ABCD1234');
+    assert.equal(calls.filter((call) => call.path === '/instance/create').length, before);
+  });
+  await t.test('QR atrasado funciona e falha da Evolution retorna HTTP de erro', async () => {
+    emptyCodes = 1;
+    const qrRoute = '/publico/assinaturas/2/whatsapp/iniciar';
+    assert.equal((await request(qrRoute, tokens[1], {})).status, 200);
+    failure = { status: 401, body: '<html>Unauthorized</html>' };
+    const result = await request(qrRoute, tokens[1], {});
+    assert.equal(result.status, 502);
+    assert.equal(result.body.errorCode, 'EVOLUTION_INVALID_KEY');
+    failure = null;
+  });
+  await t.test('conflito 403 de criacao confirma instancia e reutiliza', async () => {
+    instances.delete('barbearia-2');
+    createConflict = true;
+    const before = calls.filter((call) => call.path === '/instance/fetchInstances').length;
+    const result = await request('/publico/assinaturas/2/whatsapp/pairing-code', tokens[1], { phone: '5575981218107' });
+    createConflict = false;
+    assert.equal(result.status, 200);
+    assert.equal(result.body.pairingCode, 'ABCD1234');
+    assert.equal(calls.filter((call) => call.path === '/instance/fetchInstances').length - before, 2);
+  });
+  await t.test('falha de criacao identifica a etapa sem expor detalhes', async () => {
+    instances.delete('barbearia-2');
+    failure = { path: '/instance/create', status: 400, body: { message: 'internal database error' } };
+    const result = await request('/publico/assinaturas/2/whatsapp/pairing-code', tokens[1], { phone: '5575981218107' });
+    assert.equal(result.status, 502);
+    assert.equal(result.body.errorCode, 'EVOLUTION_CREATE_FAILED');
+    assert.doesNotMatch(JSON.stringify(result.body), /database/);
+    failure = null;
+  });
   await t.test('ausencia de codigo termina com erro util, sem sucesso falso', async () => {
+    instances.get('barbearia-1').state = 'close';
     emptyCodes = 6;
     const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
     assert.equal(result.status, 503);
     assert.equal(result.body.success, false);
     assert.equal(result.body.errorCode, 'EVOLUTION_PAIRING_CODE_EMPTY');
-    assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 1);
+    assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 2);
   });
   await t.test('falha SQL produz JSON 500 sem expor detalhes internos', async (subtest) => {
     subtest.mock.method(db, 'get', (sql, params, callback) => callback(Object.assign(new Error('SQLITE_ERROR: simulated failure'), { code: 'SQLITE_ERROR' })));
