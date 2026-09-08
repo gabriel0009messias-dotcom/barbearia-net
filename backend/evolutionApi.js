@@ -61,6 +61,8 @@ function logEvolutionError(contexto, error) {
     message: error?.message || String(error),
     code: error?.code || null,
     statusCode: error?.statusCode || null,
+    stack: error?.stack || null,
+    cause: error?.cause?.code || null,
     detailKeys: detalhes && typeof detalhes === 'object' ? Object.keys(detalhes) : [],
   });
 }
@@ -88,7 +90,8 @@ function isRetryableStatus(statusCode) {
 }
 
 function traduzirMensagemErro(payload, fallbackMessage) {
-  const mensagem = payload?.response?.message || payload?.message || payload?.error || fallbackMessage;
+  const detalhe = payload?.response?.message || payload?.message || payload?.error || fallbackMessage;
+  const mensagem = Array.isArray(detalhe) ? detalhe.join('; ') : String(detalhe);
 
   if (/apikey|unauthorized|forbidden|not authorized|invalid key/i.test(String(mensagem || ''))) {
     return {
@@ -128,7 +131,9 @@ async function evolutionRequest(path, options = {}) {
 
   for (let tentativa = 1; tentativa <= totalTentativas; tentativa += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(options.timeoutMs ?? config.timeoutMs));
+    const restante = options.deadline ? options.deadline - Date.now() : Infinity;
+    if (restante <= 0) throw createEvolutionError('Servidor do WhatsApp ainda esta iniciando ou demorou para responder. Tente novamente.', 504, 'EVOLUTION_TIMEOUT');
+    const timeout = setTimeout(() => controller.abort(), Math.min(restante, Number(options.timeoutMs ?? config.timeoutMs)));
 
     const startedAt = Date.now();
 
@@ -143,12 +148,15 @@ async function evolutionRequest(path, options = {}) {
         },
       });
 
-      console.info(`[Evolution API] resposta HTTP ${response.status} em ${path} (${Date.now() - startedAt}ms)`);
+      console.info(`[Evolution API] resposta HTTP ${response.status} em ${path.split('?')[0]} (${Date.now() - startedAt}ms)`);
 
-      const payload = await response.json().catch(() => ({}));
+      const payload = await response.json().catch((error) => {
+        if (error.name === 'AbortError') throw error;
+        throw createEvolutionError('O servidor do WhatsApp retornou uma resposta invalida.', 502, 'EVOLUTION_INVALID_RESPONSE');
+      });
 
       if (!response.ok) {
-        const traducao = traduzirMensagemErro(payload, `Falha ao acessar Evolution API em ${path}.`);
+        const traducao = traduzirMensagemErro(payload, `Falha ao acessar Evolution API em ${path.split('?')[0]}.`);
         const error = createEvolutionError(
           traducao.message,
           traducao.statusCode || response.status || 502,
@@ -157,7 +165,7 @@ async function evolutionRequest(path, options = {}) {
         );
 
         if (tentativa < totalTentativas && isRetryableStatus(response.status)) {
-          logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path}`, error);
+          logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path.split('?')[0]}`, error);
           await sleep(retryDelayMs);
           continue;
         }
@@ -172,7 +180,7 @@ async function evolutionRequest(path, options = {}) {
       const networkCode = String(error?.cause?.code || error?.code || '').trim().toUpperCase();
 
       if (tentativa < totalTentativas && (isAbort || isFetchError)) {
-        logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path}`, error);
+        logEvolutionError(`tentativa ${tentativa}/${totalTentativas} em ${path.split('?')[0]}`, error);
         await sleep(retryDelayMs);
         continue;
       }
@@ -269,10 +277,10 @@ async function validarConexaoApi() {
   });
 }
 
-async function buscarInstancias(instanceName = '') {
+async function buscarInstancias(instanceName = '', options = {}) {
   const query = instanceName ? `?instanceName=${encodeURIComponent(instanceName)}` : '';
   const payload = await evolutionRequest(`/instance/fetchInstances${query}`, {
-    method: 'GET',
+    ...options, method: 'GET',
   });
 
   if (Array.isArray(payload)) {
@@ -298,27 +306,27 @@ async function buscarInstancias(instanceName = '') {
   return [];
 }
 
-async function buscarInstancia(instanceName) {
-  const instancias = await buscarInstancias(instanceName);
+async function buscarInstancia(instanceName, options = {}) {
+  const instancias = await buscarInstancias(instanceName, options);
 
   return (
-    instancias.find((item) => String(item?.instance?.instanceName || '').trim() === String(instanceName || '').trim()) ||
+    instancias.find((item) => String(item?.instance?.instanceName || item?.instanceName || item?.name || '').trim() === String(instanceName || '').trim()) ||
     null
   );
 }
 
-async function criarInstancia(instanceName, phoneNumber = '') {
+async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
   const alwaysOnline = parseBooleanEnv(process.env.EVOLUTION_ALWAYS_ONLINE, true);
   const readMessages = parseBooleanEnv(process.env.EVOLUTION_READ_MESSAGES, false);
   const readStatus = parseBooleanEnv(process.env.EVOLUTION_READ_STATUS, false);
   const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, true);
 
   return evolutionRequest('/instance/create', {
-    method: 'POST',
+    ...options, method: 'POST',
     body: JSON.stringify({
       instanceName,
       ...(String(phoneNumber || '').trim() ? { number: String(phoneNumber).trim() } : {}),
-      qrcode: true,
+      qrcode: false,
       integration: 'WHATSAPP-BAILEYS',
       alwaysOnline,
       readMessages,
@@ -330,11 +338,11 @@ async function criarInstancia(instanceName, phoneNumber = '') {
   });
 }
 
-async function conectarInstancia(instanceName, phoneNumber = '') {
+async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
   const numero = String(phoneNumber || '').trim();
   const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
   return evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
-    method: 'GET',
+    ...options, method: 'GET',
   });
 }
 
@@ -347,20 +355,22 @@ function extrairPairingCode(payload = null) {
     payload?.data?.pairingCode,
     payload?.data?.qrcode?.pairingCode,
     payload?.response?.pairingCode,
+    payload?.response?.qrcode?.pairingCode,
   ];
   const codigo = candidatos.find((item) => typeof item === 'string' && item.trim());
   return codigo ? String(codigo).trim() : '';
 }
 
-async function obterEstadoConexao(instanceName) {
+async function obterEstadoConexao(instanceName, options = {}) {
   return evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
-    method: 'GET',
+    ...options, method: 'GET',
     retryAttempts: 1,
   });
 }
 
 async function desconectarInstancia(instanceName) {
   return evolutionRequest(`/instance/logout/${encodeURIComponent(instanceName)}`, {
+    timeoutMs: 15000,
     method: 'DELETE',
     retryAttempts: 1,
   });
@@ -368,13 +378,10 @@ async function desconectarInstancia(instanceName) {
 
 async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']) {
   return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, {
+    timeoutMs: 5000,
     method: 'POST',
     body: JSON.stringify({
-      enabled: true,
-      url,
-      webhook_by_events: false,
-      webhook_base64: false,
-      events,
+      webhook: { enabled: true, url, byEvents: false, base64: false, events },
     }),
     retryAttempts: 1,
   });

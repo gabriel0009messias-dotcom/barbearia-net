@@ -856,22 +856,23 @@ async function requireBarbeiro(req, res, next) {
   try {
     const token = req.headers['x-barbeiro-token'];
     const assinatura = await carregarAssinaturaPorToken(token);
-
     if (!assinatura) {
-      res.status(401).json({ error: 'Login do barbeiro obrigatorio.' });
-      return;
+      if (req.path.includes('/whatsapp/')) {
+        console.info('[WHATSAPP] Consulta sem login valido', { assinaturaId: req.params.id });
+        return responderErroWhatsapp(res, createEvolutionError('Sua sessao expirou. Entre novamente no painel.', 401, 'WHATSAPP_AUTH_REQUIRED'));
+      }
+      return res.status(401).json({ error: 'Login do barbeiro obrigatorio.' });
     }
-
     req.barbeiroToken = token;
     req.assinatura = assinatura;
     next();
   } catch (error) {
-    const payload = { error: error.message };
-
-    if (error.assinatura) {
-      Object.assign(payload, montarEstadoPagamento(error.assinatura));
+    if (req.path.includes('/whatsapp/')) {
+      logEvolutionError('autenticacao da assinatura no WhatsApp', error);
+      return responderErroWhatsapp(res, error);
     }
-
+    const payload = { error: error.message };
+    if (error.assinatura) Object.assign(payload, montarEstadoPagamento(error.assinatura));
     res.status(error.statusCode || 500).json(payload);
   }
 }
@@ -1157,7 +1158,7 @@ function pixManualConfigurado() {
 
 function usarEvolutionWhatsapp() {
   const evolution = getEvolutionConfig();
-  return Boolean(evolution.enabled && emAmbienteHospedado());
+  return Boolean(evolution.enabled || emAmbienteHospedado());
 }
 
 function withTimeout(promise, timeoutMs, timeoutMessage) {
@@ -1611,7 +1612,7 @@ function erroHorarioJaOcupado(error) {
 
 function assinaturaPertenceAoBarbeiro(req, res) {
   if (Number(req.params.id) !== Number(req.assinatura.id)) {
-    res.status(403).json({ error: 'Essa assinatura nao pertence a este login.' });
+    res.status(403).json({ success: false, status: 'error', connected: false, message: 'Essa assinatura nao pertence a este login.', error: 'Essa assinatura nao pertence a este login.' });
     return false;
   }
 
@@ -1647,6 +1648,9 @@ function respostaStatusWhatsapp({
   mensagem = '',
 } = {}) {
   return {
+    success: !['error', 'erro'].includes(status),
+    connected: Boolean(conectado),
+    message: mensagem || ultimoErro || '',
     status,
     qrCode,
     qr,
@@ -1724,8 +1728,9 @@ async function consultarStatusWhatsappLocal(assinaturaId) {
 function normalizarNumeroWhatsappBrasil(numero = '') {
   let digitos = String(numero || '').replace(/\D/g, '');
   if (digitos.startsWith('00')) digitos = digitos.slice(2);
-  if (!digitos.startsWith('55')) digitos = `55${digitos}`;
-  return /^55\d{10,11}$/.test(digitos) ? digitos : null;
+  // DDD 55 tambem e nacional: o comprimento distingue DDD de codigo do pais.
+  if (digitos.length === 10 || digitos.length === 11) digitos = `55${digitos}`;
+  return /^55[1-9]{2}(?:[2-5]\d{7}|9\d{8})$/.test(digitos) ? digitos : null;
 }
 
 function iniciarSessaoWhatsappLocalSemBloquear(assinaturaId) {
@@ -1766,21 +1771,18 @@ function precisaGerarQrPorStatus(status = '') {
   return ['nao_configurado', 'close', 'closed', 'disconnected', 'logout'].includes(String(status || '').trim().toLowerCase());
 }
 
-function compartilharGeracaoQr(assinaturaId, executor) {
-  if (whatsappQrJobs.has(assinaturaId)) {
-    return whatsappQrJobs.get(assinaturaId);
+function compartilharGeracaoQr(assinaturaId, executor, modo = 'qr') {
+  const chave = String(assinaturaId);
+  const atual = whatsappQrJobs.get(chave);
+  if (atual) {
+    if (atual.modo !== modo) {
+      throw createEvolutionError('Ja existe uma solicitacao de conexao em andamento. Aguarde sua conclusao.', 409, 'WHATSAPP_BUSY');
+    }
+    return atual.promise;
   }
-
-  const job = Promise.resolve()
-    .then(executor)
-    .finally(() => {
-      if (whatsappQrJobs.get(assinaturaId) === job) {
-        whatsappQrJobs.delete(assinaturaId);
-      }
-    });
-
-  whatsappQrJobs.set(assinaturaId, job);
-  return job;
+  const promise = Promise.resolve().then(executor).finally(() => whatsappQrJobs.delete(chave));
+  whatsappQrJobs.set(chave, { modo, promise });
+  return promise;
 }
 
 async function validarEvolutionApiDisponivel() {
@@ -1816,6 +1818,11 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
     params.push(valores.whatsappUltimoQrEm || null);
   }
 
+  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappNumero')) {
+    campos.push('whatsapp_numero = ?');
+    params.push(valores.whatsappNumero || null);
+  }
+
   if (!campos.length) {
     return;
   }
@@ -1848,11 +1855,6 @@ async function configurarWebhookEvolutionSePossivel(instanceName) {
     return;
   }
 
-  if (Object.prototype.hasOwnProperty.call(valores, 'whatsappNumero')) {
-    campos.push('whatsapp_numero = ?');
-    params.push(valores.whatsappNumero || null);
-  }
-
   try {
     await configurarWebhookInstancia(instanceName, `${appUrl}/api/webhook/evolution`);
   } catch (error) {
@@ -1860,16 +1862,13 @@ async function configurarWebhookEvolutionSePossivel(instanceName) {
   }
 }
 
-async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '') {
+async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '', options = {}) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
 
-  await validarEvolutionApiDisponivel();
+  console.info('[WHATSAPP] Criando/carregando sessao', { assinaturaId: assinatura.id, instanceName });
+  const existente = await buscarInstancia(instanceName, options);
 
-  const existente = await buscarInstancia(instanceName);
-
-  if (existente?.instance?.instanceName) {
-    await configurarWebhookEvolutionSePossivel(instanceName);
-
+  if (existente) {
     if (instanceName !== assinatura?.whatsapp_session) {
       await persistirSessaoWhatsapp(assinatura.id, {
         whatsappSession: instanceName,
@@ -1880,7 +1879,7 @@ async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '') {
   }
 
   try {
-    await criarInstancia(instanceName, phoneNumber);
+    await criarInstancia(instanceName, phoneNumber, options);
   } catch (error) {
     const statusCode = Number(error.statusCode || 0);
     const mensagem = String(error.message || '');
@@ -1896,12 +1895,10 @@ async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '') {
     });
   }
 
-  await configurarWebhookEvolutionSePossivel(instanceName);
-
   return instanceName;
 }
 
-async function consultarStatusWhatsappEvolution(assinatura) {
+async function consultarStatusWhatsappEvolution(assinatura, options = {}) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim();
 
   if (!instanceName) {
@@ -1921,9 +1918,8 @@ async function consultarStatusWhatsappEvolution(assinatura) {
   }
 
   try {
-    await validarEvolutionApiDisponivel();
-    const estado = await obterEstadoConexao(instanceName);
-    const statusMapeado = mapearStatusWhatsappEvolution(estado?.instance?.state);
+    const estado = await obterEstadoConexao(instanceName, { timeoutMs: 12000, ...options });
+    const statusMapeado = mapearStatusWhatsappEvolution(estado?.instance?.state || estado?.state || estado?.instance?.status);
 
     await persistirSessaoWhatsapp(assinatura.id, {
       whatsappStatus: statusMapeado,
@@ -1970,7 +1966,7 @@ async function consultarStatusWhatsappEvolution(assinatura) {
         instancia: null,
         conectado: false,
         precisaQr: true,
-        mensagem: 'A sessao anterior do WhatsApp nao existe mais. Gere um novo QR Code.',
+        mensagem: 'Nenhuma sessao ativa. Informe seu numero para gerar um codigo de conexao.',
       });
     }
 
@@ -1980,14 +1976,14 @@ async function consultarStatusWhatsappEvolution(assinatura) {
       whatsappUltimoCheckEm: agoraIso(),
     });
 
-    return respostaStatusWhatsapp({
+    return { httpStatus: [401, 403].includes(error.statusCode) ? 502 : (error.statusCode || 500), errorCode: error.code, ...respostaStatusWhatsapp({
       status: 'erro',
       ultimoErro: error.message,
       instancia: instanceName,
       conectado: false,
       precisaQr: false,
       mensagem: error.message,
-    });
+    }) };
   }
 }
 
@@ -1999,11 +1995,12 @@ async function gerarQrWhatsappEvolution(assinatura) {
     // cada espera e deixava o painel em "Gerando QR" por varios minutos.
     for (let tentativa = 1; tentativa <= 1; tentativa += 1) {
       try {
-        const instanceName = await garantirInstanciaWhatsapp(assinatura);
+        const options = { deadline: Date.now() + 60000, retryAttempts: 1 };
+        const instanceName = await garantirInstanciaWhatsapp(assinatura, '', options);
         const estadoAtual = await consultarStatusWhatsappEvolution({
           ...assinatura,
           whatsapp_session: instanceName,
-        });
+        }, options);
 
         if (estadoAtual.conectado) {
           return respostaStatusWhatsapp({
@@ -2016,7 +2013,9 @@ async function gerarQrWhatsappEvolution(assinatura) {
           });
         }
 
-        const conexao = await conectarInstancia(instanceName);
+        if (!estadoAtual.success) throw createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode);
+        const conexao = await conectarInstancia(instanceName, '', options);
+        void configurarWebhookEvolutionSePossivel(instanceName);
         const qrCode = construirQrCodeUrl(extrairConteudoQr(conexao));
 
         if (!qrCode) {
@@ -2378,7 +2377,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
       whatsappEnabled: true,
       whatsappSetupMessage:
         provider === 'evolution_api'
-          ? 'Conecte o WhatsApp por QR Code para ativar o atendimento automatico publicado.'
+          ? 'Informe seu numero para gerar o codigo de conexao do WhatsApp.'
           : '',
       whatsappRetry: {
         attempts: evolution.retryAttempts,
@@ -2931,64 +2930,63 @@ router.post('/publico/assinaturas', async (req, res) => {
 
 async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.id, async () => {
-    const instanceName = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp);
-    const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName });
-    if (estadoAtual.conectado) {
-      return { ...estadoAtual, pairingCode: null, numeroWhatsapp };
-    }
-
-    // A Evolution v2.3.7 devolve apenas o QR existente quando a instancia ja
-    // esta em "connecting". Reiniciamos somente esta sessao desconectada para
-    // que o connect com numero gere um novo Pairing Code.
-    if (estadoAtual.status === 'iniciando') {
-      await desconectarInstancia(instanceName);
-      await sleep(1000);
-    }
-
-    const resposta = await conectarInstancia(instanceName, numeroWhatsapp);
-    const pairingCode = extrairPairingCode(resposta);
-    if (!pairingCode) {
-      throw createEvolutionError(
-        'Nao foi possivel gerar o codigo de conexao. Tente novamente ou use o QR Code.',
-        502,
-        'EVOLUTION_PAIRING_CODE_EMPTY',
-        resposta || null
-      );
+    const options = { deadline: Date.now() + 60000, retryAttempts: 1 };
+    const instanceName = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
+    const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options);
+    if (!estadoAtual.success) throw createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode);
+    if (estadoAtual.conectado) return { ...estadoAtual, status: 'connected', code: null, pairingCode: null };
+    if (estadoAtual.status === 'iniciando' && assinatura.whatsapp_numero && assinatura.whatsapp_numero !== numeroWhatsapp) {
+      throw createEvolutionError('Existe uma conexao em andamento com outro numero. Desconecte antes de trocar o numero.', 409, 'WHATSAPP_BUSY');
     }
 
     await persistirSessaoWhatsapp(assinatura.id, {
-      whatsappSession: instanceName,
-      whatsappNumero: numeroWhatsapp,
-      whatsappStatus: 'iniciando',
-      whatsappUltimoErro: null,
-      whatsappUltimoCheckEm: agoraIso(),
+      whatsappSession: instanceName, whatsappNumero: numeroWhatsapp,
+      whatsappStatus: 'iniciando', whatsappUltimoErro: null, whatsappUltimoCheckEm: agoraIso(),
     });
+    console.info('[WHATSAPP] Solicitando pairing code', { assinaturaId: assinatura.id, numero: `***${numeroWhatsapp.slice(-4)}` });
+    // A Evolution inicializa o socket e solicita requestPairingCode. Enquanto
+    // connecting, connect consulta o resultado existente sem destruir a sessao.
+    for (let tentativa = 0; tentativa < 6; tentativa += 1) {
+      const resposta = await conectarInstancia(instanceName, numeroWhatsapp, options);
+      const conectado = ['open', 'connected'].includes(resposta?.instance?.state || resposta?.state);
+      if (conectado) return { ...respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado com sucesso.' }), code: null, pairingCode: null };
+      const pairingCode = extrairPairingCode(resposta);
+      if (pairingCode) {
+        console.info('[WHATSAPP] Pairing code gerado', { assinaturaId: assinatura.id });
+        void configurarWebhookEvolutionSePossivel(instanceName);
+        return { ...respostaStatusWhatsapp({
+          status: 'pairing_code', instancia: instanceName,
+          mensagem: 'Codigo gerado. Conclua a vinculacao pelo WhatsApp.',
+        }), code: pairingCode, pairingCode, numeroWhatsapp };
+      }
+      if (resposta?.error) throw createEvolutionError('Erro interno no servico do WhatsApp ao solicitar o codigo.', 502, 'EVOLUTION_PAIRING_FAILED', resposta);
+      if (tentativa < 5) await sleep(1000);
+    }
+    throw createEvolutionError('O servidor do WhatsApp ainda nao disponibilizou o codigo. Tente novamente. Se iniciou por QR Code, desconecte essa tentativa antes de conectar por numero.', 503, 'EVOLUTION_PAIRING_CODE_EMPTY');
+  }, `pairing:${numeroWhatsapp}`);
+}
 
-    return { ...respostaStatusWhatsapp({
-      status: 'iniciando', instancia: instanceName, conectado: false, precisaQr: false,
-      mensagem: 'Codigo gerado. Conclua a vinculacao pelo WhatsApp.',
-    }), pairingCode, numeroWhatsapp };
-  });
+function responderErroWhatsapp(res, error) {
+  const statusCode = error.code?.startsWith('EVOLUTION_') && [401, 403].includes(error.statusCode)
+    ? 502 : (error.statusCode || 500);
+  const message = statusCode === 500 ? 'Erro interno no servico do WhatsApp. Consulte os logs do servidor.' : error.message;
+  return res.status(statusCode).json({ success: false, status: 'error', connected: false, conectado: false, error: message, message, errorCode: error.code || 'WHATSAPP_INTERNAL_ERROR' });
 }
 
 router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, async (req, res) => {
   const { id } = req.params;
-  const numeroWhatsapp = normalizarNumeroWhatsappBrasil(req.body?.numero);
-  if (!numeroWhatsapp) {
-    res.status(400).json({ error: 'Numero de WhatsApp invalido. Informe DDD e numero.' });
-    return;
-  }
-
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) return;
+    const numeroWhatsapp = normalizarNumeroWhatsappBrasil(req.body?.phone ?? req.body?.numero);
+    if (!numeroWhatsapp) throw createEvolutionError('Numero de WhatsApp invalido. Informe DDD e numero.', 400, 'INVALID_PHONE');
     const assinatura = await carregarAssinaturaAtualizada(id);
-    if (!assinatura) return res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    if (!assinatura) throw createEvolutionError('Nao foi possivel localizar a assinatura.', 404, 'SUBSCRIPTION_NOT_FOUND');
     const acesso = avaliarAcessoAssinatura(assinatura);
-    if (!acesso.liberado) return res.status(403).json({ error: acesso.mensagem });
+    if (!acesso.liberado) throw createEvolutionError(acesso.mensagem, 403, 'SUBSCRIPTION_BLOCKED');
     res.json({ ok: true, ...(await gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp)) });
   } catch (error) {
     logEvolutionError(`pairing code da assinatura ${id}`, error);
-    res.status(error.statusCode || 500).json({ error: error.message || 'Nao foi possivel gerar o codigo de conexao.' });
+    responderErroWhatsapp(res, error);
   }
 });
 
@@ -3272,25 +3270,22 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
 
 router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (req, res) => {
   const { id } = req.params;
-
+  console.info('[WHATSAPP] Buscando status da assinatura:', id);
+  res.set('Cache-Control', 'no-store');
   try {
-    if (!assinaturaPertenceAoBarbeiro(req, res)) {
-      return;
-    }
-
+    if (!assinaturaPertenceAoBarbeiro(req, res)) return;
     const assinatura = await carregarAssinaturaAtualizada(id);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
-    }
-
+    if (!assinatura) throw createEvolutionError('Nao foi possivel localizar a assinatura.', 404, 'SUBSCRIPTION_NOT_FOUND');
     const sessao = usarEvolutionWhatsapp()
       ? await consultarStatusWhatsappEvolution(assinatura)
       : await consultarStatusWhatsappLocal(Number(id));
-    res.json(sessao);
+    if (!sessao.success) throw createEvolutionError(sessao.message, sessao.httpStatus || 502, sessao.errorCode);
+    const status = sessao.conectado ? 'connected' : ['iniciando', 'qr_pronto'].includes(sessao.status) ? 'pairing' : 'disconnected';
+    console.info('[WHATSAPP] Estado da conexao:', { assinaturaId: id, status });
+    res.json({ ...sessao, status });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    logEvolutionError(`Erro ao consultar status do WhatsApp da assinatura ${id}`, error);
+    responderErroWhatsapp(res, error);
   }
 });
 
@@ -3324,8 +3319,10 @@ router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async
       return;
     }
 
-    await validarEvolutionApiDisponivel();
-    await desconectarInstancia(instanceName);
+    await compartilharGeracaoQr(id, async () => {
+      try { await desconectarInstancia(instanceName); }
+      catch (error) { if (error.code !== 'EVOLUTION_INSTANCE_NOT_FOUND') throw error; }
+    }, 'logout');
     await persistirSessaoWhatsapp(id, {
       whatsappStatus: 'nao_configurado',
     });
@@ -3341,7 +3338,7 @@ router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async
     );
   } catch (error) {
     logEvolutionError(`logout do whatsapp da assinatura ${id}`, error);
-    res.status(error.statusCode || 500).json({ error: error.message });
+    responderErroWhatsapp(res, error);
   }
 });
 

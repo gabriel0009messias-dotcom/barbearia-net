@@ -60,14 +60,19 @@
                 <input id="whatsappPairingNumber" type="tel" inputmode="numeric" autocomplete="tel" placeholder="(75) 99999-9999" />
                 <button id="generatePairingButton" class="primary-button" type="button" disabled>Conectar WhatsApp</button>
                 <button id="copyPairingCodeButton" class="secondary-pill-button" type="button" hidden>Copiar codigo</button>
+                <button id="generateQrButton" class="secondary-pill-button" type="button" disabled>Conectar usando QR Code</button>
+                <button id="disconnectWhatsappButton" class="secondary-pill-button" type="button" disabled>Desconectar WhatsApp</button>
                 <button id="openLocalWhatsappButton" class="secondary-pill-button" type="button" hidden>
                   Conectar no sistema local
                 </button>
               </div>
 
               <div class="qr-panel">
+                <p id="pairingCodeLabel" class="eyebrow" hidden>Codigo de conexao</p>
+                <img id="qrCodeImage" alt="QR Code do WhatsApp" hidden />
                 <strong id="pairingCodeValue" class="pairing-code" hidden></strong>
-                <p id="qrStatusMessage" class="form-message">Informe seu numero e clique em Conectar WhatsApp.</p>
+                <p id="pairingInstructions" class="table-subcopy" hidden>Abra o WhatsApp no celular &gt; Aparelhos conectados &gt; Conectar um aparelho &gt; Conectar com numero de telefone e digite este codigo.</p>
+                <p id="qrStatusMessage" aria-live="polite" class="form-message">Informe seu numero e clique em Conectar WhatsApp.</p>
               </div>
             </div>
           </section>
@@ -383,6 +388,6 @@
       </main>
     </div>
 
-    <script src="./barbeiro.js?v=20260907a"></script>
+    <script src="./barbeiro.js?v=20260907b"></script>
   </body>
 </html>

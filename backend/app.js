@@ -1671,10 +1671,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
-
-server.on('error', (erro) => {
-  registrarErroRuntime('serverError', erro);
+require('./database').ready.then(() => {
+  const server = app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+  });
+  server.on('error', (erro) => registrarErroRuntime('serverError', erro));
+}).catch((erro) => {
+  console.error('Falha ao inicializar o banco de dados:', erro);
+  process.exitCode = 1;
 });

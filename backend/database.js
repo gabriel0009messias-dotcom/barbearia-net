@@ -16,7 +16,8 @@ function garantirDiretorioDoBanco() {
       fs.mkdirSync(dbDir, { recursive: true });
     }
   } catch (error) {
-    const deveUsarFallback = dbPath !== legacyDbPath && ['EACCES', 'EPERM', 'EROFS'].includes(error.code);
+    const emRender = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
+    const deveUsarFallback = !emRender && dbPath !== legacyDbPath && ['EACCES', 'EPERM', 'EROFS'].includes(error.code);
 
     if (!deveUsarFallback) {
       throw error;
@@ -108,23 +109,15 @@ function popularServicos() {
   stmt.finalize();
 }
 
+const migracoesColunas = [];
+
 function garantirColuna(tabela, coluna, definicao) {
-  db.all(`PRAGMA table_info(${tabela})`, [], (erro, colunas) => {
-    if (erro) {
-      console.error(`Nao consegui verificar colunas da tabela ${tabela}:`, erro.message);
-      return;
-    }
-
-    const existe = colunas.some((item) => item.name === coluna);
-
-    if (!existe) {
-      db.run(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`, (alterErr) => {
-        if (alterErr) {
-          console.error(`Nao consegui adicionar a coluna ${coluna} em ${tabela}:`, alterErr.message);
-        }
-      });
+  const migracao = allAsync(`PRAGMA table_info(${tabela})`).then((colunas) => {
+    if (!colunas.some((item) => item.name === coluna)) {
+      return runAsync(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
     }
   });
+  migracoesColunas.push(migracao);
 }
 
 db.serialize(() => {
@@ -302,12 +295,15 @@ db.serialize(() => {
   garantirColuna('agendamentos', 'preco', 'REAL');
   garantirColuna('bloqueios', 'assinatura_id', 'INTEGER');
 
-  db.run(`UPDATE assinaturas
+  // Os ALTER TABLE sao enfileirados nos callbacks do PRAGMA. Aguarde antes
+  // de consultar as colunas novas ou aceitar requisicoes do painel.
+  db.ready = Promise.all(migracoesColunas).then(async () => {
+    await runAsync(`UPDATE assinaturas
           SET metodo_pagamento = 'pix'
           WHERE metodo_pagamento IS NULL
              OR lower(metodo_pagamento) <> 'pix'`);
 
-  db.run(`UPDATE assinaturas
+    await runAsync(`UPDATE assinaturas
           SET plano = COALESCE(NULLIF(plano, ''), 'Plano Profissional'),
               valor_plano = COALESCE(valor_plano, 65),
               status_assinatura = CASE
@@ -320,13 +316,14 @@ db.serialize(() => {
               trial = COALESCE(trial, 0),
               data_vencimento = COALESCE(data_vencimento, proximo_vencimento)`);
 
-  db.run(`UPDATE assinaturas
+    await runAsync(`UPDATE assinaturas
           SET dia_vencimento = CASE
             WHEN dia_vencimento = 19 THEN 12
             WHEN dia_vencimento = 26 THEN 24
             ELSE dia_vencimento
           END
           WHERE dia_vencimento NOT IN (5, 12, 24)`);
+  });
 
   popularServicos();
 });

@@ -6,6 +6,7 @@
     "node": "20.x"
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
     "postinstall": "node -e \"console.log('SaaS pronto para PostgreSQL e Mercado Pago.')\"",
     "migrate": "node src/database/migrateRunner.js",
     "start": "node app.js",

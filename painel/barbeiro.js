@@ -38,6 +38,11 @@ const bloqueioFormInicio = document.getElementById('bloqueioFormInicio');
 const supportNumberLabel = document.getElementById('supportNumberLabel');
 const menuButtons = Array.from(document.querySelectorAll('[data-section-target]'));
 const panelViews = Array.from(document.querySelectorAll('.panel-view'));
+const generateQrButton = document.getElementById('generateQrButton');
+const disconnectWhatsappButton = document.getElementById('disconnectWhatsappButton');
+const qrCodeImage = document.getElementById('qrCodeImage');
+const pairingInstructions = document.getElementById('pairingInstructions');
+const pairingCodeLabel = document.getElementById('pairingCodeLabel');
 const generatePairingButton = document.getElementById('generatePairingButton');
 const whatsappPairingNumber = document.getElementById('whatsappPairingNumber');
 const pairingCodeValue = document.getElementById('pairingCodeValue');
@@ -90,6 +95,13 @@ let whatsappEnabled = false;
 let activeSectionId = 'inicio';
 let painelAutoRefresh = null;
 let pairingCodeAtual = '';
+let whatsappRequestInFlight = false;
+let whatsappStatusInFlight = false;
+let whatsappConnected = false;
+let whatsappStatusPaused = false;
+let whatsappEpoch = 0;
+let whatsappPollingDeadline = 0;
+let whatsappPollingErrors = 0;
 
 function formatarData(data) {
   if (!data) return '-';
@@ -116,29 +128,33 @@ function getHeaders(extra = {}) {
 }
 
 async function buscarJson(url, options = {}) {
-  const headers = getHeaders(options.headers || {});
-  if (options.body && !headers['Content-Type']) {
-    headers['Content-Type'] = 'application/json';
+  const { timeoutMs = 30000, ...fetchOptions } = options;
+  const headers = getHeaders(fetchOptions.headers || {});
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...fetchOptions, headers, signal: controller.signal });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || !payload || payload.success === false || payload.ok === false) {
+      const erro = new Error(payload?.message || payload?.mensagem || payload?.error || `O servidor retornou uma resposta invalida (HTTP ${response.status}). Tente novamente.`);
+      erro.status = response.status;
+      erro.details = payload;
+      throw erro;
+    }
+    return payload;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('O servidor demorou para responder. Tente novamente em alguns instantes.');
+    if (error instanceof TypeError) throw new Error('Nao foi possivel acessar o servidor. Verifique sua conexao e tente novamente.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const erro = new Error(payload?.error || `Falha ao carregar ${url}`);
-    erro.status = response.status;
-    erro.details = payload;
-    throw erro;
-  }
-
-  return payload;
 }
 
 function limparSessaoBarbeiro() {
+  pararPollingWhatsapp();
+  whatsappEpoch += 1;
   authToken = null;
   assinaturaAtualId = null;
   localStorage.removeItem(TOKEN_STORAGE_KEY);
@@ -351,22 +367,34 @@ function renderizarBloqueios(bloqueios) {
   }
 }
 
-function atualizarStatusWhatsapp(status) {
-  const mapa = {
-    nao_configurado: 'Aguardando cadastro',
-    iniciando: 'Conectando',
-    qr_pronto: 'Aguardando conexao',
-    conectado: 'Conectado',
-    isLogged: 'Conectado',
-    qrReadSuccess: 'Conectado',
-    erro: 'Erro',
-  };
+function atualizarBotoesWhatsapp() {
+  generatePairingButton.disabled = !whatsappEnabled || whatsappRequestInFlight || whatsappConnected;
+  generateQrButton.disabled = !whatsappEnabled || whatsappRequestInFlight || whatsappConnected;
+  disconnectWhatsappButton.disabled = !whatsappEnabled || whatsappRequestInFlight;
+  generatePairingButton.textContent = whatsappRequestInFlight ? 'Gerando codigo...' : whatsappConnected ? 'WhatsApp conectado' : 'Conectar WhatsApp';
+}
 
-  whatsappStatusBadge.textContent = mapa[status] || status || 'Aguardando cadastro';
+function limparCodigosWhatsapp() {
+  pairingCodeAtual = '';
+  pairingCodeValue.textContent = '';
+  pairingCodeValue.hidden = true;
+  pairingCodeLabel.hidden = true;
+  pairingInstructions.hidden = true;
+  copyPairingCodeButton.hidden = true;
+  qrCodeImage.hidden = true;
+  qrCodeImage.removeAttribute('src');
+}
 
-  if (status === 'conectado' || status === 'isLogged' || status === 'qrReadSuccess') {
-    qrStatusMessage.textContent = 'WhatsApp conectado com sucesso. Os agendamentos ja podem funcionar.';
+function atualizarStatusWhatsapp(status, connected = false) {
+  whatsappConnected = connected || ['connected', 'conectado', 'isLogged', 'qrReadSuccess'].includes(status);
+  const mapa = { disconnected: 'Desconectado', nao_configurado: 'Desconectado', pairing: 'Aguardando conexao', pairing_code: 'Codigo gerado', iniciando: 'Conectando', error: 'Falha na conexao', erro: 'Falha na conexao' };
+  whatsappStatusBadge.textContent = whatsappConnected ? 'Conectado' : mapa[status] || status || 'Desconectado';
+  if (whatsappConnected) {
+    limparCodigosWhatsapp();
+    pararPollingWhatsapp();
+    qrStatusMessage.textContent = 'WhatsApp conectado com sucesso.';
   }
+  atualizarBotoesWhatsapp();
 }
 
 function obterPixPagamentoAtual(estado = {}) {
@@ -507,15 +535,15 @@ async function carregarPainelBarbeiro() {
 
     const assinatura = await buscarJson('/api/barbeiro/me');
     assinaturaAtualId = assinatura.id;
-    generatePairingButton.disabled = !whatsappEnabled;
+    atualizarBotoesWhatsapp();
     openLocalWhatsappButton.hidden = true;
     whatsappHelpText.textContent = whatsappEnabled
       ? 'Seu acesso esta liberado. Informe seu numero para conectar o WhatsApp por codigo.'
       : (config.whatsappSetupMessage || 'O WhatsApp nao esta disponivel no momento.');
-    whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
-    qrStatusMessage.textContent = whatsappEnabled
-      ? 'Informe seu numero e clique em Conectar WhatsApp.'
-      : 'O WhatsApp nao esta disponivel no momento.';
+    if (!whatsappRequestInFlight && !pairingCodeAtual && !whatsappConnected && !whatsappStatusPaused && !whatsappPolling) {
+      whatsappStatusBadge.textContent = whatsappEnabled ? 'Pronto para conectar' : 'Configurar';
+      qrStatusMessage.textContent = whatsappEnabled ? 'Informe seu numero e clique em Conectar WhatsApp.' : 'O WhatsApp nao esta disponivel no momento.';
+    }
 
     const [agendamentos, dia, mes, ano, bloqueios] = await Promise.all([
       buscarJson('/api/agendamentos'),
@@ -536,7 +564,7 @@ async function carregarPainelBarbeiro() {
       mesFaturamentoInput.value = new Date().toISOString().slice(0, 7);
     }
     await carregarFaturamentoMesEscolhido();
-    await consultarStatusWhatsapp();
+    void consultarStatusWhatsapp();
     setActiveSection(activeSectionId || 'inicio');
   } catch (error) {
     console.error(error);
@@ -558,39 +586,58 @@ async function excluirBloqueio(id) {
   await buscarJson(`/api/bloqueios/${id}`, { method: 'DELETE' });
 }
 
+function pararPollingWhatsapp() {
+  clearTimeout(whatsappPolling);
+  whatsappPolling = null;
+}
+
 async function consultarStatusWhatsapp() {
-  if (!assinaturaAtualId || !authToken || !whatsappEnabled) {
-    return;
-  }
-
+  if (!assinaturaAtualId || !authToken || !whatsappEnabled || whatsappRequestInFlight || whatsappStatusInFlight || whatsappStatusPaused) return;
+  const epoch = whatsappEpoch;
+  whatsappStatusInFlight = true;
   try {
-    const status = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`);
-    atualizarStatusWhatsapp(status.status);
-
-    if (status.mensagem && !/qr/i.test(status.mensagem)) {
-      qrStatusMessage.textContent = status.mensagem;
-    }
-
-    if (status.status === 'erro') {
-      qrStatusMessage.textContent = status.ultimoErro || status.mensagem || 'Nao consegui iniciar o WhatsApp.';
-    }
-
-    if (status.conectado || status.status === 'conectado' || status.status === 'isLogged' || status.status === 'qrReadSuccess') {
-      clearInterval(whatsappPolling);
-      whatsappPolling = null;
-    }
+    const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/status`, { timeoutMs: 15000 });
+    if (epoch !== whatsappEpoch) return;
+    whatsappPollingErrors = 0;
+    atualizarStatusWhatsapp(resposta.status, resposta.connected || resposta.conectado);
+    if (!whatsappConnected) qrStatusMessage.textContent = resposta.message || resposta.mensagem || 'Aguardando conexao pelo WhatsApp.';
   } catch (error) {
-    console.error(error);
+    if (epoch !== whatsappEpoch) return;
+    whatsappPollingErrors += 1;
     qrStatusMessage.textContent = error.message;
+    whatsappStatusBadge.textContent = 'Falha ao consultar conexao';
+    if ([400, 401, 403, 404].includes(error.status) || whatsappPollingErrors >= 3) {
+      whatsappStatusPaused = true;
+      pararPollingWhatsapp();
+    }
+    // Erros da Evolution chegam como 502/503, nunca como login expirado.
+    if (error.status === 401) {
+      whatsappEnabled = false;
+      atualizarBotoesWhatsapp();
+      qrStatusMessage.textContent = 'Sua sessao expirou. Entre novamente no painel.';
+    }
+  } finally {
+    whatsappStatusInFlight = false;
   }
 }
 
 function iniciarPollingWhatsapp() {
-  if (whatsappPolling) {
-    clearInterval(whatsappPolling);
-  }
-
-  whatsappPolling = setInterval(consultarStatusWhatsapp, 5000);
+  pararPollingWhatsapp();
+  whatsappPollingDeadline = Date.now() + 180000;
+  const epoch = whatsappEpoch;
+  const consultar = async () => {
+    if (epoch !== whatsappEpoch || whatsappStatusPaused || whatsappConnected) return;
+    if (Date.now() >= whatsappPollingDeadline) {
+      pararPollingWhatsapp();
+      whatsappStatusPaused = true;
+      limparCodigosWhatsapp();
+      qrStatusMessage.textContent = 'O tempo para confirmar a conexao terminou. Clique em Conectar WhatsApp para tentar novamente.';
+      return;
+    }
+    await consultarStatusWhatsapp();
+    if (epoch === whatsappEpoch && !whatsappStatusPaused && !whatsappConnected) whatsappPolling = setTimeout(consultar, 5000);
+  };
+  whatsappPolling = setTimeout(consultar, 5000);
 }
 
 function iniciarAutoRefreshPainel() {
@@ -607,35 +654,60 @@ function iniciarAutoRefreshPainel() {
 
 function numeroWhatsappValido(numero = '') {
   let digitos = String(numero).replace(/\D/g, '');
-  if (digitos.startsWith('55')) digitos = digitos.slice(2);
-  return /^\d{10,11}$/.test(digitos);
+  if (digitos.startsWith('00')) digitos = digitos.slice(2);
+  if (digitos.length === 10 || digitos.length === 11) digitos = `55${digitos}`;
+  return /^55[1-9]{2}(?:[2-5]\d{7}|9\d{8})$/.test(digitos);
+}
+
+async function solicitarConexaoWhatsapp(modo = 'pairing') {
+  if (whatsappRequestInFlight || whatsappConnected || !assinaturaAtualId || !whatsappEnabled) return;
+  const numero = whatsappPairingNumber.value.trim();
+  if (modo === 'pairing' && !numeroWhatsappValido(numero)) throw new Error('Numero de WhatsApp invalido. Informe DDD e numero.');
+  whatsappEpoch += 1;
+  whatsappRequestInFlight = true;
+  whatsappStatusPaused = false;
+  whatsappPollingErrors = 0;
+  pararPollingWhatsapp();
+  limparCodigosWhatsapp();
+  atualizarBotoesWhatsapp();
+  whatsappStatusBadge.textContent = 'Conectando';
+  qrStatusMessage.textContent = modo === 'pairing' ? 'Solicitando codigo de conexao...' : 'Gerando QR Code...';
+  try {
+    const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/${modo === 'pairing' ? 'pairing-code' : 'iniciar'}`, {
+      method: 'POST', body: JSON.stringify(modo === 'pairing' ? { phone: numero } : {}), timeoutMs: 70000,
+    });
+    atualizarStatusWhatsapp(resposta.status, resposta.connected || resposta.conectado);
+    if (whatsappConnected) return;
+    if (modo === 'pairing') {
+      pairingCodeAtual = resposta.pairingCode || resposta.code || '';
+      if (!pairingCodeAtual) throw new Error('O servidor nao retornou o codigo de conexao. Tente novamente.');
+      pairingCodeValue.textContent = pairingCodeAtual.replace(/^([A-Z0-9]{4})([A-Z0-9]{4})$/i, '$1-$2');
+      pairingCodeValue.hidden = false;
+      pairingCodeLabel.hidden = false;
+      pairingInstructions.hidden = false;
+      copyPairingCodeButton.hidden = false;
+      qrStatusMessage.textContent = 'Codigo gerado. Digite este codigo no WhatsApp do celular.';
+    } else {
+      const qr = resposta.qrCode || resposta.qr;
+      if (!qr) throw new Error(resposta.message || resposta.mensagem || 'O servidor ainda nao disponibilizou o QR Code. Tente novamente.');
+      qrCodeImage.src = qr;
+      qrCodeImage.hidden = false;
+      qrStatusMessage.textContent = 'Abra Aparelhos conectados no WhatsApp e escaneie o QR Code.';
+    }
+    iniciarPollingWhatsapp();
+  } catch (error) {
+    whatsappStatusPaused = true;
+    if (error.status === 401) whatsappEnabled = false;
+    limparCodigosWhatsapp();
+    throw error;
+  } finally {
+    whatsappRequestInFlight = false;
+    atualizarBotoesWhatsapp();
+  }
 }
 
 async function solicitarPairingCode() {
-  const numero = whatsappPairingNumber.value.trim();
-  if (!numeroWhatsappValido(numero)) throw new Error('Numero de WhatsApp invalido. Informe DDD e numero.');
-
-  generatePairingButton.disabled = true;
-  generatePairingButton.textContent = 'Gerando codigo...';
-  qrStatusMessage.textContent = 'Solicitando codigo de conexao...';
-  try {
-    const resposta = await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/pairing-code`, {
-      method: 'POST', body: JSON.stringify({ numero }),
-    });
-    pairingCodeAtual = resposta.pairingCode || '';
-    if (!pairingCodeAtual && !resposta.conectado) throw new Error('Nao foi possivel gerar o codigo de conexao.');
-    pairingCodeValue.hidden = !pairingCodeAtual;
-    pairingCodeValue.textContent = pairingCodeAtual;
-    copyPairingCodeButton.hidden = !pairingCodeAtual;
-    atualizarStatusWhatsapp(resposta.status);
-    qrStatusMessage.textContent = resposta.conectado
-      ? 'WhatsApp conectado com sucesso.'
-      : 'Use o codigo no WhatsApp em Dispositivos conectados. Os nomes podem variar conforme a versao do aplicativo.';
-    iniciarPollingWhatsapp();
-  } finally {
-    generatePairingButton.disabled = !whatsappEnabled;
-    generatePairingButton.textContent = 'Conectar WhatsApp';
-  }
+  return solicitarConexaoWhatsapp('pairing');
 }
 
 async function salvarBloqueio({ data, hora, form, messageNode }) {
@@ -800,6 +872,28 @@ generatePairingButton?.addEventListener('click', async () => {
     qrStatusMessage.textContent = error.message || 'Nao foi possivel gerar o codigo de conexao.';
     whatsappStatusBadge.textContent = 'Erro';
   }
+});
+
+generateQrButton?.addEventListener('click', async () => {
+  try { await solicitarConexaoWhatsapp('qr'); }
+  catch (error) { qrStatusMessage.textContent = error.message; whatsappStatusBadge.textContent = 'Falha na conexao'; }
+});
+
+disconnectWhatsappButton?.addEventListener('click', async () => {
+  if (whatsappRequestInFlight || !assinaturaAtualId) return;
+  whatsappRequestInFlight = true;
+  whatsappEpoch += 1;
+  pararPollingWhatsapp();
+  atualizarBotoesWhatsapp();
+  qrStatusMessage.textContent = 'Desconectando WhatsApp...';
+  try {
+    await buscarJson(`/api/publico/assinaturas/${assinaturaAtualId}/whatsapp/logout`, { method: 'DELETE', timeoutMs: 20000 });
+    limparCodigosWhatsapp();
+    whatsappStatusPaused = false;
+    atualizarStatusWhatsapp('disconnected');
+    qrStatusMessage.textContent = 'WhatsApp desconectado. Voce pode iniciar uma nova conexao.';
+  } catch (error) { qrStatusMessage.textContent = error.message; }
+  finally { whatsappRequestInFlight = false; atualizarBotoesWhatsapp(); }
 });
 
 copyPairingCodeButton?.addEventListener('click', async () => {
