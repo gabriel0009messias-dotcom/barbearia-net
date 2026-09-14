@@ -32,6 +32,7 @@ test('backend inicia sem credenciais de pagamento e serve painel e API', { timeo
     });
   });
   const base = `http://127.0.0.1:${port}`;
+  await require('./helpers/frontend').assertFrontend(base);
   assert.equal((await fetch(`${base}/api/health`)).status, 200);
   const config = await (await fetch(`${base}/api/publico/assinatura-config`)).json();
   assert.equal(config.gateway.provider, 'mercado_pago');

@@ -34,7 +34,7 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     connected = false;
     res.json({ success: true, status: 'disconnected', connected: false });
   });
-  app.use(express.static(path.resolve(__dirname, '../../painel')));
+  app.use(express.static(path.resolve(__dirname, '../public')));
   const server = await new Promise((resolve) => { const server = app.listen(0, '127.0.0.1', () => resolve(server)); });
   const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
   t.after(async () => { await browser.close(); await new Promise((resolve) => server.close(resolve)); });

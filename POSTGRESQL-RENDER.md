@@ -2,7 +2,7 @@
 
 ## O que foi migrado
 
-O servidor continua sendo `backend/app.js` e o painel continua em `painel/`. Agora todos os acessos desse servidor usam `pg` e `DATABASE_URL`. Não existe fallback operacional para SQLite, nem necessidade de disco no Web Service.
+O servidor continua sendo `backend/app.js` e o painel fica em `backend/public/`, dentro do Root Directory publicado no Render. Agora todos os acessos desse servidor usam `pg` e `DATABASE_URL`. Não existe fallback operacional para SQLite, nem necessidade de disco no Web Service.
 
 O schema padrão é **salaoflix**. Ele separa as tabelas do sistema atual das tabelas da base alternativa em `backend/src`, que usa outro modelo de dados. Não execute as migrations dessa base alternativa para este sistema. O comando `npm run migrate` foi atualizado para o backend atual.
 

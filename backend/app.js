@@ -23,7 +23,7 @@ function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
 const app = express();
 app.set('trust proxy', true);
 const PORT = Number(process.env.PORT) || 3000;
-const painelPath = path.join(__dirname, '..', 'painel');
+const painelPath = path.join(__dirname, 'public');
 const runtimeErrorLogPath = path.join(__dirname, 'server-error.log');
 const assinaturasCadastradas = [];
 const barbeiroSessions = new Map();

@@ -1,6 +1,6 @@
 # Salaoflix - sistema de barbearias
 
-O servidor iniciado por `npm start` e pelo Render e `backend/app.js`, com Express, PostgreSQL e as paginas HTML/JavaScript em `painel/`.
+O servidor iniciado por `npm start` e pelo Render e `backend/app.js`, com Express, PostgreSQL e as paginas HTML/JavaScript em `backend/public/`.
 
 Os arquivos em `backend/src/` e `painel/src/` pertencem a uma base alternativa com PostgreSQL/React. O fluxo de pagamentos documentado aqui usa o servidor atual; nao troque o comando de inicializacao.
 
@@ -36,7 +36,9 @@ No PowerShell com scripts bloqueados, use `npm.cmd test`. Os testes usam bancos 
 
 ## Render e persistencia
 
-O `render.yaml` instala o backend e executa `npm start`, servindo tambem as paginas de `painel/`. Configure DATABASE_URL com a Internal Database URL do PostgreSQL na mesma regiao. Nao e necessario disco persistente no Web Service. O SQLite local foi preservado e serve como origem de importacao. Veja [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md).
+O `render.yaml` instala o backend e executa `npm start`, servindo tambem as paginas de `backend/public/`. Configure DATABASE_URL com a Internal Database URL do PostgreSQL na mesma regiao. Nao e necessario disco persistente no Web Service. O SQLite local foi preservado e serve como origem de importacao. Veja [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md).
+
+Com Root Directory `backend`, use Build Command `PUPPETEER_SKIP_DOWNLOAD=true npm ci` e Start Command `npm start`. O frontend real foi movido de `painel/` para `backend/public/`, sem alterar seu conteudo, para ficar dentro do diretorio publicado. Nao depende de Vite nem de `painel/dist`. Os dois pontos de entrada do Express resolvem o caminho a partir de `__dirname`, servem `/` como `index.html` e mantem as rotas da API. O servidor alternativo `src/server.js` conserva sua API propria; para o fluxo atual de cadastro, pagamentos e WhatsApp, mantenha `npm start`.
 
 ## WhatsApp
 
