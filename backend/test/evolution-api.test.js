@@ -27,6 +27,23 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
   });
   const reply = (status, body) => { handler = (_, res) => { res.writeHead(status); res.end(typeof body === 'string' ? body : JSON.stringify(body)); }; };
 
+  await t.test('texto v2 e webhook autenticado usam payload correto sem afetar conexão', async () => {
+    const requests = [];
+    handler = (req, res) => {
+      let body = ''; req.on('data', chunk => { body += chunk; });
+      req.on('end', () => { requests.push({ path: req.url, body: JSON.parse(body) }); res.writeHead(200); res.end('{"ok":true}'); });
+    };
+    process.env.EVOLUTION_WEBHOOK_SECRET = 'private-webhook-secret';
+    await api.configurarWebhookInstancia('salon-test', 'https://example.test/api/webhook/evolution');
+    await api.enviarTextoInstancia('salon-test', '5511999999999', 'Olá!');
+    assert.equal(requests[0].body.webhook.headers['x-webhook-secret'], 'private-webhook-secret');
+    assert.deepEqual(requests[0].body.webhook.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']);
+    assert.equal(requests[0].body.webhook.byEvents, false);
+    assert.equal(requests[1].path, '/message/sendText/salon-test');
+    assert.equal(requests[1].body.text, 'Olá!');
+    assert.ok(!logs.join('\n').includes('private-webhook-secret'));
+  });
+
   await t.test('status HTTP prevalece sobre HTML ou mensagem do provedor', async () => {
     for (const [status, code] of [[401, 'EVOLUTION_INVALID_KEY'], [403, 'EVOLUTION_INVALID_KEY'], [503, 'EVOLUTION_OFFLINE'], [504, 'EVOLUTION_TIMEOUT'], [404, 'EVOLUTION_ENDPOINT_NOT_FOUND']]) {
       reply(status, '<html>proxy unavailable</html>');

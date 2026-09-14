@@ -1,155 +1,96 @@
-const db = require('./database');
-const { createMessageProcessor, extrairSelecao } = require('./botFlow');
-const { enviarTextoInstancia, enviarListaInstancia } = require('./evolutionApi');
+﻿const crypto = require('crypto');
+const { transaction } = require('./services/whatsapp/sessionRepository');
+const { createScheduling } = require('./services/whatsapp/scheduling');
+const { transition } = require('./services/whatsapp/chatbot');
+const { enviarTextoInstancia } = require('./evolutionApi');
+const { sanitize } = require('./evolutionLog');
 
-const { getAsync } = db;
-
-function apenasDigitos(valor = '') {
-  return String(valor || '').replace(/\D/g, '');
+function authorized(headers) {
+  const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
+  const received = headers['x-webhook-secret'];
+  return Boolean(expected && typeof received === 'string' &&
+    Buffer.byteLength(expected) === Buffer.byteLength(received) &&
+    crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received)));
 }
 
-function normalizarNumeroEvolution(telefone = '') {
-  const digitos = apenasDigitos(String(telefone || '').replace(/@c\.us$/i, ''));
-  return digitos.startsWith('55') ? digitos : `55${digitos}`;
-}
-
-function extrairEventoWebhook(payload = {}) {
-  return String(payload.event || payload.type || '').trim().toUpperCase();
-}
-
-function extrairEnvelopeMensagem(payload = {}) {
-  const data = payload.data || payload;
+function extract(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const event = String(payload.event || '').toUpperCase().replace(/[.\-]/g, '_');
+  if (event !== 'MESSAGES_UPSERT') return null;
+  const data = payload.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const key = data.key || {};
-  const message = data.message || {};
-  const from = key.remoteJid || data.remoteJid || data.from || '';
-
-  if (!from || String(from).includes('@g.us') || key.fromMe) {
-    return null;
-  }
-
-  return {
-    instanceName:
-      payload.instance || payload.instanceName || data.instance || data.instanceName || data.sender || '',
-    from,
-    body:
-      message.conversation ||
-      message.extendedTextMessage?.text ||
-      message.imageMessage?.caption ||
-      message.videoMessage?.caption ||
-      message.listResponseMessage?.title ||
-      message.buttonsResponseMessage?.selectedDisplayText ||
-      data.body ||
-      '',
-    selectedButtonId: message.buttonsResponseMessage?.selectedButtonId || null,
-    listResponse: message.listResponseMessage || null,
-    rowId: message.listResponseMessage?.singleSelectReply?.selectedRowId || null,
-    type: data.messageType || payload.event || 'evolution_webhook',
-    fromMe: Boolean(key.fromMe),
-  };
+  if (![false, 'false'].includes(key.fromMe) || data.fromMe === true) return null;
+  // LIDs are opaque identifiers, never telephone numbers. Use the alternate PN when provided.
+  const jid = String(key.remoteJid || '');
+  if (/@(g\.us|broadcast|newsletter)$/.test(jid)) return null;
+  const remote = jid.endsWith('@lid') ? String(key.remoteJidAlt || data.remoteJidAlt || '') : jid;
+  if (!/^\d{10,15}@(s\.whatsapp\.net|c\.us)$/.test(remote)) return null;
+  let message = data.message || {};
+  for (let i = 0; i < 3; i++) message = message.ephemeralMessage?.message || message.viewOnceMessage?.message || message;
+  const text = message.conversation || message.extendedTextMessage?.text ||
+    message.buttonsResponseMessage?.selectedButtonId || message.listResponseMessage?.singleSelectReply?.selectedRowId;
+  const instance = payload.instance || payload.instanceName;
+  if (typeof text !== 'string' || !text.trim() || text.length > 2000 || typeof key.id !== 'string' || !key.id || key.id.length > 200 || typeof instance !== 'string' || !instance || instance.length > 150) return null;
+  return { instance, phone: remote.split('@')[0], messageId: key.id, text: text.trim() };
 }
 
-function criarClienteEvolution(instanceName) {
-  return {
-    async sendText(user, texto) {
-      await enviarTextoInstancia(instanceName, normalizarNumeroEvolution(user), texto);
-      return { key: { id: `evo-text-${Date.now()}` } };
-    },
-    async sendPollMessage(user, pergunta, opcoes) {
-      await enviarListaInstancia(instanceName, normalizarNumeroEvolution(user), {
-        title: pergunta,
-        description: 'Selecione uma opção',
-        buttonText: 'Mostrar opções',
-        footerText: '',
-        sections: [
-          {
-            title: 'Atendimento',
-            rows: opcoes.map((opcao) => ({
-              title: opcao,
-              description: '',
-              rowId: opcao,
-            })),
-          },
-        ],
-      });
+const log = (event, data = {}) => console.info('[WhatsApp]', JSON.stringify(sanitize({ event, ...data })));
 
-      return { key: { id: `evo-poll-${Date.now()}` } };
-    },
-    async sendListMessage(user, options = {}) {
-      await enviarListaInstancia(instanceName, normalizarNumeroEvolution(user), {
-        title: options.title || 'Atendimento',
-        description: options.description || '',
-        buttonText: options.buttonText || 'Mostrar opções',
-        footerText: options.footer || '',
-        sections: (options.sections || []).map((section) => ({
-          title: section.title || 'Opções',
-          rows: (section.rows || []).map((row) => ({
-            title: row.title,
-            description: row.description || '',
-            rowId: row.rowId || row.title,
-          })),
-        })),
-      });
-
-      return { key: { id: `evo-list-${Date.now()}` } };
-    },
-    async deleteMessage() {
-      return null;
-    },
-  };
+async function drain(send = enviarTextoInstancia) {
+  // Persistent lease prevents multiple processes from sending the same response concurrently.
+  for (let i = 0; i < 50; i++) {
+    const row = await transaction(async db => {
+      const pending = await db.getAsync(`SELECT m.* FROM whatsapp_messages m
+        WHERE m.status = 'pending' AND m.lease_until < $1
+        AND NOT EXISTS (SELECT 1 FROM whatsapp_messages older WHERE older.instance = m.instance
+          AND older.phone = m.phone AND older.status = 'pending' AND older.id < m.id)
+        ORDER BY m.id LIMIT 1`, [Date.now()]);
+      if (pending) await db.runAsync("UPDATE whatsapp_messages SET lease_until = $1, attempts = attempts + 1 WHERE id = $2", [Date.now() + 120000, pending.id]);
+      return pending;
+    });
+    if (!row) return;
+    try {
+      await send(row.instance, row.phone, row.response);
+      await transaction(db => db.runAsync("UPDATE whatsapp_messages SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = $1", [row.id]));
+      log('resposta enviada', { tenant: row.assinatura_id, phone: `***${row.phone.slice(-4)}` });
+    } catch {
+      log('erro de envio; resposta preservada para nova tentativa', { tenant: row.assinatura_id });
+      await transaction(db => db.runAsync("UPDATE whatsapp_messages SET lease_until = $1 WHERE id = $2", [Date.now() + Math.min(300000, 10000 * (row.attempts + 1)), row.id]));
+    }
+  }
 }
 
-async function buscarAssinaturaPorInstancia(instanceName = '') {
-  const nome = String(instanceName || '').trim();
-
-  if (!nome) {
-    return null;
+async function processarWebhookEvolution(payload = {}, headers = {}, options = {}) {
+  if (!authorized(headers)) {
+    const error = new Error('Webhook não autorizado.'); error.statusCode = 401; throw error;
   }
-
-  return getAsync('SELECT * FROM assinaturas WHERE whatsapp_session = ? LIMIT 1', [nome]);
-}
-
-async function processarWebhookEvolution(payload = {}) {
-  const evento = extrairEventoWebhook(payload);
-
-  if (evento && evento !== 'MESSAGES_UPSERT') {
-    return { ok: true, ignored: true, event: evento };
-  }
-
-  const envelope = extrairEnvelopeMensagem(payload);
-
-  if (!envelope || envelope.fromMe) {
-    return { ok: true, ignored: true, event: evento || 'MESSAGES_UPSERT' };
-  }
-
-  const assinatura = await buscarAssinaturaPorInstancia(envelope.instanceName);
-
-  if (!assinatura?.id) {
-    throw new Error('Nao encontrei a assinatura vinculada a esta instancia do WhatsApp.');
-  }
-
-  const client = criarClienteEvolution(envelope.instanceName);
-  const processarEntrada = createMessageProcessor(client, {
-    sessionKey: `assinatura-${assinatura.id}`,
-    assinaturaId: assinatura.id,
+  const envelope = extract(payload);
+  if (!envelope) return { ok: true, ignored: true };
+  const result = await transaction(async db => {
+    const tenants = await db.allAsync("SELECT id FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
+    if (tenants.length !== 1) return { ok: true, ignored: true };
+    const tenant = tenants[0].id;
+    if (await db.getAsync("SELECT id FROM whatsapp_messages WHERE instance = $1 AND message_id = $2", [envelope.instance, envelope.messageId])) return { ok: true, duplicate: true };
+    const stored = await db.getAsync("SELECT data_json FROM sessoes WHERE assinatura_id = $1 AND telefone = $2", [tenant, envelope.phone]);
+    const previous = stored?.data_json ? JSON.parse(stored.data_json) : null;
+    const result = await transition(createScheduling(db, options.clock), tenant, envelope.phone, previous, envelope.text);
+    await db.runAsync(`INSERT INTO sessoes (assinatura_id, telefone, etapa, nome, data_json) VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT(assinatura_id, telefone) DO UPDATE SET etapa = excluded.etapa, nome = excluded.nome,
+        data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`, [tenant, envelope.phone, result.session.state, result.session.name || null, JSON.stringify(result.session)]);
+    await db.runAsync("INSERT INTO whatsapp_messages (assinatura_id, instance, phone, message_id, response) VALUES ($1, $2, $3, $4, $5)", [tenant, envelope.instance, envelope.phone, envelope.messageId, result.text]);
+    log('mensagem recebida', { instance: envelope.instance, tenant, phone: `***${envelope.phone.slice(-4)}`, state: previous?.state || 'MENU', option: /^\d{1,2}$/.test(envelope.text) ? envelope.text : 'texto', nextState: result.session.state });
+    return { ok: true };
   });
-
-  const entrada = {
-    from: envelope.from,
-    type: envelope.type,
-    fromMe: false,
-    ...extrairSelecao(envelope),
-  };
-
-  await processarEntrada(entrada);
-
-  return {
-    ok: true,
-    assinaturaId: assinatura.id,
-    instanceName: envelope.instanceName,
-    from: envelope.from,
-  };
+  await drain(options.send);
+  return result;
 }
 
-module.exports = {
-  processarWebhookEvolution,
-};
+function startWorker() {
+  const run = () => drain().catch(() => log('erro de processamento da fila'));
+  void run();
+  const timer = setInterval(run, 15000); timer.unref();
+  return timer;
+}
+
+module.exports = { processarWebhookEvolution, extract, authorized, drain, startWorker };

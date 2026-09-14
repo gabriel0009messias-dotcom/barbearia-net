@@ -45,22 +45,26 @@ function formatarMoeda(valor) {
 }
 
 function mostrarPixBloqueado(estado = {}) {
-  const pix = estado?.pix || pixConfig;
-
-  if (!pix?.copiaCola) {
-    esconderPixBloqueado();
-    return;
-  }
-
-  loginBlockedPixValorLabel.textContent = `Valor: ${formatarMoeda(pix.valor || valorMensalAtual)}`;
-  loginBlockedPixFavorecidoLabel.textContent = `Favorecido: ${pix.favorecido || '--'}`;
-  loginBlockedPixChaveLabel.textContent = `Chave Pix: ${pix.chaveExibicao || pix.chave || '--'}`;
-  loginBlockedPixCopiaColaLabel.textContent = `Pix copia e cola: ${pix.copiaCola}`;
-  loginBlockedWhatsappButton.href = pix.whatsappLink || '#';
-  loginBlockedPixQrImage.src = pix.qrCodeImageUrl || '';
+  esconderPixBloqueado();
+  if (!estado.id) return;
   loginBlockedPixCard.hidden = false;
-  loginBlockedPixQrPanel.hidden = !pix.qrCodeImageUrl;
-  loginBlockedPixQrImage.hidden = !pix.qrCodeImageUrl;
+  loginBlockedPixValorLabel.textContent = `Plano Profissional - ${formatarMoeda(estado.valor || valorMensalAtual)} por 30 dias`;
+  loginBlockedPixFavorecidoLabel.textContent = 'Pagamento seguro pelo Mercado Pago';
+  loginBlockedPixChaveLabel.textContent = '';
+  loginBlockedPixCopiaColaLabel.textContent = 'A liberacao acontece apos a confirmacao do pagamento.';
+  loginBlockedWhatsappButton.textContent = 'Pagar com Mercado Pago';
+  loginBlockedWhatsappButton.href = '#';
+  loginBlockedWhatsappButton.onclick = async event => {
+    event.preventDefault();
+    try {
+      const checkout = await buscarJson(`/api/publico/assinaturas/${estado.id}/checkout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senha: document.getElementById('loginSenhaInput').value }),
+      });
+      localStorage.setItem('barbearia_pending_signup', JSON.stringify({ assinaturaId: estado.id, email: document.getElementById('loginIdentificadorInput').value.trim() }));
+      window.location.assign(checkout.checkoutUrl);
+    } catch (error) { loginBarbeiroMessage.textContent = error.message; }
+  };
 }
 
 async function carregarConfiguracaoPublica() {
@@ -116,7 +120,7 @@ loginBarbeiroForm.addEventListener('submit', async (event) => {
   } catch (error) {
     console.error(error);
     loginBarbeiroMessage.textContent =
-      error.status === 403 ? error.message || 'Sistema bloqueado. Regularize seu Pix.' : error.message;
+      error.status === 403 ? error.message || 'Sistema bloqueado. Pague pelo Mercado Pago.' : error.message;
 
     if (error.status === 403) {
       mostrarPixBloqueado(error.details || {});

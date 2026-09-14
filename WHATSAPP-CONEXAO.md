@@ -64,16 +64,7 @@ resultado existente. Se a tentativa foi iniciada por QR, o usuario pode usar
 
 ## Render e persistencia
 
-`render.yaml` ja declara disco em `/var/data` e
-`DATABASE_PATH=/var/data/barbearia.db`. A associacao entre assinatura, numero e
-nome da instancia fica nesse SQLite. O banco local do usuario nao foi incluido
-nas alteracoes. O servico existente no Render usa o plano Free, sem disco
-persistente. Quando o diretorio configurado nao pode ser criado por falta de
-permissao, o backend conserva o fallback legado para o banco local e registra
-um aviso explicito: esse armazenamento e temporario e nao garante preservacao
-em reinicios/deploys. Declarar um disco no YAML nao o instala em um servico
-Free ja criado. A persistencia definitiva exige configurar armazenamento
-compativel; esta correcao de inicializacao nao substitui essa configuracao.
+O Web Service usa PostgreSQL via `DATABASE_URL`, sem disco persistente. A associacao entre assinatura, numero e instancia e o estado das conversas ficam no schema `salaoflix`. Consulte [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md) para importar os dados locais.
 
 As credenciais de autenticacao do WhatsApp ficam na **Evolution**, nao no disco
 do painel. E necessario que o servico Evolution tenha seu banco persistente

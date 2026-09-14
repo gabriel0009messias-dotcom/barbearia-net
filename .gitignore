@@ -21,3 +21,7 @@ backend/puppeteer-cache/
 backend/.env
 dist/
 build/
+
+.tmp/
+backend/barbearia.db
+.codex/backups/

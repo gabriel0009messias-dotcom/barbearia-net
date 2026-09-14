@@ -8,10 +8,13 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "postinstall": "node -e \"console.log('SaaS pronto para PostgreSQL e Mercado Pago.')\"",
-    "migrate": "node src/database/migrateRunner.js",
+    "migrate": "node scripts/migrate-postgres.js",
+    "whatsapp:webhook": "node scripts/configure-chatbot-webhooks.js",
+    "payments:verify": "node scripts/verify-mercado-pago.js",
     "start": "node app.js",
-    "dev": "node --watch src/server.js",
-    "bot": "node wppconnect.js"
+    "dev": "node --watch app.js",
+    "bot": "node wppconnect.js",
+    "db:import-sqlite": "node scripts/import-sqlite.js"
   },
   "dependencies": {
     "@wppconnect-team/wppconnect": "^1.41.1",

@@ -1,10 +1,12 @@
+Nota atual: este documento registra a auditoria historica. O backend atual (`app.js`) foi migrado para PostgreSQL; consulte `../POSTGRESQL-RENDER.md`.
+
 # Auditoria Inicial
 
 ## Achados principais
 
 - O `backend/package.json` apontava para `src/server.js`, mas esse arquivo nao existia.
 - O projeto mistura duas arquiteturas:
-  - legado: `backend/app.js`, `backend/database.js`, `backend/asaas.js`, SQLite, Asaas e paginas HTML/JS;
+  - legado: `backend/app.js`, `backend/database.js`, SQLite e paginas HTML/JS;
   - nova base parcial: `backend/src/*`, PostgreSQL e Mercado Pago, mas sem servidor HTTP conectado.
 - Existem credenciais hardcoded no legado, incluindo admin e token de pagamento. Essas credenciais devem ser consideradas comprometidas e precisam ser regeneradas.
 - O frontend `painel` nao esta concluido como React + Vite; hoje existe mistura de HTML estatico e React parcial sem pipeline real de build.

@@ -7,9 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'barbearia-whatsapp-'));
-  process.env.DATABASE_PATH = path.join(directory, 'test.db');
-  fs.writeFileSync(process.env.DATABASE_PATH, ''); // Impede importacao automatica do banco legado.
+  const testDb = require('./helpers/postgres').testEnvironment();
   process.env.EVOLUTION_API_KEY = 'test-only-key';
   process.env.EVOLUTION_API_RETRY_ATTEMPTS = '1';
   const instances = new Map();
@@ -67,14 +65,14 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
   t.after(async () => {
     await Promise.all([new Promise((resolve) => server.close(resolve)), new Promise((resolve) => mockServer.close(resolve))]);
     await new Promise((resolve) => db.close(resolve));
-    fs.rmSync(directory, { recursive: true, force: true });
+    await testDb.cleanup();
   });
   await db.ready;
   const salt = 'test-salt';
   const hash = crypto.scryptSync('test-password', salt, 64).toString('hex');
   for (const id of [1, 2]) {
     await db.runAsync(`INSERT INTO assinaturas (id, barbearia_nome, responsavel_nome, telefone, email, metodo_pagamento, dia_vencimento, suporte_numero, status, senha_hash, senha_salt)
-      VALUES (?, 'Teste', 'Teste', ?, ?, 'mercado_pago', 5, '', 'ativo', ?, ?)`, [id, `7599999999${id}`, `test${id}@example.test`, hash, salt]);
+      VALUES ($1, 'Teste', 'Teste', $2, $3, 'mercado_pago', 5, '', 'ativo', $4, $5)`, [id, `7599999999${id}`, `test${id}@example.test`, hash, salt]);
   }
   const request = async (route, token, body, method = body ? 'POST' : 'GET') => {
     const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { 'x-barbeiro-token': token } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
@@ -235,7 +233,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 2);
   });
   await t.test('falha SQL produz JSON 500 sem expor detalhes internos', async (subtest) => {
-    subtest.mock.method(db, 'get', (sql, params, callback) => callback(Object.assign(new Error('SQLITE_ERROR: simulated failure'), { code: 'SQLITE_ERROR' })));
+    subtest.mock.method(db, 'get', (sql, params, callback) => callback(Object.assign(new Error('XX000: simulated failure'), { code: 'XX000' })));
     const result = await request(route + '/status', tokens[0]);
     assert.equal(result.status, 500);
     assert.equal(result.body.status, 'error');

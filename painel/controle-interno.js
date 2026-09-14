@@ -107,13 +107,17 @@ function montarLinhaAssinatura(assinatura) {
     adminTableMessage.textContent = 'Salvando status...';
 
     try {
-      await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: select.value,
-          ultimoPagamento: new Date().toISOString().slice(0, 10),
-        }),
-      });
+      if (select.value === 'ativo') {
+        const paymentId = window.prompt('ID do pagamento no Mercado Pago. O backend consultara a aprovacao:');
+        if (!paymentId) return;
+        await buscarJson(`/api/admin/assinaturas/${assinatura.id}/confirmar-pagamento`, {
+          method: 'POST', body: JSON.stringify({ paymentId: paymentId.trim() }),
+        });
+      } else {
+        await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
+          method: 'PATCH', body: JSON.stringify({ status: select.value }),
+        });
+      }
 
       adminTableMessage.textContent = 'Status atualizado com sucesso.';
       await carregarPainelAdmin();

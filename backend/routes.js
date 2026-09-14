@@ -5,7 +5,6 @@ const nodemailer = require('nodemailer');
 require('./loadEnv');
 
 const db = require('./database');
-const { criarCliente: criarClienteAsaas, criarAssinatura: criarAssinaturaAsaas } = require('./asaas');
 const {
   getEvolutionConfig,
   createEvolutionError,
@@ -38,7 +37,7 @@ const METODOS_PAGAMENTO = ['mercado_pago'];
 const STATUS_ASSINATURA = ['pendente', 'ativo', 'ativa', 'atrasada', 'bloqueado', 'bloqueada', 'cancelada', 'autorizada', 'pausada'];
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MERCADO_PAGO_API_BASE_URL = 'https://api.mercadopago.com';
+const payments = require('./services/payments/mercadoPago');
 const VALOR_MENSAL_PADRAO = 65;
 const TOLERANCIA_ATRASO_DIAS = 4;
 const NOME_PLANO_PADRAO = 'Plano Profissional';
@@ -56,14 +55,6 @@ function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
   return fallback;
 }
 
-const PIX_CONFIG = {
-  chave: obterPrimeiroEnvPreenchido(['PIX_KEY']),
-  chaveExibicao: obterPrimeiroEnvPreenchido(['PIX_KEY_DISPLAY', 'PIX_KEY']),
-  favorecido: obterPrimeiroEnvPreenchido(['PIX_HOLDER_NAME', 'PIX_FAVORECIDO']),
-  cidade: obterPrimeiroEnvPreenchido(['PIX_CITY'], 'SAO PAULO'),
-  copiaColaFixo: obterPrimeiroEnvPreenchido(['PIX_COPY_PASTE']),
-  qrCodeImageUrl: obterPrimeiroEnvPreenchido(['PIX_QR_CODE_IMAGE_URL'], '/assets/pix-qr-fixo.png'),
-};
 const ADMIN_EMAIL = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_EMAIL', 'ADMIN_EMAIL', 'SUPER_ADMIN_EMAIL']);
 const ADMIN_PASSWORD = obterPrimeiroEnvPreenchido(['LEGACY_ADMIN_PASSWORD', 'ADMIN_PASSWORD', 'SUPER_ADMIN_PASSWORD']);
 const adminSessions = new Map();
@@ -83,157 +74,6 @@ function formatarDataISO(data) {
   return data.toISOString().slice(0, 10);
 }
 
-function calcularPrimeiroVencimento() {
-  const hoje = new Date();
-  return formatarDataISO(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 1));
-}
-
-function obterClienteSaasId(req) {
-  const headerId = req.headers['x-cliente-id'];
-  const bodyId = req.body?.id || req.body?.clienteId;
-  const queryId = req.query?.id || req.query?.clienteId;
-  const valor = headerId || bodyId || queryId;
-  const id = Number.parseInt(valor, 10);
-  return Number.isInteger(id) && id > 0 ? id : null;
-}
-
-async function verificarAssinatura(req, res, next) {
-  const clienteId = obterClienteSaasId(req);
-
-  if (!clienteId) {
-    res.status(400).json({ error: 'Informe o id do cliente em x-cliente-id, body.clienteId ou query.clienteId.' });
-    return;
-  }
-
-  try {
-    const cliente = await getAsync('SELECT * FROM clientes_saas WHERE id = ?', [clienteId]);
-
-    if (!cliente) {
-      res.status(404).json({ error: 'Cliente nao encontrado.' });
-      return;
-    }
-
-    if (cliente.status !== 'ativo') {
-      res.status(403).json({ error: 'Sistema bloqueado por falta de pagamento' });
-      return;
-    }
-
-    req.clienteSaas = cliente;
-    next();
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-}
-
-router.post('/criar-cliente', async (req, res) => {
-  const nome = String(req.body?.nome || '').trim();
-  const cpf = String(req.body?.cpf || '').trim();
-  const email = String(req.body?.email || '').trim();
-  const telefone = String(req.body?.telefone || '').trim();
-
-  if (!nome || !cpf || !email || !telefone) {
-    res.status(400).json({ error: 'Informe nome, cpf, email e telefone.' });
-    return;
-  }
-
-  try {
-    const clienteAsaas = await criarClienteAsaas({ nome, cpf, email, telefone });
-
-    const resultado = await db.runAsync(
-      `INSERT INTO clientes_saas (
-        nome,
-        cpf,
-        email,
-        telefone,
-        asaas_customer_id,
-        status
-      ) VALUES (?, ?, ?, ?, ?, 'ativo')`,
-      [nome, cpf, email, telefone, clienteAsaas.id]
-    );
-
-    const clienteSalvo = await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [resultado.lastID]);
-
-    res.status(201).json({
-      message: 'Cliente criado com sucesso no Asaas.',
-      cliente: clienteSalvo,
-      asaas: clienteAsaas,
-    });
-  } catch (error) {
-    res.status(error.statusCode || 500).json({
-      error: 'Erro ao criar cliente no Asaas.',
-      details: error.message,
-    });
-  }
-});
-
-router.post('/criar-assinatura', async (req, res) => {
-  const clienteId = Number.parseInt(req.body?.clienteId, 10);
-  const asaasCustomerId = String(req.body?.asaasCustomerId || '').trim();
-  const nextDueDate = String(req.body?.nextDueDate || calcularPrimeiroVencimento()).trim();
-
-  if (!clienteId && !asaasCustomerId) {
-    res.status(400).json({ error: 'Informe clienteId local ou asaasCustomerId.' });
-    return;
-  }
-
-  try {
-    const cliente = clienteId
-      ? await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [clienteId])
-      : await db.getAsync('SELECT * FROM clientes_saas WHERE asaas_customer_id = ?', [asaasCustomerId]);
-
-    if (!cliente) {
-      res.status(404).json({ error: 'Cliente nao encontrado para criar assinatura.' });
-      return;
-    }
-
-    const assinaturaAsaas = await criarAssinaturaAsaas({
-      customer: cliente.asaas_customer_id,
-      nextDueDate,
-    });
-
-    await db.runAsync(
-      `UPDATE clientes_saas
-       SET asaas_subscription_id = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [assinaturaAsaas.id, cliente.id]
-    );
-
-    const clienteAtualizado = await db.getAsync('SELECT * FROM clientes_saas WHERE id = ?', [cliente.id]);
-
-    console.log('[Pagamento] Assinatura mensal criada no Asaas:', {
-      clienteId: cliente.id,
-      asaasCustomerId: cliente.asaas_customer_id,
-      subscriptionId: assinaturaAsaas.id,
-      valor: 65,
-      ciclo: 'MONTHLY',
-      formaPagamento: 'PIX',
-    });
-
-    res.status(201).json({
-      message: 'Assinatura criada com sucesso.',
-      cliente: clienteAtualizado,
-      assinatura: assinaturaAsaas,
-    });
-  } catch (error) {
-    res.status(error.statusCode || 500).json({
-      error: 'Erro ao criar assinatura no Asaas.',
-      details: error.message,
-    });
-  }
-});
-
-router.get('/sistema', verificarAssinatura, (req, res) => {
-  res.json({
-    message: 'Sistema liberado para cliente com assinatura ativa.',
-    cliente: {
-      id: req.clienteSaas.id,
-      nome: req.clienteSaas.nome,
-      status: req.clienteSaas.status,
-    },
-  });
-});
-
 // Endpoint para excluir assinatura (admin)
 router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
   if (emAmbienteHospedado()) {
@@ -244,9 +84,9 @@ router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     // Remove serviços vinculados
-    await runAsync('DELETE FROM servicos_assinatura WHERE assinatura_id = ?', [id]);
+    await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [id]);
     // Remove a assinatura
-    const result = await runAsync('DELETE FROM assinaturas WHERE id = ?', [id]);
+    const result = await runAsync("DELETE FROM assinaturas WHERE id = $1", [id]);
     if (result.changes === 0) {
       res.status(404).json({ error: 'Assinatura não encontrada.' });
       return;
@@ -375,34 +215,6 @@ function criarLinkWhatsApp(numero, mensagem) {
   return `https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`;
 }
 
-function criarPayloadPix(valor = VALOR_MENSAL_PADRAO) {
-  if (!pixManualConfigurado()) {
-    return '';
-  }
-
-  return PIX_CONFIG.copiaColaFixo;
-}
-
-function obterDadosPix(valor = VALOR_MENSAL_PADRAO, suporteNumero = '') {
-  const copiaCola = criarPayloadPix(valor);
-
-  if (!copiaCola) {
-    return null;
-  }
-
-  return {
-    chave: PIX_CONFIG.chave,
-    chaveExibicao: PIX_CONFIG.chaveExibicao,
-    favorecido: PIX_CONFIG.favorecido,
-    valor: Number(valor),
-    copiaCola,
-    qrCodeImageUrl: PIX_CONFIG.qrCodeImageUrl,
-    instrucoes: 'Apos o pagamento, envie o comprovante no WhatsApp',
-    mensagemWhatsapp: MENSAGEM_COMPROVANTE_WHATSAPP,
-    whatsappLink: criarLinkWhatsApp(suporteNumero, MENSAGEM_COMPROVANTE_WHATSAPP),
-  };
-}
-
 function calcularResumoPagamento(assinatura) {
   if (!assinatura?.proximo_vencimento) {
     return {
@@ -500,7 +312,7 @@ function calcularResumoPagamento(assinatura) {
     mensagemCliente = 'Seu pagamento esta com 1 dia de atraso. Regularize para evitar bloqueio.';
   } else if (venceHoje) {
     indicadorAtraso = 'Vence hoje';
-    mensagemAdmin = 'Pagamento vence hoje. Status deve ficar pendente ate a confirmacao manual.';
+    mensagemAdmin = 'Pagamento vence hoje. Status deve ficar pendente ate a confirmacao do Mercado Pago.';
     mensagemCliente = 'Seu pagamento vence hoje.';
   } else if (diasParaVencer > 0 && diasParaVencer <= 3) {
     indicadorAtraso = `Vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}`;
@@ -555,18 +367,18 @@ async function sincronizarStatusPorVencimento(assinatura) {
   ) {
     await runAsync(
       `UPDATE assinaturas
-       SET status = ?,
-           status_assinatura = ?,
-           dias_atraso = ?,
-           bloqueado = ?,
+       SET status = $1,
+           status_assinatura = $2,
+           dias_atraso = $3,
+           bloqueado = $4,
            data_bloqueio = CASE
-             WHEN ? = 1 AND data_bloqueio IS NULL THEN CURRENT_TIMESTAMP
-             WHEN ? = 0 THEN NULL
+             WHEN $5 = 1 AND data_bloqueio IS NULL THEN CURRENT_TIMESTAMP::text
+             WHEN $6 = 0 THEN NULL
              ELSE data_bloqueio
            END,
            data_vencimento = COALESCE(proximo_vencimento, data_vencimento),
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+       WHERE id = $7`,
       [
         resumo.statusSugerido,
         resumo.statusAssinaturaSugerido,
@@ -578,7 +390,7 @@ async function sincronizarStatusPorVencimento(assinatura) {
       ]
     );
 
-    return getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinatura.id]);
+    return getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinatura.id]);
   }
 
   return assinatura;
@@ -592,7 +404,7 @@ async function enriquecerAssinatura(assinatura) {
   }
 
   const resumoPagamento = calcularResumoPagamento(sincronizada);
-  const pix = obterDadosPix(sincronizada.valor_mensal || VALOR_MENSAL_PADRAO, sincronizada.suporte_numero);
+  const pix = null;
 
   return {
     ...mapearAssinatura(sincronizada),
@@ -612,7 +424,7 @@ async function enriquecerAssinatura(assinatura) {
 }
 
 async function carregarAssinaturaAtualizada(id) {
-  const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+  const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
   return sincronizarStatusPorVencimento(assinatura);
 }
 
@@ -671,6 +483,7 @@ function montarEstadoPagamento(assinatura) {
   const acesso = avaliarAcessoAssinatura(assinatura);
 
   return {
+    id: assinatura.id,
     status: assinatura.status,
     statusAssinatura: String(assinatura.status_assinatura || assinatura.status || 'PENDENTE').toUpperCase(),
     liberado: acesso.liberado,
@@ -762,7 +575,7 @@ function getAsync(sql, params = []) {
 }
 
 async function getConfiguracao(chave) {
-  const row = await getAsync('SELECT valor FROM configuracoes WHERE chave = ?', [chave]);
+  const row = await getAsync("SELECT valor FROM configuracoes WHERE chave = $1", [chave]);
   return row?.valor || '';
 }
 
@@ -807,7 +620,7 @@ async function carregarAssinaturaPorToken(token) {
   }
 
   const session = barberSessions.get(token);
-  const assinaturaOriginal = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [session.assinaturaId]);
+  const assinaturaOriginal = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [session.assinaturaId]);
   const assinatura = await sincronizarStatusPorVencimento(assinaturaOriginal);
 
   if (!assinatura) {
@@ -834,7 +647,7 @@ async function carregarAssinaturaPorBridgeToken(token) {
     return null;
   }
 
-  const assinaturaOriginal = await getAsync('SELECT * FROM assinaturas WHERE whatsapp_bridge_token = ?', [token]);
+  const assinaturaOriginal = await getAsync("SELECT * FROM assinaturas WHERE whatsapp_bridge_token = $1", [token]);
   const assinatura = await sincronizarStatusPorVencimento(assinaturaOriginal);
 
   if (!assinatura) {
@@ -910,7 +723,7 @@ async function listarServicosDaAssinatura(assinaturaId) {
   return allAsync(
     `SELECT id, nome, preco
      FROM servicos_assinatura
-     WHERE assinatura_id = ?
+     WHERE assinatura_id = $1
      ORDER BY id ASC`,
     [assinaturaId]
   );
@@ -946,7 +759,7 @@ async function listarAssinaturasComServicos() {
 }
 
 async function montarRespostaAssinatura(assinaturaId) {
-  const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinaturaId]);
+  const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinaturaId]);
 
   return {
     ...(await enriquecerAssinatura(assinatura)),
@@ -963,7 +776,7 @@ async function obterOuCriarServicoPadrao(nome, preco) {
   }
 
   const servicoExistente = await getAsync(
-    'SELECT id FROM servicos WHERE nome = ? AND preco = ? ORDER BY id ASC LIMIT 1',
+    "SELECT id FROM servicos WHERE nome = $1 AND preco = $2 ORDER BY id ASC LIMIT 1",
     [nomeNormalizado, precoNormalizado]
   );
 
@@ -971,12 +784,8 @@ async function obterOuCriarServicoPadrao(nome, preco) {
     return servicoExistente.id;
   }
 
-  const proximo = await getAsync('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM servicos');
-  const novoId = Number(proximo?.id || 1);
-
-  await runAsync('INSERT INTO servicos (id, nome, preco) VALUES (?, ?, ?)', [novoId, nomeNormalizado, precoNormalizado]);
-
-  return novoId;
+  const result = await runAsync('INSERT INTO servicos (nome, preco) VALUES ($1, $2)', [nomeNormalizado, precoNormalizado]);
+  return result.lastID;
 }
 
 async function buscarServicoDaAssinatura(assinaturaId, servicoId, servicoNome, servicoPreco) {
@@ -986,8 +795,8 @@ async function buscarServicoDaAssinatura(assinaturaId, servicoId, servicoNome, s
     const servicoAssinatura = await getAsync(
       `SELECT id, nome, preco
        FROM servicos_assinatura
-       WHERE assinatura_id = ?
-         AND id = ?`,
+       WHERE assinatura_id = $1
+         AND id = $2`,
       [assinaturaId, idNumerico]
     );
 
@@ -1006,8 +815,8 @@ async function buscarServicoDaAssinatura(assinaturaId, servicoId, servicoNome, s
   const servicoPorNome = await getAsync(
     `SELECT id, nome, preco
      FROM servicos_assinatura
-     WHERE assinatura_id = ?
-       AND lower(nome) = lower(?)
+     WHERE assinatura_id = $1
+       AND lower(nome) = lower($2)
      ORDER BY id ASC
      LIMIT 1`,
     [assinaturaId, nomeNormalizado]
@@ -1151,10 +960,6 @@ function emAmbienteHospedado() {
 
 function credenciaisAdminConfiguradas() {
   return Boolean(ADMIN_EMAIL && ADMIN_PASSWORD);
-}
-
-function pixManualConfigurado() {
-  return Boolean(PIX_CONFIG.chave && PIX_CONFIG.copiaColaFixo && PIX_CONFIG.favorecido);
 }
 
 function usarEvolutionWhatsapp() {
@@ -1310,10 +1115,6 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   });
 }
 
-function getMercadoPagoAccessToken() {
-  return String(process.env.MP_ACCESS_TOKEN || process.env.MERCADO_PAGO_ACCESS_TOKEN || '').trim();
-}
-
 function getPublicAppUrl(req) {
   const configuredUrl = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').trim();
 
@@ -1350,7 +1151,7 @@ async function buscarAssinaturaPorEmailRecuperacao(email) {
   return getAsync(
     `SELECT *
      FROM assinaturas
-     WHERE lower(email) = ?
+     WHERE lower(email) = $1
      ORDER BY id DESC
      LIMIT 1`,
     [normalizarEmail(email)]
@@ -1370,13 +1171,13 @@ function calcularExpiracaoRecuperacaoSenha(minutos = 60) {
 }
 
 async function salvarTokenRecuperacaoSenha(assinaturaId, tokenHash, expiresAt) {
-  await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE assinatura_id = ? AND used_at IS NULL', [
+  await runAsync("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE assinatura_id = $1 AND used_at IS NULL", [
     assinaturaId,
   ]);
 
   await runAsync(
     `INSERT INTO password_reset_tokens (assinatura_id, token_hash, expires_at)
-     VALUES (?, ?, ?)`,
+     VALUES ($1, $2, $3)`,
     [assinaturaId, tokenHash, expiresAt]
   );
 }
@@ -1391,7 +1192,7 @@ async function carregarTokenRecuperacaoSenha(token) {
        a.email
      FROM password_reset_tokens prt
      JOIN assinaturas a ON a.id = prt.assinatura_id
-     WHERE prt.token_hash = ?
+     WHERE prt.token_hash = $1
        AND prt.used_at IS NULL
      LIMIT 1`,
     [gerarHashTokenRecuperacaoSeguro(token)]
@@ -1444,171 +1245,8 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
   });
 }
 
-async function requestMercadoPago(path, options = {}) {
-  const accessToken = getMercadoPagoAccessToken();
-
-  if (!accessToken) {
-    const error = new Error('Mercado Pago ainda nao configurado. Adicione MP_ACCESS_TOKEN no servidor.');
-    error.statusCode = 503;
-    throw error;
-  }
-
-  const response = await fetch(`${MERCADO_PAGO_API_BASE_URL}${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const detail = payload?.message || payload?.error || 'Falha ao falar com o Mercado Pago.';
-    const error = new Error(detail);
-    error.statusCode = response.status;
-    error.payload = payload;
-    throw error;
-  }
-
-  return payload;
-}
-
-function mapearStatusMercadoPagoParaAssinatura(status) {
-  switch (String(status || '').toLowerCase()) {
-    case 'authorized':
-      return 'ativa';
-    case 'paused':
-      return 'pausada';
-    case 'cancelled':
-    case 'canceled':
-      return 'cancelada';
-    case 'pending':
-    case 'in_process':
-      return 'pendente';
-    default:
-      return 'pendente';
-  }
-}
-
-function mapearStatusMercadoPagoParaStatusAssinatura(status) {
-  switch (String(status || '').toLowerCase()) {
-    case 'authorized':
-      return 'ATIVA';
-    case 'paused':
-      return 'PAUSADA';
-    case 'cancelled':
-    case 'canceled':
-      return 'CANCELADA';
-    default:
-      return 'PENDENTE';
-  }
-}
-
-async function salvarRetornoMercadoPago(assinaturaId, preapproval) {
-  const gatewayStatus = String(preapproval?.status || 'pending');
-  const assinaturaStatus = mapearStatusMercadoPagoParaAssinatura(gatewayStatus);
-  const statusAssinatura = mapearStatusMercadoPagoParaStatusAssinatura(gatewayStatus);
-  const proximoVencimento = String(preapproval?.next_payment_date || '').slice(0, 10) || null;
-  const ultimoPagamento =
-    assinaturaStatus === 'ativa' ? new Date().toISOString().slice(0, 10) : null;
-  const bloqueado = ['cancelada', 'bloqueada'].includes(assinaturaStatus) ? 1 : 0;
-
-  await runAsync(
-    `UPDATE assinaturas
-     SET status = ?,
-         status_assinatura = ?,
-         gateway_provider = 'mercado_pago',
-         gateway_status = ?,
-         gateway_external_reference = ?,
-         gateway_checkout_url = ?,
-         mercado_preapproval_id = ?,
-         subscription_id = ?,
-         mercado_payer_email = ?,
-         mercado_next_payment_date = ?,
-         mercado_last_payload = ?,
-         bloqueado = ?,
-         data_bloqueio = CASE
-           WHEN ? = 1 AND data_bloqueio IS NULL THEN CURRENT_TIMESTAMP
-           WHEN ? = 0 THEN NULL
-           ELSE data_bloqueio
-         END,
-         ultimo_pagamento = COALESCE(?, ultimo_pagamento),
-         proximo_vencimento = COALESCE(?, proximo_vencimento),
-         data_vencimento = COALESCE(?, data_vencimento),
-         updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [
-      assinaturaStatus,
-      statusAssinatura,
-      gatewayStatus,
-      preapproval?.external_reference || null,
-      preapproval?.init_point || preapproval?.sandbox_init_point || null,
-      preapproval?.id || null,
-      preapproval?.id || null,
-      preapproval?.payer_email || null,
-      preapproval?.next_payment_date || null,
-      JSON.stringify(preapproval || {}),
-      bloqueado,
-      bloqueado,
-      bloqueado,
-      ultimoPagamento,
-      proximoVencimento,
-      proximoVencimento,
-      assinaturaId,
-    ]
-  );
-}
-
-function calcularStartDateAssinatura(diaVencimento) {
-  const agora = new Date();
-  const inicio = new Date(agora.getFullYear(), agora.getMonth(), Number(diaVencimento), 12, 0, 0);
-
-  if (inicio.getTime() <= agora.getTime()) {
-    inicio.setMonth(inicio.getMonth() + 1);
-  }
-
-  return inicio.toISOString();
-}
-
-async function criarCheckoutMercadoPagoParaAssinatura(assinatura, req) {
-  if (!assinatura?.email) {
-    const error = new Error('Informe um Gmail valido para gerar a assinatura no Mercado Pago.');
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const appUrl = getPublicAppUrl(req);
-  const externalReference = assinatura.gateway_external_reference || `assinatura-${assinatura.id}`;
-  const preapproval = await requestMercadoPago('/preapproval', {
-    method: 'POST',
-    body: {
-      reason: `Assinatura mensal Salãoflix - ${assinatura.barbearia_nome}`,
-      payer_email: assinatura.email,
-      external_reference: externalReference,
-      back_url: `${appUrl}/cadastro.html?assinatura=${assinatura.id}&gateway=mercado_pago`,
-      notification_url: `${appUrl}/api/mercadopago/webhook`,
-      status: 'pending',
-      auto_recurring: {
-        frequency: 1,
-        frequency_type: 'months',
-        transaction_amount: Number(assinatura.valor_mensal || 1),
-        currency_id: 'BRL',
-        billing_day: Number(assinatura.dia_vencimento || 5),
-        billing_day_proportional: false,
-        start_date: calcularStartDateAssinatura(assinatura.dia_vencimento || 5),
-      },
-    },
-  });
-
-  await salvarRetornoMercadoPago(assinatura.id, preapproval);
-  return preapproval;
-}
-
 function erroHorarioJaOcupado(error) {
-  return error?.code === 'SQLITE_CONSTRAINT' || /unique|constraint/i.test(String(error?.message || ''));
+  return error?.code === '23505' || /unique|constraint/i.test(String(error?.message || ''));
 }
 
 function assinaturaPertenceAoBarbeiro(req, res) {
@@ -1795,32 +1433,32 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
   const params = [];
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappSession')) {
-    campos.push('whatsapp_session = ?');
+    campos.push(`whatsapp_session = $${params.length + 1}`);
     params.push(valores.whatsappSession || null);
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappStatus')) {
-    campos.push('whatsapp_status = ?');
+    campos.push(`whatsapp_status = $${params.length + 1}`);
     params.push(valores.whatsappStatus || 'nao_configurado');
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoErro')) {
-    campos.push('whatsapp_ultimo_erro = ?');
+    campos.push(`whatsapp_ultimo_erro = $${params.length + 1}`);
     params.push(valores.whatsappUltimoErro || null);
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoCheckEm')) {
-    campos.push('whatsapp_ultimo_check_em = ?');
+    campos.push(`whatsapp_ultimo_check_em = $${params.length + 1}`);
     params.push(valores.whatsappUltimoCheckEm || null);
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoQrEm')) {
-    campos.push('whatsapp_ultimo_qr_em = ?');
+    campos.push(`whatsapp_ultimo_qr_em = $${params.length + 1}`);
     params.push(valores.whatsappUltimoQrEm || null);
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappNumero')) {
-    campos.push('whatsapp_numero = ?');
+    campos.push(`whatsapp_numero = $${params.length + 1}`);
     params.push(valores.whatsappNumero || null);
   }
 
@@ -1834,7 +1472,7 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
     `UPDATE assinaturas
      SET ${campos.join(', ')},
          updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
+     WHERE id = $${params.length}`,
     params
   );
 }
@@ -2034,7 +1672,7 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
     FROM agendamentos a
     LEFT JOIN clientes c ON c.id = a.cliente_id
     LEFT JOIN servicos s ON s.id = a.servico_id
-    WHERE a.assinatura_id = ?
+    WHERE a.assinatura_id = $1
     ORDER BY a.data ASC, a.hora ASC
   `;
 
@@ -2048,74 +1686,43 @@ router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
   });
 });
 
-router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
-  const { cliente, telefone, servicoId, servicoNome, servicoPreco, data, hora } = req.body;
-
-  if (!telefone || !data || !hora || (!servicoId && !servicoNome)) {
-    res.status(400).json({ error: 'Cliente, telefone, servico, data e hora sao obrigatorios.' });
-    return;
-  }
-
+router.get('/disponibilidade', requirePainelOuBridge, async (req, res) => {
   try {
-    await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [cliente || telefone, telefone]);
-    await runAsync('UPDATE clientes SET nome = ? WHERE telefone = ?', [cliente || telefone, telefone]);
-    const clienteRow = await getAsync('SELECT id FROM clientes WHERE telefone = ?', [telefone]);
+    const { createScheduling } = require('./services/whatsapp/scheduling');
+    await db.ready;
+    res.json({ data: req.query.data, horarios: await createScheduling(db).times(req.assinatura.id, req.query.data) });
+  } catch { res.status(500).json({ error: 'Falha ao consultar disponibilidade.' }); }
+});
 
-    if (!clienteRow?.id) {
-      res.status(500).json({ error: 'Nao consegui localizar o cliente para salvar o agendamento.' });
-      return;
-    }
-
-    const servico = await buscarServicoDaAssinatura(req.assinatura.id, servicoId, servicoNome, servicoPreco);
-
-    if (!servico?.nome || !Number.isFinite(Number(servico.preco)) || Number(servico.preco) <= 0) {
-      res.status(400).json({ error: 'Servico invalido para salvar o agendamento.' });
-      return;
-    }
-
-    const servicoIdFinal = await obterOuCriarServicoPadrao(servico.nome, servico.preco);
-
-    const resultado = await runAsync(
-      `INSERT INTO agendamentos (
-        assinatura_id,
-        cliente_id,
-        servico_id,
-        nome_cliente,
-        telefone,
-        servico_nome,
-        preco,
-        data,
-        hora,
-        status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [req.assinatura.id, clienteRow.id, servicoIdFinal, cliente || telefone, telefone, servico.nome, Number(servico.preco), data, hora, 'confirmado']
-    );
-
-    res.status(201).json({
-      id: resultado.lastID,
-      cliente: cliente || telefone,
-      telefone,
-      servico: servico.nome,
-      preco: Number(servico.preco),
-      servicoId: servicoIdFinal,
-      data,
-      hora,
-      status: 'confirmado',
+router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
+  const { cliente, telefone, servicoId, servicoNome, data, hora } = req.body;
+  const phoneDigits = String(telefone || '').replace(/\D/g, '');
+  const phone = phoneDigits.length === 10 || phoneDigits.length === 11 ? `55${phoneDigits}` : phoneDigits;
+  if (!/^\d{10,15}$/.test(phone) || typeof cliente !== 'string' || cliente.trim().length < 2 || cliente.length > 100) {
+    return res.status(400).json({ error: 'Informe nome e telefone válidos.' });
+  }
+  try {
+    const { transaction } = require('./services/whatsapp/sessionRepository');
+    const { createScheduling } = require('./services/whatsapp/scheduling');
+    const result = await transaction(async connection => {
+      const scheduling = createScheduling(connection);
+      const services = await scheduling.services(req.assinatura.id);
+      const service = services.find(s => servicoId ? String(s.id) === String(servicoId) : s.name === servicoNome);
+      if (!service) return null;
+      const booking = await scheduling.book(req.assinatura.id, phone, { name: cliente.trim(), service, date: data, time: hora });
+      return booking ? { id: booking.lastID, cliente: cliente.trim(), telefone: phone, servico: service.name, preco: service.price, data, hora, status: 'confirmado' } : null;
     });
-  } catch (error) {
-    if (erroHorarioJaOcupado(error)) {
-      res.status(409).json({ error: 'Esse horario ja foi agendado por outro cliente e nao esta mais disponivel.' });
-      return;
-    }
-
-    res.status(500).json({ error: error.message });
+    if (!result) return res.status(409).json({ error: 'Serviço ou horário indisponível. Consulte a disponibilidade novamente.' });
+    res.status(201).json(result);
+  } catch {
+    res.status(500).json({ error: 'Não foi possível salvar o agendamento.' });
   }
 });
 
 router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
-  db.run('DELETE FROM agendamentos WHERE id = ? AND assinatura_id = ?', [id, req.assinatura.id], function onDelete(err) {
+  db.run("DELETE FROM agendamentos WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -2137,9 +1744,9 @@ router.post('/agendamentos/:id/lembrete-15', requirePainelOuBridge, async (req, 
   try {
     const resultado = await runAsync(
       `UPDATE agendamentos
-       SET lembrete_15_enviado_em = ?
-       WHERE id = ?
-         AND assinatura_id = ?
+       SET lembrete_15_enviado_em = $1
+       WHERE id = $2
+         AND assinatura_id = $3
          AND lembrete_15_enviado_em IS NULL`,
       [enviadoEm, id, req.assinatura.id]
     );
@@ -2162,9 +1769,9 @@ router.post('/agendamentos/:id/lembrete-7', requirePainelOuBridge, async (req, r
   try {
     const resultado = await runAsync(
       `UPDATE agendamentos
-       SET lembrete_7_enviado_em = ?
-       WHERE id = ?
-         AND assinatura_id = ?
+       SET lembrete_7_enviado_em = $1
+       WHERE id = $2
+         AND assinatura_id = $3
          AND lembrete_7_enviado_em IS NULL`,
       [enviadoEm, id, req.assinatura.id]
     );
@@ -2187,20 +1794,20 @@ router.get('/faturamento', requireBarbeiro, (req, res) => {
     FROM agendamentos a
     LEFT JOIN servicos s ON a.servico_id = s.id
     WHERE a.status = 'confirmado'
-      AND a.assinatura_id = ?
+      AND a.assinatura_id = $1
   `;
   const params = [req.assinatura.id];
 
   if (periodo === 'dia') {
-    query += " AND date(a.data) = date('now')";
+    query += " AND a.data = to_char(CURRENT_DATE, 'YYYY-MM-DD')";
   }
 
   if (periodo === 'mes') {
-    query += " AND strftime('%m-%Y', a.data) = strftime('%m-%Y', 'now')";
+    query += " AND substring(a.data, 1, 7) = to_char(CURRENT_DATE, 'YYYY-MM')";
   }
 
   if (periodo === 'ano') {
-    query += " AND strftime('%Y', a.data) = strftime('%Y', 'now')";
+    query += " AND substring(a.data, 1, 4) = to_char(CURRENT_DATE, 'YYYY')";
   }
 
   db.get(query, params, (err, row) => {
@@ -2215,7 +1822,7 @@ router.get('/faturamento', requireBarbeiro, (req, res) => {
 
 router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
   db.all(
-    'SELECT * FROM bloqueios WHERE assinatura_id = ? ORDER BY data ASC, hora ASC',
+    "SELECT * FROM bloqueios WHERE assinatura_id = $1 ORDER BY data ASC, hora ASC",
     [req.assinatura.id],
     (err, rows) => {
       if (err) {
@@ -2228,11 +1835,12 @@ router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
   );
 });
 
-router.post('/webhook', async (req, res) => {
+router.post('/webhook', requirePainelOuBridge, async (req, res) => {
   try {
     const resultado = await handleWhatsappWebhook({
       body: req.body,
       headers: req.headers,
+      assinatura: req.assinatura,
     });
 
     res.json(resultado);
@@ -2243,10 +1851,11 @@ router.post('/webhook', async (req, res) => {
 
 router.post('/webhook/evolution', async (req, res) => {
   try {
-    const resultado = await processarWebhookEvolution(req.body || {});
+    const resultado = await processarWebhookEvolution(req.body || {}, req.headers);
     res.json(resultado);
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error('[WhatsApp] erro ao processar webhook', { status: error.statusCode || 503 });
+    res.status(error.statusCode || 503).json({ error: error.statusCode === 401 ? 'Webhook não autorizado.' : 'Falha temporária no processamento.' });
   }
 });
 
@@ -2259,7 +1868,7 @@ router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
   }
 
   db.run(
-    'INSERT INTO bloqueios (assinatura_id, data, hora) VALUES (?, ?, ?)',
+    "INSERT INTO bloqueios (assinatura_id, data, hora) VALUES ($1, $2, $3)",
     [req.assinatura.id, data, hora],
     function onInsert(err) {
       if (err) {
@@ -2275,7 +1884,7 @@ router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
 router.delete('/bloqueios/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
-  db.run('DELETE FROM bloqueios WHERE id = ? AND assinatura_id = ?', [id, req.assinatura.id], function onDelete(err) {
+  db.run("DELETE FROM bloqueios WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -2305,7 +1914,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
   try {
     const suporteNumero = await getConfiguracao('suporte_numero');
     const evolution = getEvolutionConfig();
-    const pix = obterDadosPix(VALOR_MENSAL_PADRAO, suporteNumero);
+    const pix = null;
     const provider = usarEvolutionWhatsapp() ? 'evolution_api' : 'wppconnect_local';
 
     res.json({
@@ -2324,7 +1933,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
         delayMs: evolution.retryDelayMs,
         timeoutMs: evolution.timeoutMs,
       },
-      gateway: null,
+      gateway: { provider: 'mercado_pago', label: 'Mercado Pago', enabled: payments.configured() },
       pix,
       cobrancaMensagem: MENSAGEM_COBRANCA_PADRAO,
       diasVencimento: DIAS_VENCIMENTO,
@@ -2343,54 +1952,13 @@ router.get('/publico/assinatura-config', async (req, res) => {
   }
 });
 
-router.get('/publico/pix/chave', (req, res) => {
-  if (!pixManualConfigurado()) {
-    res.status(503).json({ error: 'Pix manual nao configurado neste ambiente.' });
-    return;
-  }
-
-  res.json({ chave: PIX_CONFIG.chave, tipo: 'cpf' });
-});
-
-router.post('/publico/pix/qrcode', async (req, res) => {
-  if (!pixManualConfigurado()) {
-    res.status(503).json({ error: 'Pix manual nao configurado neste ambiente.' });
-    return;
-  }
-
-  const { valor, descricao } = req.body;
-  const pix = obterDadosPix(valor || VALOR_MENSAL_PADRAO);
-  res.json({
-    payload: pix.copiaCola,
-    qrCodeImageUrl: pix.qrCodeImageUrl,
-    valor: Number(valor || VALOR_MENSAL_PADRAO),
-    descricao,
-  });
-});
-
 router.post('/mercadopago/webhook', async (req, res) => {
   try {
-    const resourceId = req.body?.data?.id || req.query['data.id'] || req.body?.id || req.query.id || null;
-
-    if (!resourceId) {
-      res.status(200).json({ ok: true, ignored: true });
-      return;
-    }
-
-    const preapproval = await requestMercadoPago(`/preapproval/${resourceId}`);
-    const externalReference = String(preapproval?.external_reference || '');
-    const assinaturaId = Number.parseInt(externalReference.replace('assinatura-', ''), 10);
-
-    if (!assinaturaId) {
-      res.status(200).json({ ok: true, ignored: true });
-      return;
-    }
-
-    await salvarRetornoMercadoPago(assinaturaId, preapproval);
-    res.status(200).json({ ok: true });
+    const result = await payments.webhook(req);
+    res.json({ ok: true, ...result });
   } catch (error) {
-    console.error('Webhook Mercado Pago:', error.message);
-    res.status(200).json({ ok: true });
+    console.error('[Mercado Pago] Webhook nao processado', { status: error.statusCode || 503 });
+    res.status(error.statusCode || 503).json({ error: error.publicMessage || 'Nao foi possivel processar a confirmacao. Tente novamente.' });
   }
 });
 
@@ -2420,18 +1988,23 @@ router.post('/publico/assinaturas/:id/checkout', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
       return;
     }
 
-    const preapproval = await criarCheckoutMercadoPagoParaAssinatura(assinatura, req);
+    limparSessoesBarbeiroExpiradas();
+    const session = barberSessions.get(String(req.headers['x-barbeiro-token'] || ''));
+    if (Number(session?.assinaturaId) !== Number(id) && !verificarSenha(req.body?.senha || '', assinatura)) {
+      return res.status(401).json({ error: 'Informe a senha da conta para gerar o pagamento.' });
+    }
+    const checkout = await payments.checkout(assinatura);
 
     res.json({
-      checkoutUrl: preapproval.init_point || preapproval.sandbox_init_point || null,
-      gatewayStatus: preapproval.status || 'pending',
+      checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
+      gatewayStatus: checkout.status || 'pending',
       provider: 'mercado_pago',
     });
   } catch (error) {
@@ -2451,9 +2024,9 @@ router.post('/barbeiro/login', async (req, res) => {
     const assinaturaEncontrada = await getAsync(
       `SELECT *
        FROM assinaturas
-       WHERE telefone = ?
-          OR whatsapp_numero = ?
-          OR email = ?
+       WHERE telefone = $1
+          OR whatsapp_numero = $2
+          OR email = $3
        ORDER BY id DESC
        LIMIT 1`,
       [identificador, identificador, identificador]
@@ -2560,7 +2133,7 @@ router.get('/barbeiro/recuperar-senha/token-status', async (req, res) => {
     }
 
     if (new Date(recovery.expires_at).getTime() <= Date.now()) {
-      await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
+      await runAsync("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1", [recovery.id]);
       res.status(410).json({ error: 'Esse link de recuperacao expirou.' });
       return;
     }
@@ -2604,7 +2177,7 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
     }
 
     if (new Date(recovery.expires_at).getTime() <= Date.now()) {
-      await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
+      await runAsync("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1", [recovery.id]);
       res.status(410).json({ error: 'Esse link de recuperacao expirou.' });
       return;
     }
@@ -2613,14 +2186,14 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
 
     await runAsync(
       `UPDATE assinaturas
-       SET senha_hash = ?,
-           senha_salt = ?,
+       SET senha_hash = $1,
+           senha_salt = $2,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+       WHERE id = $3`,
       [credenciais.hash, credenciais.salt, recovery.assinatura_id]
     );
 
-    await runAsync('UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = ?', [recovery.id]);
+    await runAsync("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1", [recovery.id]);
 
     res.json({ ok: true, mensagem: 'Senha atualizada com sucesso. Agora voce ja pode entrar no painel.' });
   } catch (error) {
@@ -2707,37 +2280,40 @@ router.post('/publico/assinaturas', async (req, res) => {
     const assinaturaExistente = await getAsync(
       `SELECT *
        FROM assinaturas
-       WHERE telefone = ?
-          OR whatsapp_numero = ?
-          OR (email <> '' AND email = ?)
-          OR barbearia_nome = ?
+       WHERE telefone = $1
+          OR whatsapp_numero = $2
+          OR (email <> '' AND email = $3)
+          OR barbearia_nome = $4
        LIMIT 1`,
       [telefone, whatsappNumero || telefone, email || '', barbeariaNome]
     );
 
     if (assinaturaExistente) {
+      if (verificarSenha(senha, assinaturaExistente)) {
+        return res.json({ mensagem: 'Cadastro encontrado. Continue para o pagamento.', assinatura: await montarRespostaAssinatura(assinaturaExistente.id) });
+      }
       if (!assinaturaExistente.senha_hash || !assinaturaExistente.senha_salt) {
         const credenciais = criarCredenciaisSenha(senha);
 
         await runAsync(
           `UPDATE assinaturas
-           SET barbearia_nome = ?,
-               responsavel_nome = ?,
-               telefone = ?,
-               email = ?,
-               metodo_pagamento = ?,
-               dia_vencimento = ?,
-               whatsapp_numero = ?,
-               dias_funcionamento = ?,
-               horario_abertura = ?,
-               horario_almoco_inicio = ?,
-               horario_almoco_fim = ?,
-               horario_fechamento = ?,
+           SET barbearia_nome = $1,
+               responsavel_nome = $2,
+               telefone = $3,
+               email = $4,
+               metodo_pagamento = $5,
+               dia_vencimento = $6,
+               whatsapp_numero = $7,
+               dias_funcionamento = $8,
+               horario_abertura = $9,
+               horario_almoco_inicio = $10,
+               horario_almoco_fim = $11,
+               horario_fechamento = $12,
                status = CASE WHEN status = 'ativo' THEN 'ativo' ELSE 'pendente' END,
-               senha_hash = ?,
-               senha_salt = ?,
+               senha_hash = $13,
+               senha_salt = $14,
                updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`,
+           WHERE id = $15`,
           [
             barbeariaNome,
             responsavelNome,
@@ -2757,20 +2333,20 @@ router.post('/publico/assinaturas', async (req, res) => {
           ]
         );
 
-        await runAsync('DELETE FROM servicos_assinatura WHERE assinatura_id = ?', [assinaturaExistente.id]);
+        await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [assinaturaExistente.id]);
 
         for (const servico of servicosValidos) {
           await runAsync(
-            'INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES (?, ?, ?)',
+            "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
             [assinaturaExistente.id, servico.nome, servico.preco]
           );
         }
 
-        const assinaturaAtualizada = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [assinaturaExistente.id]);
+        const assinaturaAtualizada = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinaturaExistente.id]);
         const assinaturaCompleta = await montarRespostaAssinatura(assinaturaExistente.id);
 
         res.status(200).json({
-          mensagem: 'Cadastro atualizado. Pagamento via Pix pendente de confirmacao manual no admin.',
+          mensagem: 'Cadastro atualizado. Finalize o pagamento no Mercado Pago para liberar o acesso.',
           pix: assinaturaCompleta.pix,
           assinatura: assinaturaCompleta,
         });
@@ -2778,7 +2354,7 @@ router.post('/publico/assinaturas', async (req, res) => {
       }
 
       res.status(409).json({
-        error: 'Essa barbearia ja possui assinatura registrada. Regularize o Pix para liberar o acesso.',
+        error: 'Essa barbearia ja possui assinatura registrada. Pague pelo Mercado Pago para liberar o acesso.',
       });
       return;
     }
@@ -2813,7 +2389,7 @@ router.post('/publico/assinaturas', async (req, res) => {
         horario_fechamento,
         senha_hash,
         senha_salt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
       [
         barbeariaNome,
         responsavelNome,
@@ -2843,7 +2419,7 @@ router.post('/publico/assinaturas', async (req, res) => {
 
     for (const servico of servicosValidos) {
       await runAsync(
-        'INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES (?, ?, ?)',
+        "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
         [result.lastID, servico.nome, servico.preco]
       );
     }
@@ -2859,7 +2435,7 @@ router.post('/publico/assinaturas', async (req, res) => {
     const assinaturaCriada = await montarRespostaAssinatura(result.lastID);
 
     res.status(201).json({
-      mensagem: 'Cadastro concluido. Pagamento via Pix pendente de confirmacao manual no admin.',
+      mensagem: 'Cadastro concluido. Finalize o pagamento no Mercado Pago para liberar o acesso.',
       pix: assinaturaCriada.pix,
       assinatura: assinaturaCriada,
     });
@@ -3052,7 +2628,7 @@ router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, a
       return;
     }
 
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -3064,9 +2640,9 @@ router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, a
     if (bridgeToken !== assinatura.whatsapp_bridge_token) {
       await runAsync(
         `UPDATE assinaturas
-         SET whatsapp_bridge_token = ?,
+         SET whatsapp_bridge_token = $1,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
+         WHERE id = $2`,
         [bridgeToken, id]
       );
     }
@@ -3157,16 +2733,16 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
 
     await runAsync(
       `UPDATE assinaturas
-       SET dias_funcionamento = ?,
-           horario_abertura = ?,
-           horario_almoco_inicio = ?,
-           horario_almoco_fim = ?,
-           horario_fechamento = ?,
-           localizacao_cidade = ?,
-           localizacao_rua = ?,
-           localizacao_referencia = ?,
+       SET dias_funcionamento = $1,
+           horario_abertura = $2,
+           horario_almoco_inicio = $3,
+           horario_almoco_fim = $4,
+           horario_fechamento = $5,
+           localizacao_cidade = $6,
+           localizacao_rua = $7,
+           localizacao_referencia = $8,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+       WHERE id = $9`,
       [
         serializarDiasFuncionamento(diasFuncionamento),
         horarioAbertura || assinatura.horario_abertura || '08:00',
@@ -3193,11 +2769,11 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
         return;
       }
 
-      await runAsync('DELETE FROM servicos_assinatura WHERE assinatura_id = ?', [id]);
+      await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [id]);
 
       for (const servico of servicosValidos) {
         await runAsync(
-          'INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES (?, ?, ?)',
+          "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
           [id, servico.nome, servico.preco]
         );
       }
@@ -3319,8 +2895,8 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
     res.json({
       suporteNumero,
       valorMensal: VALOR_MENSAL_PADRAO,
-      gateway: null,
-      pix: obterDadosPix(VALOR_MENSAL_PADRAO, suporteNumero),
+      gateway: { provider: 'mercado_pago', label: 'Mercado Pago', enabled: payments.configured() },
+      pix: null,
       mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
       diasVencimento: DIAS_VENCIMENTO,
       metodosPagamento: METODOS_PAGAMENTO,
@@ -3342,14 +2918,14 @@ router.patch('/admin/assinatura-config', requireAdmin, async (req, res) => {
   try {
     await runAsync(
       `INSERT INTO configuracoes (chave, valor)
-       VALUES ('suporte_numero', ?)
+       VALUES ('suporte_numero', $1)
        ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor`,
       [suporteNumero]
     );
 
     await runAsync(
       `UPDATE assinaturas
-       SET suporte_numero = ?,
+       SET suporte_numero = $1,
            updated_at = CURRENT_TIMESTAMP`,
       [suporteNumero]
     );
@@ -3370,38 +2946,38 @@ router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
 
 router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { status, ultimoPagamento, observacoes } = req.body;
+  const { status, observacoes } = req.body;
 
   if (!STATUS_ASSINATURA.includes(status)) {
     res.status(400).json({ error: 'Status invalido.' });
     return;
   }
 
+  if (['ativo', 'ativa', 'atrasada'].includes(status)) {
+    return res.status(400).json({ error: 'Para liberar acesso, consulte um pagamento aprovado pelo Mercado Pago.' });
+  }
+
   try {
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
       return;
     }
 
-    const referenciaPagamento = ultimoPagamento ? criarDataLocal(ultimoPagamento) : new Date();
-    const proximoVencimento =
-      status === 'ativo'
-        ? calcularProximoVencimento(assinatura.dia_vencimento, referenciaPagamento)
-        : assinatura.proximo_vencimento;
+    const proximoVencimento = assinatura.proximo_vencimento;
 
     await runAsync(
       `UPDATE assinaturas
-       SET status = ?,
-           ultimo_pagamento = ?,
-           proximo_vencimento = ?,
-           observacoes = ?,
+       SET status = $1,
+           ultimo_pagamento = $2,
+           proximo_vencimento = $3,
+           observacoes = $4,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+       WHERE id = $5`,
       [
         status,
-        ultimoPagamento || assinatura.ultimo_pagamento || null,
+        assinatura.ultimo_pagamento || null,
         proximoVencimento,
         observacoes || assinatura.observacoes || '',
         id,
@@ -3416,36 +2992,13 @@ router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
 
 router.post('/admin/assinaturas/:id/confirmar-pagamento', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const dataPagamento = String(req.body?.dataPagamento || '').trim() || new Date().toISOString().slice(0, 10);
-  const observacoes = String(req.body?.observacoes || '').trim();
-
   try {
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
-    }
-
-    const referenciaPagamento = criarDataLocal(dataPagamento) || new Date();
-    const proximoVencimento = formatarDataISO(
-      new Date(referenciaPagamento.getFullYear(), referenciaPagamento.getMonth(), referenciaPagamento.getDate() + 30)
-    );
-
-    await runAsync(
-      `UPDATE assinaturas
-       SET status = 'ativo',
-           ultimo_pagamento = ?,
-           proximo_vencimento = ?,
-           observacoes = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [dataPagamento, proximoVencimento, observacoes || assinatura.observacoes || '', id]
-    );
-
+    const paymentId = String(req.body?.paymentId || '');
+    if (!/^\d+$/.test(paymentId)) return res.status(400).json({ error: 'Informe paymentId do Mercado Pago para verificar o pagamento.' });
+    await payments.reconcile(paymentId, Number(id));
     res.json(await montarRespostaAssinatura(id));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 503).json({ error: error.publicMessage || 'Falha ao consultar pagamento no Mercado Pago.' });
   }
 });
 
@@ -3454,7 +3007,7 @@ router.post('/admin/assinaturas/:id/bloquear', requireAdmin, async (req, res) =>
   const observacoes = String(req.body?.observacoes || '').trim();
 
   try {
-    const assinatura = await getAsync('SELECT * FROM assinaturas WHERE id = ?', [id]);
+    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
 
     if (!assinatura) {
       res.status(404).json({ error: 'Assinatura nao encontrada.' });
@@ -3464,9 +3017,9 @@ router.post('/admin/assinaturas/:id/bloquear', requireAdmin, async (req, res) =>
     await runAsync(
       `UPDATE assinaturas
        SET status = 'bloqueado',
-           observacoes = ?,
+           observacoes = $1,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
+       WHERE id = $2`,
       [observacoes || assinatura.observacoes || '', id]
     );
 

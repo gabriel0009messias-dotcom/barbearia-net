@@ -83,47 +83,28 @@ async function buscarAssinaturaPorBridgeToken(token) {
     return null;
   }
 
-  return getAsync('SELECT * FROM assinaturas WHERE whatsapp_bridge_token = ?', [token]);
+  return getAsync("SELECT * FROM assinaturas WHERE whatsapp_bridge_token = $1", [token]);
 }
 
 async function resolverAssinatura({ assinaturaId, bridgeToken } = {}) {
-  const idNumerico = Number.parseInt(assinaturaId, 10);
-
-  if (Number.isInteger(idNumerico) && idNumerico > 0) {
-    return getAsync('SELECT * FROM assinaturas WHERE id = ?', [idNumerico]);
-  }
-
   const porToken = await buscarAssinaturaPorBridgeToken(bridgeToken);
   if (porToken) {
     return porToken;
   }
 
-  const assinaturas = await allAsync('SELECT * FROM assinaturas ORDER BY id ASC LIMIT 2');
-  return assinaturas.length === 1 ? assinaturas[0] : null;
+  return null;
 }
 
 async function listarServicos(assinaturaId) {
-  const servicosAssinatura = await allAsync(
-    `SELECT id, nome, preco
-     FROM servicos_assinatura
-     WHERE assinatura_id = ?
-     ORDER BY id ASC`,
-    [assinaturaId]
-  );
-
-  if (servicosAssinatura.length) {
-    return servicosAssinatura;
-  }
-
-  return allAsync('SELECT id, nome, preco FROM servicos ORDER BY id ASC');
+  return allAsync("SELECT id, nome, preco FROM servicos_assinatura WHERE assinatura_id = $1 ORDER BY id", [assinaturaId]);
 }
 
 async function obterSessao(assinaturaId, telefone) {
   return getAsync(
     `SELECT *
      FROM sessoes
-     WHERE assinatura_id = ?
-       AND telefone = ?`,
+     WHERE assinatura_id = $1
+       AND telefone = $2`,
     [assinaturaId, telefone]
   );
 }
@@ -140,7 +121,7 @@ async function salvarSessao(assinaturaId, telefone, valores = {}) {
 
   await runAsync(
     `INSERT INTO sessoes (assinatura_id, telefone, etapa, servico, preco, nome, data, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      ON CONFLICT(assinatura_id, telefone) DO UPDATE SET
        etapa = excluded.etapa,
        servico = excluded.servico,
@@ -155,53 +136,30 @@ async function salvarSessao(assinaturaId, telefone, valores = {}) {
 async function apagarSessao(assinaturaId, telefone) {
   await runAsync(
     `DELETE FROM sessoes
-     WHERE assinatura_id = ?
-       AND telefone = ?`,
+     WHERE assinatura_id = $1
+       AND telefone = $2`,
     [assinaturaId, telefone]
   );
 }
 
 async function horarioDisponivel(assinaturaId, data, hora) {
-  const agendamento = await getAsync(
-    `SELECT id
-     FROM agendamentos
-     WHERE assinatura_id = ?
-       AND data = ?
-       AND hora = ?
-       AND status = 'confirmado'
-     LIMIT 1`,
-    [assinaturaId, data, hora]
-  );
-
-  if (agendamento) {
-    return false;
-  }
-
-  const bloqueio = await getAsync(
-    `SELECT id
-     FROM bloqueios
-     WHERE assinatura_id = ?
-       AND data = ?
-       AND hora = ?
-     LIMIT 1`,
-    [assinaturaId, data, hora]
-  );
-
-  return !bloqueio;
+  return (await require('./services/whatsapp/scheduling').createScheduling(db).times(assinaturaId, data)).includes(hora);
 }
 
 async function obterOuCriarCliente(nome, telefone) {
-  await runAsync('INSERT OR IGNORE INTO clientes (nome, telefone) VALUES (?, ?)', [nome, telefone]);
-  await runAsync('UPDATE clientes SET nome = ? WHERE telefone = ?', [nome, telefone]);
-  return getAsync('SELECT * FROM clientes WHERE telefone = ?', [telefone]);
+  await db.transaction(async connection => {
+    await connection.runAsync("INSERT INTO clientes (nome, telefone) SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM clientes WHERE telefone = $2)", [nome, telefone]);
+  });
+  await runAsync("UPDATE clientes SET nome = $1 WHERE telefone = $2", [nome, telefone]);
+  return getAsync("SELECT * FROM clientes WHERE telefone = $1", [telefone]);
 }
 
 async function obterOuCriarServicoPadrao(nome, preco) {
   const existente = await getAsync(
     `SELECT id
      FROM servicos
-     WHERE lower(nome) = lower(?)
-       AND preco = ?
+     WHERE lower(nome) = lower($1)
+       AND preco = $2
      ORDER BY id ASC
      LIMIT 1`,
     [nome, Number(preco)]
@@ -211,44 +169,20 @@ async function obterOuCriarServicoPadrao(nome, preco) {
     return existente.id;
   }
 
-  const proximo = await getAsync('SELECT COALESCE(MAX(id), 0) + 1 AS id FROM servicos');
-  const novoId = Number(proximo?.id || 1);
-  await runAsync('INSERT INTO servicos (id, nome, preco) VALUES (?, ?, ?)', [novoId, nome, Number(preco)]);
-  return novoId;
+  const result = await runAsync('INSERT INTO servicos (nome, preco) VALUES ($1, $2)', [nome, Number(preco)]);
+  return result.lastID;
 }
 
 async function criarAgendamento(assinaturaId, telefone, sessao, horario) {
-  const nomeCliente = String(sessao.nome || '').trim();
-  const servicoNome = String(sessao.servico || '').trim();
-  const preco = Number(sessao.preco || 0);
-  const cliente = await obterOuCriarCliente(nomeCliente, telefone);
-  const servicoId = await obterOuCriarServicoPadrao(servicoNome, preco);
-
-  const resultado = await runAsync(
-    `INSERT INTO agendamentos (
-       assinatura_id,
-       cliente_id,
-       servico_id,
-       nome_cliente,
-       telefone,
-       servico_nome,
-       preco,
-       data,
-       hora,
-       status
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [assinaturaId, cliente?.id || null, servicoId, nomeCliente, telefone, servicoNome, preco, sessao.data, horario, 'confirmado']
-  );
-
-  return {
-    id: resultado.lastID,
-    nome_cliente: nomeCliente,
-    servico: servicoNome,
-    preco,
-    data: sessao.data,
-    horario,
-    telefone,
-  };
+  const { transaction } = require('./services/whatsapp/sessionRepository');
+  const { createScheduling } = require('./services/whatsapp/scheduling');
+  return transaction(async connection => {
+    const scheduling = createScheduling(connection);
+    const service = (await scheduling.services(assinaturaId)).find(s => s.name === sessao.servico);
+    const result = service && await scheduling.book(assinaturaId, telefone, { name: sessao.nome, service, date: sessao.data, time: horario });
+    if (!result) throw new Error('Horario ou servico indisponivel.');
+    return { id: result.lastID, nome_cliente: sessao.nome, servico: service.name, preco: service.price, data: sessao.data, horario, telefone };
+  });
 }
 
 async function sendMessage(assinaturaId, telefone, texto) {

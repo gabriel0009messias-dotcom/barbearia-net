@@ -17,7 +17,7 @@ const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
 let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
 let monitorLiberacao = null;
-let pixAtual = null;
+let checkoutUrl = null;
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -74,29 +74,20 @@ function carregarCadastroPendente() {
   }
 }
 
-function renderizarPix(pix) {
-  pixAtual = pix || null;
-  gatewayInfoCard.hidden = !pixAtual;
-  gatewayCheckoutButton.hidden = true;
+function renderizarCheckout(url = null) {
+  checkoutUrl = url;
+  gatewayInfoCard.hidden = false;
+  gatewayCheckoutButton.hidden = !url;
+  gatewayCheckoutButton.textContent = 'Pagar com Mercado Pago';
+  gatewayMethodLabel.textContent = 'Plano Profissional - R$ 65,00 por 30 dias';
+  gatewayHelpLabel.textContent = 'Pague no Mercado Pago. O acesso sera liberado apos a confirmacao do pagamento.';
+  pixQrCard.hidden = true;
   cartaoDadosCard.hidden = true;
-
-  if (!pixAtual) {
-    pixQrCard.hidden = true;
-    pixQrImage.hidden = true;
-    pixQrImage.removeAttribute('src');
-    pixCopiaColaLabel.textContent = '';
-    return;
-  }
-
-  gatewayMethodLabel.textContent = 'Metodo selecionado: Pix';
-  gatewayHelpLabel.textContent = 'Pagamento manual. Depois de pagar, envie o comprovante no WhatsApp e aguarde a confirmacao do admin.';
-  pixQrCard.hidden = false;
-  pixQrImage.hidden = !pixAtual.qrCodeImageUrl;
-  pixQrImage.src = pixAtual.qrCodeImageUrl || '';
-  pixCopiaColaLabel.textContent = pixAtual.copiaCola
-    ? `Pix copia e cola: ${pixAtual.copiaCola}`
-    : 'Codigo Pix indisponivel.';
 }
+
+gatewayCheckoutButton.addEventListener('click', () => {
+  if (checkoutUrl) window.location.assign(checkoutUrl);
+});
 
 async function fazerLoginAutomatico(email, senha) {
   const payload = await buscarJson('/api/barbeiro/login', {
@@ -116,7 +107,7 @@ async function fazerLoginAutomatico(email, senha) {
 
 function iniciarMonitorLiberacao(assinaturaId, email, senha) {
   limparMonitorLiberacao();
-  salvarCadastroPendente({ assinaturaId, email, senha });
+  salvarCadastroPendente({ assinaturaId, email });
 
   monitorLiberacao = setInterval(async () => {
     try {
@@ -125,7 +116,12 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
       if (status.liberado) {
         limparMonitorLiberacao();
         assinaturaFormMessage.textContent = 'Pagamento confirmado. Liberando seu painel...';
-        await fazerLoginAutomatico(email, senha);
+        if (senha) await fazerLoginAutomatico(email, senha);
+        else {
+          limparCadastroPendente();
+          assinaturaFormMessage.textContent = 'Pagamento confirmado! Entre com seu email e senha na pagina inicial.';
+          gatewayCheckoutButton.hidden = true;
+        }
       }
     } catch (error) {
       console.error(error);
@@ -137,11 +133,11 @@ async function carregarConfiguracao() {
   try {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
-    metodoPagamentoInput.innerHTML = '<option value="pix">Pix</option>';
+    metodoPagamentoInput.innerHTML = '<option value="mercado_pago">Mercado Pago</option>';
     diaVencimentoInput.innerHTML = (config.diasVencimento || [])
       .map((dia) => `<option value="${dia}">Dia ${dia}</option>`)
       .join('');
-    renderizarPix(config.pix || null);
+    renderizarCheckout();
   } catch (error) {
     console.error(error);
     assinaturaFormMessage.textContent = 'Nao consegui carregar a configuracao do cadastro.';
@@ -149,8 +145,7 @@ async function carregarConfiguracao() {
 }
 
 metodoPagamentoInput?.addEventListener('change', () => {
-  metodoPagamentoInput.value = 'pix';
-  renderizarPix(pixAtual);
+  metodoPagamentoInput.value = 'mercado_pago';
 });
 
 assinaturaForm.addEventListener('submit', async (event) => {
@@ -170,7 +165,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
         email: emailCadastro,
         cpfTitular: apenasDigitos(document.getElementById('cpfTitularInput').value),
         senha: senhaCadastro,
-        metodoPagamento: 'pix',
+        metodoPagamento: 'mercado_pago',
         diaVencimento: diaVencimentoInput.value,
         whatsappNumero: document.getElementById('whatsappNumeroInput').value.trim(),
         servicos: [{ nome: 'Corte', preco: 30 }],
@@ -179,11 +174,13 @@ assinaturaForm.addEventListener('submit', async (event) => {
 
     authToken = null;
     localStorage.removeItem(TOKEN_STORAGE_KEY);
-    renderizarPix(resposta.pix || resposta.assinatura?.pix || pixAtual);
-    assinaturaFormMessage.textContent =
-      resposta.mensagem ||
-      'Cadastro concluido. Agora pague via Pix, envie o comprovante no WhatsApp e aguarde a confirmacao manual.';
     iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
+    const checkout = await buscarJson(`/api/publico/assinaturas/${resposta.assinatura.id}/checkout`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ senha: senhaCadastro }),
+    });
+    renderizarCheckout(checkout.checkoutUrl);
+    assinaturaFormMessage.textContent =
+      'Cadastro concluido. Clique em Pagar com Mercado Pago.';
   } catch (error) {
     console.error(error);
     assinaturaFormMessage.textContent = error.message;
@@ -193,7 +190,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
 carregarConfiguracao();
 
 const cadastroPendente = carregarCadastroPendente();
-if (cadastroPendente?.assinaturaId && cadastroPendente?.email && cadastroPendente?.senha) {
-  assinaturaFormMessage.textContent = 'Aguardando confirmacao manual do pagamento para liberar seu painel...';
-  iniciarMonitorLiberacao(cadastroPendente.assinaturaId, cadastroPendente.email, cadastroPendente.senha);
+if (cadastroPendente?.assinaturaId) {
+  assinaturaFormMessage.textContent = 'Aguardando confirmacao do Mercado Pago. Se ainda nao pagou, entre pela pagina inicial para continuar.';
+  iniciarMonitorLiberacao(cadastroPendente.assinaturaId, cadastroPendente.email);
 }

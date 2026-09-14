@@ -71,25 +71,8 @@ async function getAuthorizedPayment(authorizedPaymentId) {
   return response.data;
 }
 
-function validateWebhookSignature({ requestId, dataId, topic, signatureHeader }) {
-  if (!env.mercadoPagoWebhookSecret || !signatureHeader) {
-    return true;
-  }
-
-  const parts = Object.fromEntries(
-    String(signatureHeader)
-      .split(',')
-      .map((item) => item.trim().split('='))
-      .filter((item) => item.length === 2)
-  );
-
-  const manifest = `id:${dataId};request-id:${requestId};ts:${parts.ts};topic:${topic};`;
-  const expected = crypto
-    .createHmac('sha256', env.mercadoPagoWebhookSecret)
-    .update(manifest)
-    .digest('hex');
-
-  return expected === parts.v1;
+function validateWebhookSignature(options) {
+  return require('../../services/payments/signature').validateSignature({ ...options, secret: env.mercadoPagoWebhookSecret });
 }
 
 module.exports = {

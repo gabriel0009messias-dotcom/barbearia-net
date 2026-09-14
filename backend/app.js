@@ -5,7 +5,6 @@ const fs = require('fs');
 
 require('./loadEnv');
 
-const asaas = require('./asaas');
 const apiRoutes = require('./routes');
 const { handleWhatsappWebhook } = require('./whatsappWebhook');
 
@@ -145,135 +144,6 @@ function obterAssinaturaPorCredenciais(email, senha) {
   );
 }
 
-function atualizarStatusAssinaturaPorEvento(payload = {}) {
-  const evento = String(payload?.event || '').trim().toUpperCase();
-  const payment = payload?.payment || {};
-  const subscriptionId = payment?.subscription || payment?.subscriptionId || payload?.subscription?.id || payload?.subscription;
-  const paymentId = payment?.id || payload?.paymentId || null;
-  const customerId = payment?.customer || payload?.customer?.id || payload?.customer || null;
-
-  let novoStatus = null;
-
-  if (evento === 'PAYMENT_RECEIVED' || evento === 'PAYMENT_CONFIRMED') {
-    novoStatus = 'ativo';
-  }
-
-  if (evento === 'PAYMENT_OVERDUE') {
-    novoStatus = 'bloqueado';
-  }
-
-  if (!novoStatus) {
-    return null;
-  }
-
-  const assinatura =
-    assinaturasCadastradas.find(
-      (item) =>
-        (paymentId && item.asaasPaymentId === paymentId) ||
-        (subscriptionId && item.asaasSubscriptionId === subscriptionId) ||
-        (customerId && item.asaasCustomerId === customerId)
-    ) || null;
-
-  if (!assinatura) {
-    return null;
-  }
-
-  assinatura.status = novoStatus;
-
-  if (paymentId && !assinatura.asaasPaymentId) {
-    assinatura.asaasPaymentId = paymentId;
-  }
-
-  if (subscriptionId && !assinatura.asaasSubscriptionId) {
-    assinatura.asaasSubscriptionId = subscriptionId;
-  }
-
-  return assinatura;
-}
-
-function montarProximaDataVencimento(dia) {
-  const hoje = new Date();
-  let ano = hoje.getFullYear();
-  let mes = hoje.getMonth();
-
-  if (hoje.getDate() > dia) {
-    mes += 1;
-  }
-
-  if (mes > 11) {
-    mes = 0;
-    ano += 1;
-  }
-
-  return `${ano}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`;
-}
-
-function formatarImagemPix(encodedImage = '') {
-  if (!encodedImage) {
-    return null;
-  }
-
-  return String(encodedImage).startsWith('data:')
-    ? encodedImage
-    : `data:image/png;base64,${encodedImage}`;
-}
-
-function apenasDigitos(valor = '') {
-  return String(valor).replace(/\D/g, '');
-}
-
-function normalizarTelefoneAsaas(telefone = '') {
-  const digitos = apenasDigitos(telefone);
-
-  if (digitos.length === 13 && digitos.startsWith('55')) {
-    return digitos.slice(2);
-  }
-
-  return digitos;
-}
-
-function montarCamposTelefone(telefone = '') {
-  const telefoneNormalizado = normalizarTelefoneAsaas(telefone);
-
-  if (telefoneNormalizado.length === 11) {
-    return {
-      mobilePhone: telefoneNormalizado,
-    };
-  }
-
-  if (telefoneNormalizado.length === 10) {
-    return {
-      phone: telefoneNormalizado,
-    };
-  }
-
-  return {
-    mobilePhone: telefoneNormalizado,
-  };
-}
-
-function extrairMensagemErro(error) {
-  const lista = error?.response?.data?.errors;
-  const mensagemOriginal =
-    error?.response?.data?.error || error?.response?.data?.message || error.message || 'Erro ao processar requisicao.';
-
-  if (Array.isArray(lista) && lista.length) {
-    const mensagemLista = lista.map((item) => item.description || item.code).filter(Boolean).join(' | ');
-
-    if (/nao permite pagamentos via pix/i.test(mensagemLista)) {
-      return 'O Pix da sua conta Asaas nao esta habilitado para esta cobranca. Cadastre uma chave Pix e confira se a conta esta aprovada no Asaas.';
-    }
-
-    return mensagemLista;
-  }
-
-  if (/nao permite pagamentos via pix/i.test(mensagemOriginal)) {
-    return 'O Pix da sua conta Asaas nao esta habilitado para esta cobranca. Cadastre uma chave Pix e confira se a conta esta aprovada no Asaas.';
-  }
-
-  return mensagemOriginal;
-}
-
 function precoDoServico(nomeServico = '') {
   const servico = ACESSO_VITALICIO.servicos.find(
     (item) => String(item.nome || '').trim().toLowerCase() === String(nomeServico || '').trim().toLowerCase()
@@ -334,30 +204,6 @@ function somarPorPeriodo(periodo, referenciaMes = '') {
       return false;
     })
     .reduce((total, item) => total + precoDoServico(item.servico), 0);
-}
-
-async function criarClienteAsaasComFallback({ nome, cpfCnpj, email, telefone }) {
-  const payloadBase = {
-    name: nome,
-    cpfCnpj,
-    email,
-  };
-
-  try {
-    return await asaas.post('/customers', {
-      ...payloadBase,
-      ...montarCamposTelefone(telefone),
-    });
-  } catch (error) {
-    const lista = error?.response?.data?.errors || [];
-    const erroTelefone = lista.some((item) => /invalid_phone|invalid_mobilePhone/i.test(String(item?.code || '')));
-
-    if (!erroTelefone) {
-      throw error;
-    }
-
-    return asaas.post('/customers', payloadBase);
-  }
 }
 
 app.use(express.json());
@@ -710,10 +556,17 @@ app.get('/controle-interno', (req, res) => {
             tableMessage.textContent = 'Salvando status...';
             tableMessage.classList.remove('error');
             try {
-              await api('/api/admin/assinaturas/' + assinatura.id, {
-                method: 'PATCH',
-                body: JSON.stringify({ status: select.value }),
-              });
+              if (select.value === 'ativo' || select.value === 'ativa') {
+                const paymentId = window.prompt('ID do pagamento no Mercado Pago para consultar a aprovacao:');
+                if (!paymentId) return;
+                await api('/api/admin/assinaturas/' + assinatura.id + '/confirmar-pagamento', {
+                  method: 'POST', body: JSON.stringify({ paymentId: paymentId.trim() }),
+                });
+              } else {
+                await api('/api/admin/assinaturas/' + assinatura.id, {
+                  method: 'PATCH', body: JSON.stringify({ status: select.value }),
+                });
+              }
               tableMessage.textContent = 'Status atualizado com sucesso.';
               await loadPanel();
             } catch (error) {
@@ -841,62 +694,6 @@ app.get('/controle-interno', (req, res) => {
 
 app.get('/controle-interno.html', (req, res) => {
   res.sendFile(path.join(painelPath, 'controle-interno.html'));
-});
-
-app.get('/api/publico/assinatura-config', (req, res) => {
-  const emHospedagem = Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID);
-  const whatsappBridgeUrlPublic = String(
-    process.env.WHATSAPP_BRIDGE_URL_PUBLIC || 'https://technician-elect-potential-wheel.trycloudflare.com'
-  ).trim();
-  const whatsappBridgeUrl = whatsappBridgeUrlPublic || (emHospedagem ? null : 'http://127.0.0.1:3010');
-
-  res.json({
-    suporteNumero: '--',
-    valorMensal: 5,
-    gateway: {
-      provider: 'asaas',
-      enabled: true,
-      label: 'Asaas',
-    },
-    diasVencimento: [5, 20],
-    metodosPagamento: ['cartao', 'pix'],
-    funcionamentoPadrao: {
-      diasFuncionamento: [1, 2, 3, 4, 5, 6],
-      horarioAbertura: '08:00',
-      horarioAlmocoInicio: '12:00',
-      horarioAlmocoFim: '13:00',
-      horarioFechamento: '18:00',
-    },
-    whatsappBridgeUrl,
-    whatsappLocalOnly: !whatsappBridgeUrl,
-  });
-});
-
-app.post('/criar-cliente', async (req, res) => {
-  const { nome, cpf, email, telefone } = req.body;
-
-  if (!nome || !cpf || !email || !telefone) {
-    res.status(400).json({
-      error: 'Informe nome, cpf, email e telefone',
-    });
-    return;
-  }
-
-  try {
-    const response = await criarClienteAsaasComFallback({
-      nome,
-      cpfCnpj: apenasDigitos(cpf),
-      email,
-      telefone,
-    });
-
-    res.status(201).json(response.data);
-  } catch (error) {
-    res.status(error.response?.status || 500).json({
-      error: extrairMensagemErro(error),
-      details: error.response?.data || null,
-    });
-  }
 });
 
 function obterSessaoBarbeiro(req) {
@@ -1046,33 +843,6 @@ app.post('/api/admin/login', (req, res) => {
   const token = crypto.randomBytes(24).toString('hex');
   adminSessions.set(token, { createdAt: Date.now() });
   res.json({ token, expiresInHours: 12 });
-});
-
-app.get('/api/admin/assinatura-config', requireAdmin, (req, res) => {
-  res.json({
-    suporteNumero: suporteNumeroAdmin,
-    valorMensal: 5,
-    gateway: {
-      provider: 'asaas',
-      enabled: true,
-      label: 'Asaas',
-    },
-    diasVencimento: [5, 20],
-    metodosPagamento: ['cartao', 'pix'],
-    statusDisponiveis: ['pendente', 'ativo', 'bloqueado'],
-  });
-});
-
-app.patch('/api/admin/assinatura-config', requireAdmin, (req, res) => {
-  const suporteNumero = String(req.body?.suporteNumero || '').trim();
-
-  if (!suporteNumero) {
-    res.status(400).json({ error: 'Numero de suporte e obrigatorio.' });
-    return;
-  }
-
-  suporteNumeroAdmin = suporteNumero;
-  res.json({ suporteNumero: suporteNumeroAdmin });
 });
 
 app.get('/api/admin/assinaturas', requireAdmin, (req, res) => {
@@ -1408,210 +1178,6 @@ app.post('/api/barbeiro/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/publico/assinaturas', async (req, res) => {
-  const {
-    barbeariaNome,
-    responsavelNome,
-    telefone,
-    email,
-    cpfTitular,
-    senha,
-    metodoPagamento,
-    diaVencimento,
-    creditCard,
-    creditCardHolderInfo,
-    diasFuncionamento,
-    horarioAbertura,
-    horarioAlmocoInicio,
-    horarioAlmocoFim,
-    horarioFechamento,
-    servicos,
-  } = req.body;
-
-  if (!barbeariaNome || !responsavelNome || !telefone || !email || !senha || !metodoPagamento || !diaVencimento) {
-    res.status(400).json({ error: 'Preencha os campos obrigatorios do cadastro.' });
-    return;
-  }
-
-  if (metodoPagamento === 'cartao') {
-    const dadosCartaoValidos =
-      creditCard?.holderName &&
-      creditCard?.number &&
-      creditCard?.expiryMonth &&
-      creditCard?.expiryYear &&
-      creditCard?.ccv;
-
-    const dadosTitularValidos =
-      creditCardHolderInfo?.name &&
-      creditCardHolderInfo?.email &&
-      (creditCardHolderInfo?.cpfCnpj || cpfTitular) &&
-      creditCardHolderInfo?.postalCode &&
-      creditCardHolderInfo?.addressNumber;
-
-    if (!dadosCartaoValidos || !dadosTitularValidos) {
-      res.status(400).json({ error: 'Preencha os dados do cartao e do titular para continuar.' });
-      return;
-    }
-  }
-
-  try {
-    const clienteResponse = await criarClienteAsaasComFallback({
-      nome: responsavelNome,
-      cpfCnpj: cpfTitular || '00000000000',
-      email,
-      telefone,
-    });
-
-    const customerId = clienteResponse.data.id;
-    const dia = Number(diaVencimento);
-    const nextDueDate = montarProximaDataVencimento(dia);
-
-    const billingType = metodoPagamento === 'cartao' ? 'CREDIT_CARD' : 'PIX';
-    let assinaturaResponse = null;
-    let pixQrCode = null;
-    let payment = null;
-
-    if (billingType === 'CREDIT_CARD') {
-      const payloadAssinatura = {
-        customer: customerId,
-        billingType,
-        value: 5,
-        cycle: 'MONTHLY',
-        nextDueDate,
-        creditCard,
-        creditCardHolderInfo: {
-          ...creditCardHolderInfo,
-          cpfCnpj: creditCardHolderInfo?.cpfCnpj || cpfTitular,
-        },
-        remoteIp: req.ip || req.socket?.remoteAddress || '127.0.0.1',
-      };
-
-      assinaturaResponse = await asaas.post('/subscriptions', payloadAssinatura);
-    } else {
-      const paymentResponse = await asaas.post('/payments', {
-        customer: customerId,
-        billingType: 'PIX',
-        value: 5,
-        dueDate: nextDueDate,
-        description: `Assinatura Salãoflix - ${barbeariaNome}`,
-      });
-
-      payment = paymentResponse.data;
-
-      const pixResponse = await asaas.get(`/payments/${payment.id}/pixQrCode`);
-      pixQrCode = {
-        ...pixResponse.data,
-        imageUrl: formatarImagemPix(pixResponse.data?.encodedImage),
-      };
-    }
-
-    const assinatura = {
-      id: Date.now(),
-      barbeariaNome,
-      responsavelNome,
-      telefone,
-      email: normalizarEmail(email),
-      senha,
-      metodoPagamento,
-      diaVencimento: dia,
-      status: 'pendente',
-      whatsapp_status: 'nao_configurado',
-      dias_funcionamento:
-        Array.isArray(diasFuncionamento) && diasFuncionamento.length ? diasFuncionamento : [1, 2, 3, 4, 5, 6],
-      horario_abertura: horarioAbertura || '08:00',
-      horario_almoco_inicio: horarioAlmocoInicio || '12:00',
-      horario_almoco_fim: horarioAlmocoFim || '13:00',
-      horario_fechamento: horarioFechamento || '18:00',
-      servicos: normalizarServicosPainel(servicos),
-      asaasCustomerId: customerId,
-      asaasSubscriptionId: assinaturaResponse?.data?.id || null,
-      asaasPaymentId: payment?.id || null,
-    };
-
-    assinaturasCadastradas.push(assinatura);
-
-    res.status(201).json({
-      mensagem:
-        billingType === 'PIX'
-          ? 'Cadastro concluido. Mostre o QR Code Pix para o cliente concluir o pagamento.'
-          : 'Cadastro concluido. Assinatura criada com sucesso.',
-      checkoutUrl: assinaturaResponse?.data?.invoiceUrl || null,
-      assinatura,
-      customer: clienteResponse.data,
-      subscription: assinaturaResponse?.data || null,
-      payment,
-      pixQrCode,
-    });
-  } catch (error) {
-    res.status(error.response?.status || 500).json({
-      error: extrairMensagemErro(error),
-      details: error.response?.data || null,
-    });
-  }
-});
-
-app.post('/criar-assinatura', async (req, res) => {
-  const { customerId, diaVencimento, metodoPagamento, creditCard, creditCardHolderInfo } = req.body;
-  const dia = Number(diaVencimento);
-
-  if (!customerId) {
-    res.status(400).json({
-      error: 'Informe customerId',
-    });
-    return;
-  }
-
-  if (![5, 20].includes(dia)) {
-    res.status(400).json({
-      error: 'Informe diaVencimento igual a 5 ou 20',
-    });
-    return;
-  }
-
-  const nextDueDate = montarProximaDataVencimento(dia);
-
-  try {
-    const billingType = metodoPagamento === 'pix' ? 'PIX' : 'CREDIT_CARD';
-    if (billingType === 'PIX') {
-      const paymentResponse = await asaas.post('/payments', {
-        customer: customerId,
-        billingType: 'PIX',
-        value: 5,
-        dueDate: nextDueDate,
-      });
-
-      const pixResponse = await asaas.get(`/payments/${paymentResponse.data.id}/pixQrCode`);
-
-      res.status(201).json({
-        payment: paymentResponse.data,
-        pixQrCode: {
-          ...pixResponse.data,
-          imageUrl: formatarImagemPix(pixResponse.data?.encodedImage),
-        },
-      });
-      return;
-    }
-
-    const response = await asaas.post('/subscriptions', {
-      customer: customerId,
-      billingType,
-      value: 5,
-      cycle: 'MONTHLY',
-      nextDueDate,
-      creditCard,
-      creditCardHolderInfo,
-      remoteIp: req.ip || req.socket?.remoteAddress || '127.0.0.1',
-    });
-
-    res.status(201).json(response.data);
-  } catch (error) {
-    res.status(error.response?.status || 500).json({
-      error: extrairMensagemErro(error),
-      details: error.response?.data || null,
-    });
-  }
-});
-
 app.post('/webhook', (req, res) => {
   if (req.body?.telefone || req.body?.phone || req.body?.from) {
     handleWhatsappWebhook({
@@ -1627,29 +1193,7 @@ app.post('/webhook', (req, res) => {
     return;
   }
 
-  const evento = String(req.body?.event || '').trim().toUpperCase();
-  const assinaturaAtualizada = atualizarStatusAssinaturaPorEvento(req.body);
-
-  if (evento === 'PAYMENT_RECEIVED' || evento === 'PAYMENT_CONFIRMED') {
-    console.log('pagou');
-  }
-
-  if (evento === 'PAYMENT_OVERDUE') {
-    console.log('atrasado');
-  }
-
-  if (assinaturaAtualizada) {
-    console.log(`[Asaas] Assinatura ${assinaturaAtualizada.id} atualizada para ${assinaturaAtualizada.status}.`);
-  } else {
-    console.log(`[Asaas] Nenhuma assinatura local encontrada para o evento ${evento}.`);
-  }
-
-  res.json({
-    received: true,
-    event: evento,
-    assinaturaId: assinaturaAtualizada?.id || null,
-    status: assinaturaAtualizada?.status || null,
-  });
+  res.status(400).json({ error: 'Evento de WhatsApp invalido.' });
 });
 
 // Mantem as rotas legadas acima e expõe os endpoints novos do backend modular.
@@ -1672,11 +1216,13 @@ app.use((err, req, res, next) => {
 });
 
 require('./database').ready.then(() => {
+  require('./evolutionWebhook').startWorker();
   const server = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });
   server.on('error', (erro) => registrarErroRuntime('serverError', erro));
-}).catch((erro) => {
+}).catch(async (erro) => {
   console.error('Falha ao inicializar o banco de dados:', erro);
   process.exitCode = 1;
+  await require('./database').close();
 });

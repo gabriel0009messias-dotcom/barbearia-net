@@ -1,154 +1,43 @@
-# Barbearia SaaS
+# Salaoflix - sistema de barbearias
 
-Sistema SaaS multi-tenant para barbearias e saloes com:
+O servidor iniciado por `npm start` e pelo Render e `backend/app.js`, com Express, PostgreSQL e as paginas HTML/JavaScript em `painel/`.
 
-- backend oficial em `Node.js + Express`
-- frontend oficial em `React + Vite`
-- banco oficial em `PostgreSQL`
-- autenticacao com `JWT + bcrypt`
-- pagamentos com `Mercado Pago`
-- integracao de WhatsApp via `Evolution API`
+Os arquivos em `backend/src/` e `painel/src/` pertencem a uma base alternativa com PostgreSQL/React. O fluxo de pagamentos documentado aqui usa o servidor atual; nao troque o comando de inicializacao.
 
-## Estado atual
+## Pagamentos
 
-O projeto foi consolidado para a arquitetura oficial sem apagar a base legada.
+O unico provedor de cobranca e Mercado Pago, via Checkout Pro. O cadastro cria uma assinatura pendente; o checkout cobra o valor registrado no banco (R$ 65 para novos cadastros). Uma confirmacao autenticada consulta o pagamento no Mercado Pago antes de liberar 30 dias de acesso. Nao ha debito recorrente automatico: cada renovacao e paga pelo checkout.
 
-Ja esta pronto nesta parte:
+Veja [MERCADO-PAGO.md](MERCADO-PAGO.md) para variaveis do Render, webhook, testes e consultas ao banco.
 
-- `backend/src/server.js` criado e funcionando estruturalmente
-- `GET /api/health`
-- cadastro e login JWT
-- isolamento por `salon_id`
-- CRUDs oficiais de servicos, profissionais, clientes, bloqueios e agendamentos
-- dashboard oficial
-- frontend React + Vite com build validado em 19 de agosto de 2026
-- `render.yaml` atualizado para o monorepo oficial
+## Executar
 
-Ainda depende de configuracao externa para funcionar de ponta a ponta:
+Na pasta backend:
 
-- `DATABASE_URL` de um PostgreSQL ativo
-- `JWT_SECRET`
-- `MERCADO_PAGO_ACCESS_TOKEN`
-- `MERCADO_PAGO_WEBHOOK_SECRET`
-- `EVOLUTION_API_URL`
-- `EVOLUTION_API_KEY`
-- `SUPER_ADMIN_EMAIL`
-- `SUPER_ADMIN_PASSWORD`
-
-## Estrutura principal
-
-```text
-backend/
-  src/
-    app.js
-    server.js
-    config/
-    database/
-    middlewares/
-    repositories/
-    routes/
-    services/
-painel/
-  src/
-  index.html
-  vite.config.mjs
-render.yaml
-```
-
-## Variaveis de ambiente
-
-Use [backend/.env.example](C:/Users/User/Desktop/barbearia/backend/.env.example:1) como base.
-
-Exemplo:
-
-```env
-DATABASE_URL=postgres://user:password@localhost:5432/barbearia
-JWT_SECRET=troque-esta-chave
-MERCADO_PAGO_ACCESS_TOKEN=
-MERCADO_PAGO_WEBHOOK_SECRET=
-EVOLUTION_API_URL=
-EVOLUTION_API_KEY=
-PORT=3000
-FRONTEND_URL=http://localhost:5173
-APP_URL=http://localhost:3000
-SUPER_ADMIN_EMAIL=admin@barbearia.local
-SUPER_ADMIN_PASSWORD=troque-esta-senha
-```
-
-Variaveis opcionais do legado, apenas se voce ainda precisar desses fluxos:
-
-```env
-LEGACY_ADMIN_EMAIL=
-LEGACY_ADMIN_PASSWORD=
-LEGACY_DEMO_EMAIL=
-LEGACY_DEMO_PASSWORD=
-PIX_KEY=
-PIX_KEY_DISPLAY=
-PIX_HOLDER_NAME=
-PIX_CITY=SAO PAULO
-PIX_COPY_PASTE=
-PIX_QR_CODE_IMAGE_URL=/assets/pix-qr-fixo.png
-```
-
-## Execucao local
-
-### Backend
-
-```bash
-cd backend
+```sh
 npm install
-npm run migrate
 npm start
 ```
 
-### Frontend
+Configure DATABASE_URL e abra http://localhost:3000. As migrations PostgreSQL sao aplicadas na inicializacao ou com `npm run migrate`. Consulte [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md) para importar o SQLite local sem altera-lo.
 
-```bash
-cd painel
-npm install
-npm run dev
+Para pagamentos, configure um endereco HTTPS publico em PUBLIC_APP_URL e as credenciais descritas no guia. Sem elas, o servidor inicia, mas nao gera checkout.
+
+## Testes
+
+```sh
+cd backend
+npm test
 ```
 
-### Build de producao do frontend
+Defina TEST_DATABASE_URL para um PostgreSQL exclusivo de testes. Cada suite cria e remove somente seu schema temporario.
 
-```bash
-cd painel
-npm run build
-```
+No PowerShell com scripts bloqueados, use `npm.cmd test`. Os testes usam bancos temporarios e APIs simuladas, sem cobrar ou enviar mensagens reais.
 
-## Endpoints principais
+## Render e persistencia
 
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `GET /api/dashboard`
-- `GET|POST|PUT|DELETE /api/services`
-- `GET|POST|PUT|DELETE /api/professionals`
-- `GET|POST|PUT|DELETE /api/clients`
-- `GET|POST|DELETE /api/blocked-times`
-- `GET|POST|PUT|DELETE /api/appointments`
-- `GET /api/appointments/availability`
-- `GET /api/subscriptions/current`
-- `POST /api/payments/webhook`
-- `GET /api/whatsapp/status`
+O `render.yaml` instala o backend e executa `npm start`, servindo tambem as paginas de `painel/`. Configure DATABASE_URL com a Internal Database URL do PostgreSQL na mesma regiao. Nao e necessario disco persistente no Web Service. O SQLite local foi preservado e serve como origem de importacao. Veja [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md).
 
-## Render
+## WhatsApp
 
-O arquivo [render.yaml](C:/Users/User/Desktop/barbearia/render.yaml:1) agora builda:
-
-1. usa `rootDir: backend`
-2. builda o frontend em `painel`
-3. instala o backend em `backend`
-4. sobe o backend servindo a API e o build do React
-
-## Seguranca
-
-Durante a auditoria foram encontrados segredos reais no legado.
-Essas credenciais devem ser consideradas comprometidas e precisam ser regeneradas antes da producao.
-
-O sistema oficial nao deve usar:
-
-- SQLite como banco final
-- Asaas como gateway final
-- segredos hardcoded em codigo
-- `.env` versionado no GitHub
+O funcionamento do atendimento esta documentado em [WHATSAPP-AGENDAMENTO.md](WHATSAPP-AGENDAMENTO.md). Suas configuracoes e credenciais sao independentes das de pagamento.

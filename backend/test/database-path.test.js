@@ -1,50 +1,22 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const { connectionConfig } = require('../database/config');
 
-const source = fs.readFileSync(path.join(__dirname, '../database.js'), 'utf8');
-
-function iniciarBanco({ errorCode, persistentAvailable = false }) {
-  const root = path.resolve(__dirname, '..');
-  const configuredDirectory = path.resolve(__dirname, 'render-volume');
-  const configuredFile = path.join(configuredDirectory, 'barbearia.db');
-  const warnings = [];
-  let opened;
-  const fakeFs = {
-    existsSync: (file) => file === configuredDirectory ? persistentAvailable : true,
-    mkdirSync: () => { throw Object.assign(new Error('directory unavailable'), { code: errorCode }); },
-    copyFileSync: () => assert.fail('Nao deve substituir um banco existente'),
-  };
-  const sqlite = { verbose: () => ({ Database: class {
-    constructor(file) { opened = file; }
-    serialize() {} // Nao abre nem altera bancos reais neste teste de inicializacao.
-  } }) };
-  vm.runInNewContext(source, {
-    require: (name) => name === 'fs' ? fakeFs : name === 'sqlite3' ? sqlite : require(name),
-    process: { env: { RENDER: 'true', DATABASE_PATH: configuredFile } },
-    __dirname: root,
-    module: { exports: {} },
-    console: { log() {}, warn: (message) => warnings.push(message) },
-  });
-  return { opened, warnings, configuredFile, legacyFile: path.join(root, 'barbearia.db') };
-}
-
-test('Render sem disco: erros de permissao preservam o fallback legado e avisam sobre persistencia', () => {
-  for (const errorCode of ['EACCES', 'EPERM', 'EROFS']) {
-    const result = iniciarBanco({ errorCode });
-    assert.equal(result.opened, result.legacyFile);
-    assert.ok(result.warnings.some((message) => message.includes('temporario')));
-  }
+test('PostgreSQL obrigatorio sem fallback local, inclusive no Render', () => {
+  for (const env of [{}, { RENDER: 'true' }, { NODE_ENV: 'production' }]) assert.throws(() => connectionConfig(env), /DATABASE_URL/);
 });
-
-test('Render com disco: continua usando o banco configurado', () => {
-  const result = iniciarBanco({ persistentAvailable: true });
-  assert.equal(result.opened, result.configuredFile);
-  assert.deepEqual(result.warnings, []);
+test('URL interna do Render usa rede privada; externa usa TLS validado', () => {
+  const internal = connectionConfig({ DATABASE_URL: 'postgresql://user:pass@dpg-example/db' });
+  assert.equal(internal.ssl, false);
+  const external = connectionConfig({ DATABASE_URL: 'postgresql://user:pass@dpg-example.oregon-postgres.render.com/db' });
+  assert.deepEqual(external.ssl, { rejectUnauthorized: true });
 });
-
-test('erro inesperado de armazenamento nao fica escondido pelo fallback', () => {
-  assert.throws(() => iniciarBanco({ errorCode: 'EIO' }), { code: 'EIO' });
+test('parametros SSL explicitos sao respeitados sem sobrescrever configuracao', () => {
+  const result = connectionConfig({ DATABASE_URL: 'postgresql://user:pass@host/db?sslmode=verify-full' });
+  assert.equal(result.ssl, undefined);
+  assert.throws(() => connectionConfig({ DATABASE_URL: 'postgresql://user:pass@x.render.com/db?sslmode=disable' }), /SSL/);
+});
+test('identificadores e protocolo invalidos sao rejeitados', () => {
+  assert.throws(() => connectionConfig({ DATABASE_URL: 'sqlite:file' }), /PostgreSQL/);
+  assert.throws(() => connectionConfig({ DATABASE_URL: 'postgresql://localhost/db', DATABASE_SCHEMA: 'public;DROP TABLE x' }), /SCHEMA/);
 });

@@ -328,7 +328,9 @@ async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES
     timeoutMs: 5000,
     method: 'POST',
     body: JSON.stringify({
-      webhook: { enabled: true, url, byEvents: false, base64: false, events },
+      webhook: { enabled: true, url, byEvents: false, base64: false, events,
+        ...(process.env.EVOLUTION_WEBHOOK_SECRET ? { headers: { 'x-webhook-secret': process.env.EVOLUTION_WEBHOOK_SECRET } } : {}),
+      },
     }),
     retryAttempts: 1,
   });
@@ -339,14 +341,9 @@ async function enviarTextoInstancia(instanceName, number, text) {
     method: 'POST',
     body: JSON.stringify({
       number,
-      textMessage: {
-        text,
-      },
-      options: {
-        delay: 300,
-        presence: 'composing',
-        linkPreview: false,
-      },
+      text,
+      delay: 300,
+      linkPreview: false,
     }),
   });
 }

@@ -402,38 +402,29 @@ function obterPixPagamentoAtual(estado = {}) {
 }
 
 function preencherPagamentoPendente(estado = {}) {
-  const pix = obterPixPagamentoAtual(estado);
-
   paymentReminderText.textContent = estado?.mensagem || 'Pagamento pendente.';
-  paymentPixValor.textContent = `Valor: ${currency.format(Number(pix?.valor || valorMensalAtual || 0))}`;
-  paymentPixCopiaCola.textContent = pix?.copiaCola ? `Pix copia e cola: ${pix.copiaCola}` : 'Codigo Pix indisponivel.';
-  paymentPixInstruction.textContent = pix?.instrucoes || 'Apos o pagamento, envie o comprovante no WhatsApp.';
-  paymentWhatsappButton.href = pix?.whatsappLink || '#';
-
-  if (pix?.qrCodeImageUrl) {
-    paymentPixQrImage.hidden = false;
-    paymentPixQrImage.src = pix.qrCodeImageUrl;
-  } else {
-    paymentPixQrImage.hidden = true;
-    paymentPixQrImage.removeAttribute('src');
-  }
-
-  blockedPixCard.hidden = !pix?.copiaCola;
-  blockedPixValorLabel.textContent = `Valor: ${currency.format(Number(pix?.valor || valorMensalAtual || 0))}`;
-  blockedPixFavorecidoLabel.textContent = `Favorecido: ${pix?.favorecido || '--'}`;
-  blockedPixChaveLabel.textContent = `Chave Pix: ${pix?.chaveExibicao || pix?.chave || '--'}`;
-  blockedPixCopiaColaLabel.textContent = pix?.copiaCola ? `Pix copia e cola: ${pix.copiaCola}` : 'Pix copia e cola indisponivel.';
-  blockedWhatsappButton.href = pix?.whatsappLink || '#';
-
-  if (pix?.qrCodeImageUrl) {
-    blockedPixQrPanel.hidden = false;
-    blockedPixQrImage.hidden = false;
-    blockedPixQrImage.src = pix.qrCodeImageUrl;
-  } else {
-    blockedPixQrPanel.hidden = true;
-    blockedPixQrImage.hidden = true;
-    blockedPixQrImage.removeAttribute('src');
-  }
+  paymentPixValor.textContent = `Plano Profissional - ${currency.format(Number(estado.valor || valorMensalAtual))} por 30 dias`;
+  paymentPixCopiaCola.textContent = '';
+  paymentPixInstruction.textContent = 'Pague pelo Mercado Pago. A confirmacao libera seu acesso automaticamente.';
+  paymentPixQrImage.hidden = true;
+  copyPixButton.hidden = true;
+  blockedPixCard.hidden = true;
+  paymentWhatsappButton.textContent = 'Pagar com Mercado Pago';
+  paymentWhatsappButton.href = '/';
+  paymentWhatsappButton.removeAttribute('target');
+  paymentWhatsappButton.onclick = async event => {
+    event.preventDefault();
+    const id = estado.id || assinaturaAtualId;
+    if (!id) { window.location.assign('/'); return; }
+    try {
+      const checkout = await buscarJson(`/api/publico/assinaturas/${id}/checkout`, { method: 'POST' });
+      localStorage.setItem('barbearia_pending_signup', JSON.stringify({ assinaturaId: id }));
+      window.location.assign(checkout.checkoutUrl);
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) window.location.assign('/');
+      else paymentReminderText.textContent = error.message;
+    }
+  };
 }
 
 function mostrarEstadoPagamento(estado = {}) {
@@ -445,49 +436,14 @@ function mostrarEstadoPagamento(estado = {}) {
   setActiveSection('atualizacao');
 }
 
-async function atualizarPixBloqueado() {
-  const mostrarPix = Boolean(pixConfig?.chave);
-  blockedPixCard.hidden = !mostrarPix;
-
-  if (!mostrarPix) {
-    blockedPixQrPanel.hidden = true;
-    blockedPixQrImage.hidden = true;
-    blockedPixQrImage.removeAttribute('src');
-    return;
-  }
-
-  blockedPixFavorecidoLabel.textContent = `Favorecido: ${pixConfig.favorecido}`;
-  blockedPixChaveLabel.textContent = `Chave Pix: ${pixConfig.chave}`;
-
-  try {
-    const pagamentoPix = await buscarJson('/api/publico/pix/qrcode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        valor: valorMensalAtual,
-        descricao: 'Assinatura mensal Salãoflix',
-      }),
-    });
-
-    blockedPixQrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
-      pagamentoPix.payload
-    )}`;
-    blockedPixQrPanel.hidden = false;
-    blockedPixQrImage.hidden = false;
-  } catch (error) {
-    console.error(error);
-    blockedPixQrPanel.hidden = true;
-    blockedPixQrImage.hidden = true;
-  }
-}
-
 async function mostrarPainelBloqueado(mensagem) {
   painelLiberadoMessage.hidden = true;
   paymentReminderCard.hidden = true;
   painelBloqueadoMessage.hidden = false;
   blockedMessageText.textContent = mensagem;
   setActiveSection('atualizacao');
-  await atualizarPixBloqueado();
+  preencherPagamentoPendente({ mensagem });
+  paymentReminderCard.hidden = false;
 }
 
 function atualizarLembretePagamento(assinatura) {
@@ -499,6 +455,8 @@ function atualizarLembretePagamento(assinatura) {
   }
 
   preencherPagamentoPendente({
+    id: assinatura.id,
+    valor: assinatura.valor_mensal,
     mensagem: lembrete.mensagem,
     pix: assinatura.pix,
   });
