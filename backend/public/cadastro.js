@@ -10,14 +10,35 @@ const gatewayCheckoutButton = document.getElementById('gatewayCheckoutButton');
 const pixQrCard = document.getElementById('pixQrCard');
 const pixQrImage = document.getElementById('pixQrImage');
 const pixCopiaColaLabel = document.getElementById('pixCopiaColaLabel');
-const cartaoDadosCard = document.getElementById('cartaoDadosCard');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const assinaturaForm = document.getElementById('assinaturaForm');
 const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
-let authToken = localStorage.getItem(TOKEN_STORAGE_KEY) || null;
+const submitButton = assinaturaForm.querySelector('button[type="submit"]');
+const cadastroConfigMessage = document.getElementById('cadastroConfigMessage');
+let authToken = lerStorage(TOKEN_STORAGE_KEY);
+let enviando = false;
 let monitorLiberacao = null;
 let checkoutUrl = null;
+
+function lerStorage(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function gravarStorage(key, value) {
+  try {
+    if (value == null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch { /* O cadastro tambem funciona quando o navegador bloqueia o armazenamento. */ }
+}
+
+function mostrarMensagem(message, focus = false) {
+  assinaturaFormMessage.textContent = message;
+  if (focus) {
+    assinaturaFormMessage.focus();
+    assinaturaFormMessage.scrollIntoView({ block: 'center' });
+  }
+}
 
 function getHeaders(extra = {}) {
   const headers = { ...extra };
@@ -30,21 +51,31 @@ function getHeaders(extra = {}) {
 }
 
 async function buscarJson(url, options = {}) {
-  const response = await fetch(url, {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(url, {
     ...options,
     headers: getHeaders(options.headers || {}),
-  });
-
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const erro = new Error(payload?.error || `Falha ao carregar ${url}`);
-    erro.status = response.status;
-    erro.details = payload;
-    throw erro;
+      signal: controller.signal,
+    });
+    let payload;
+    try { payload = await response.json(); } catch {
+      throw new Error(`O servidor retornou uma resposta invalida (HTTP ${response.status}). Tente novamente.`);
+    }
+    if (!response.ok) {
+      const message = typeof payload?.error === 'string' ? payload.error : 'Nao foi possivel concluir a solicitacao.';
+      throw new Error(`${message} (HTTP ${response.status})`);
+    }
+    if (!payload || typeof payload !== 'object') throw new Error('Resposta invalida do servidor. Tente novamente.');
+    return payload;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('O servidor demorou para responder. Tente novamente em instantes.');
+    if (error instanceof TypeError) throw new Error('Nao foi possivel conectar ao servidor. Verifique sua conexao e tente novamente.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-
-  return payload;
 }
 
 function apenasDigitos(valor = '') {
@@ -59,16 +90,16 @@ function limparMonitorLiberacao() {
 }
 
 function salvarCadastroPendente(payload) {
-  localStorage.setItem(PENDING_SIGNUP_STORAGE_KEY, JSON.stringify(payload));
+  gravarStorage(PENDING_SIGNUP_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function limparCadastroPendente() {
-  localStorage.removeItem(PENDING_SIGNUP_STORAGE_KEY);
+  gravarStorage(PENDING_SIGNUP_STORAGE_KEY, null);
 }
 
 function carregarCadastroPendente() {
   try {
-    return JSON.parse(localStorage.getItem(PENDING_SIGNUP_STORAGE_KEY) || 'null');
+    return JSON.parse(lerStorage(PENDING_SIGNUP_STORAGE_KEY) || 'null');
   } catch (error) {
     return null;
   }
@@ -82,7 +113,6 @@ function renderizarCheckout(url = null) {
   gatewayMethodLabel.textContent = 'Plano Profissional - R$ 65,00 por 30 dias';
   gatewayHelpLabel.textContent = 'Pague no Mercado Pago. O acesso sera liberado apos a confirmacao do pagamento.';
   pixQrCard.hidden = true;
-  cartaoDadosCard.hidden = true;
 }
 
 gatewayCheckoutButton.addEventListener('click', () => {
@@ -101,7 +131,7 @@ async function fazerLoginAutomatico(email, senha) {
 
   authToken = payload.token;
   limparCadastroPendente();
-  localStorage.setItem(TOKEN_STORAGE_KEY, payload.token);
+  gravarStorage(TOKEN_STORAGE_KEY, payload.token);
   window.location.href = '/barbeiro.html';
 }
 
@@ -124,7 +154,7 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
         }
       }
     } catch (error) {
-      console.error(error);
+      mostrarMensagem(`Nao foi possivel verificar a liberacao: ${error.message}`);
     }
   }, 5000);
 }
@@ -134,13 +164,15 @@ async function carregarConfiguracao() {
     const config = await buscarJson('/api/publico/assinatura-config');
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     metodoPagamentoInput.innerHTML = '<option value="mercado_pago">Mercado Pago</option>';
-    diaVencimentoInput.innerHTML = (config.diasVencimento || [])
+    if (!Array.isArray(config.diasVencimento) || !config.diasVencimento.length) throw new Error('Configuracao de vencimento indisponivel.');
+    diaVencimentoInput.innerHTML = config.diasVencimento
       .map((dia) => `<option value="${dia}">Dia ${dia}</option>`)
       .join('');
-    renderizarCheckout();
+    if (config.gateway?.enabled === false) {
+      cadastroConfigMessage.textContent = 'O pagamento esta temporariamente indisponivel. O cadastro pode ser salvo, mas o responsavel pelo sistema precisa configurar o Mercado Pago para liberar o checkout.';
+    }
   } catch (error) {
-    console.error(error);
-    assinaturaFormMessage.textContent = 'Nao consegui carregar a configuracao do cadastro.';
+    cadastroConfigMessage.textContent = `Nao consegui carregar a configuracao do cadastro. ${error.message}`;
   }
 }
 
@@ -150,7 +182,15 @@ metodoPagamentoInput?.addEventListener('change', () => {
 
 assinaturaForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (enviando) return;
+  enviando = true;
+  submitButton.disabled = true;
+  submitButton.textContent = 'Cadastrando...';
+  assinaturaForm.setAttribute('aria-busy', 'true');
   limparMonitorLiberacao();
+  renderizarCheckout();
+  mostrarMensagem('Salvando seu cadastro...');
+  let cadastroSalvo = false;
 
   try {
     const emailCadastro = document.getElementById('emailAssinaturaInput').value.trim();
@@ -172,20 +212,37 @@ assinaturaForm.addEventListener('submit', async (event) => {
       }),
     });
 
+    if (!Number.isSafeInteger(resposta.assinatura?.id) || resposta.assinatura.id <= 0) {
+      throw new Error('O servidor nao confirmou o cadastro. Tente novamente.');
+    }
+    cadastroSalvo = true;
     authToken = null;
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
-    iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
+    gravarStorage(TOKEN_STORAGE_KEY, null);
+    salvarCadastroPendente({ assinaturaId: resposta.assinatura.id, email: emailCadastro });
+    mostrarMensagem('Cadastro salvo. Abrindo o pagamento no Mercado Pago...');
     const checkout = await buscarJson(`/api/publico/assinaturas/${resposta.assinatura.id}/checkout`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ senha: senhaCadastro }),
     });
+    if (typeof checkout.checkoutUrl !== 'string' || !/^https:\/\/([a-z0-9-]+\.)*mercadopago\.(com|com\.br)\//i.test(checkout.checkoutUrl)) {
+      throw new Error('O Mercado Pago nao retornou uma URL de pagamento valida. Tente novamente.');
+    }
     renderizarCheckout(checkout.checkoutUrl);
-    assinaturaFormMessage.textContent =
-      'Cadastro concluido. Clique em Pagar com Mercado Pago.';
+    iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
+    mostrarMensagem('Redirecionando ao Mercado Pago. Se nao abrir, clique em Pagar com Mercado Pago.', true);
+    window.location.assign(checkout.checkoutUrl);
   } catch (error) {
-    console.error(error);
-    assinaturaFormMessage.textContent = error.message;
+    mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo, mas nao foi possivel abrir o pagamento. ' : ''}${error.message}`, true);
+  } finally {
+    enviando = false;
+    submitButton.disabled = false;
+    submitButton.textContent = 'Cadastrar assinatura';
+    assinaturaForm.removeAttribute('aria-busy');
   }
 });
+
+assinaturaForm.addEventListener('invalid', () => {
+  mostrarMensagem('Confira os campos obrigatorios, o email e a senha de pelo menos 4 caracteres.');
+}, true);
 
 carregarConfiguracao();
 

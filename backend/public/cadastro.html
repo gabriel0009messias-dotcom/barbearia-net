@@ -39,6 +39,7 @@
               <span class="badge">R$ 65,00 / 30 dias</span>
             </div>
 
+            <p id="cadastroConfigMessage" class="form-message light-message" role="status"></p>
             <form id="assinaturaForm" class="form-grid">
               <label>
                 Nome do salão
@@ -75,7 +76,7 @@
 
               <label>
                 Forma de pagamento
-                <select id="metodoPagamentoInput" required></select>
+                <select id="metodoPagamentoInput" required><option value="mercado_pago">Mercado Pago</option></select>
               </label>
 
               <div id="gatewayInfoCard" class="support-note" hidden>
@@ -91,7 +92,7 @@
 
               <label>
                 Dia do vencimento
-                <select id="diaVencimentoInput" required></select>
+                <select id="diaVencimentoInput" required><option value="5">Dia 5</option><option value="12">Dia 12</option><option value="24">Dia 24</option></select>
               </label>
 
               <label>
@@ -99,67 +100,16 @@
                 <input id="whatsappNumeroInput" type="text" required />
               </label>
 
-              <div id="cartaoDadosCard" class="panel-card embedded-card">
-                <div class="card-header compact">
-                  <div>
-                    <p class="eyebrow">Cartao</p>
-                    <h3>Dados do pagamento</h3>
-                  </div>
-                </div>
-
-                <div class="schedule-grid">
-                  <label>
-                    Nome no cartao
-                    <input id="cartaoNomeTitularInput" type="text" required />
-                  </label>
-
-                  <label>
-                    Numero do cartao
-                    <input id="cartaoNumeroInput" type="text" inputmode="numeric" required />
-                  </label>
-
-                  <label>
-                    Mes de validade
-                    <input id="cartaoMesExpiracaoInput" type="text" inputmode="numeric" maxlength="2" placeholder="MM" required />
-                  </label>
-
-                  <label>
-                    Ano de validade
-                    <input id="cartaoAnoExpiracaoInput" type="text" inputmode="numeric" maxlength="4" placeholder="AAAA" required />
-                  </label>
-
-                  <label>
-                    CVV
-                    <input id="cartaoCvvInput" type="text" inputmode="numeric" maxlength="4" required />
-                  </label>
-
-                  <label>
-                    CEP
-                    <input id="cartaoCepInput" type="text" inputmode="numeric" required />
-                  </label>
-
-                  <label>
-                    Numero do endereco
-                    <input id="cartaoNumeroEnderecoInput" type="text" required />
-                  </label>
-
-                  <label>
-                    Complemento
-                    <input id="cartaoComplementoInput" type="text" />
-                  </label>
-                </div>
-              </div>
-
               <button type="submit" class="landing-login-button">Cadastrar assinatura</button>
             </form>
 
-            <p id="assinaturaFormMessage" class="form-message light-message"></p>
+            <p id="assinaturaFormMessage" class="form-message light-message" role="alert" aria-live="assertive" tabindex="-1"></p>
           </article>
 
         </div>
       </div>
     </section>
 
-    <script src="./cadastro.js?v=mp-checkout-1"></script>
+    <script src="./cadastro.js?v=mp-signup-2"></script>
   </body>
 </html>

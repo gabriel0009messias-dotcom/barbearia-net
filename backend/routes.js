@@ -2008,7 +2008,7 @@ router.post('/publico/assinaturas/:id/checkout', async (req, res) => {
       provider: 'mercado_pago',
     });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.publicMessage || 'Nao foi possivel gerar o pagamento. Tente novamente.' });
   }
 });
 
@@ -2440,7 +2440,7 @@ router.post('/publico/assinaturas', async (req, res) => {
       assinatura: assinaturaCriada,
     });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.publicMessage || 'Nao foi possivel salvar o cadastro. Tente novamente.' });
   }
 });
 

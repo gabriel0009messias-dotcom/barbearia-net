@@ -51,12 +51,22 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
   const signup = { barbeariaNome: 'Teste MP', responsavelNome: 'Teste', telefone: '11999998888', email: 'buyer@example.test', senha: 'test-password', metodoPagamento: 'mercado_pago', diaVencimento: 5, servicos: [{ nome: 'Corte', preco: 30 }] };
   let id;
   await t.test('cadastro fica pendente, nao aceita Pix manual e nao depende de credenciais', async () => {
+    process.env.MERCADO_PAGO_ACCESS_TOKEN = '';
+    process.env.MERCADO_PAGO_WEBHOOK_SECRET = '';
     assert.equal((await post('/api/publico/assinaturas', { ...signup, metodoPagamento: 'pix' })).status, 400);
     const response = await post('/api/publico/assinaturas', signup);
     assert.equal(response.status, 201, await response.clone().text());
     id = (await response.json()).assinatura.id;
     assert.equal((await db.getAsync("SELECT status FROM assinaturas WHERE id = $1", [id])).status, 'pendente');
+    const checkoutResponse = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha });
+    assert.equal(checkoutResponse.status, 503);
+    assert.match((await checkoutResponse.json()).error, /Configure as credenciais/);
+    assert.equal(calls, 0);
+    assert.equal((await db.getAsync('SELECT status FROM assinaturas WHERE id = $1', [id])).status, 'pendente');
     assert.equal((await post('/api/publico/assinaturas', signup)).status, 200);
+    assert.equal((await db.getAsync('SELECT count(*) AS total FROM assinaturas WHERE email = $1', [signup.email])).total, 1);
+    process.env.MERCADO_PAGO_ACCESS_TOKEN = 'fake-test-token';
+    process.env.MERCADO_PAGO_WEBHOOK_SECRET = 'fake-webhook-secret';
   });
   await t.test('checkout autenticado, preco do banco, referencia unica e reutilizacao', async () => {
     assert.equal((await post(`/api/publico/assinaturas/${id}/checkout`, {})).status, 401);
