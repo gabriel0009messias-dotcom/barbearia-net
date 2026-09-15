@@ -49,11 +49,31 @@ function transaction(work) {
   return db.transaction(connection => work({ run: connection.runAsync, get: connection.getAsync }));
 }
 
+function normalizeEmail(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+async function sellerEmail() {
+  let seller;
+  try {
+    seller = await request('/users/me');
+  } catch {
+    throw fail('Nao foi possivel verificar a conta vendedora do Mercado Pago. Tente novamente mais tarde.');
+  }
+  const email = normalizeEmail(seller?.email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw fail('Nao foi possivel identificar o e-mail da conta vendedora do Mercado Pago. Entre em contato com o suporte.');
+  }
+  return email;
+}
+
 async function checkout(subscription) {
   if (!configured()) throw fail('Configure as credenciais e o webhook do Mercado Pago no servidor.');
   const appUrl = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
   if (!/^https:\/\/[^/]+/.test(appUrl)) throw fail('Configure PUBLIC_APP_URL com a URL HTTPS do sistema.');
   const live = mode() === 'production';
+  // Identify the current credential owner before taking a database lock or reserving an order.
+  const collectorEmail = await sellerEmail();
   // Read the current contract and reserve the order under the same row lock.
   // A migration cannot reprice the row between this read and recording payment intent.
   const state = await transaction(async ({ run, get }) => {
@@ -62,7 +82,11 @@ async function checkout(subscription) {
     const plan = subscriptionPlan(stored);
     const amount = plan.amountCents;
     if (!Number.isSafeInteger(amount) || amount <= 0) throw fail('Valor do plano invalido.', 400);
-    if (!stored.email) throw fail('Cadastre um email para pagar.', 400);
+    const buyerEmail = normalizeEmail(stored.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerEmail)) throw fail('Cadastre um e-mail valido para pagar.', 400);
+    if (buyerEmail === collectorEmail) {
+      throw fail('Vendedor e comprador precisam ser diferentes. Este cadastro usa o e-mail da conta vendedora do Mercado Pago. Para testar uma compra, use um cadastro de cliente com outro e-mail e uma conta compradora diferente.', 409);
+    }
     if (String(stored.status).trim().toLowerCase() === 'pendente' &&
         String(stored.status_assinatura).trim().toLowerCase() === 'pendente') {
       const conflicting = await get(`SELECT reference FROM mercado_pago_orders
@@ -72,12 +96,12 @@ async function checkout(subscription) {
     const existing = await get(`SELECT * FROM mercado_pago_orders WHERE assinatura_id = $1
       AND amount_cents = $2 AND live_mode = $3 AND credited_payment_id IS NULL AND checkout_url IS NOT NULL
       AND expires_at > $4 ORDER BY created_at DESC LIMIT 1`, [stored.id, amount, live ? 1 : 0, new Date().toISOString()]);
-    if (existing) return { existing, plan, stored };
+    if (existing) return { existing, plan, stored, buyerEmail };
     const reference = crypto.randomUUID();
     const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     await run(`INSERT INTO mercado_pago_orders (reference, assinatura_id, amount_cents, live_mode, expires_at)
       VALUES ($1, $2, $3, $4, $5)`, [reference, stored.id, amount, live ? 1 : 0, expiry]);
-    return { reference, expiry, plan, stored };
+    return { reference, expiry, plan, stored, buyerEmail };
   });
   const { plan, existing, reference, expiry } = state;
   subscription = state.stored;
@@ -85,7 +109,7 @@ async function checkout(subscription) {
   const backUrl = `${appUrl}/cadastro.html?assinatura=${subscription.id}&gateway=mercado_pago`;
   const preference = await request('/checkout/preferences', { body: {
     items: [{ id: plan.code, title: `${plan.name} - ${plan.durationDays} dias`, quantity: 1, currency_id: plan.currency, unit_price: plan.amountCents / 100 }],
-    payer: { email: subscription.email },
+    payer: { email: state.buyerEmail },
     external_reference: reference,
     notification_url: `${appUrl}/api/mercadopago/webhook`,
     back_urls: { success: backUrl, pending: backUrl, failure: backUrl },

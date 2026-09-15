@@ -28,6 +28,9 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
   let remotePayment;
   let failRemote = false;
   let calls = 0;
+  let sellerEmail = 'seller@example.test';
+  let sellerFailure = null;
+  let preferenceCalls = 0;
   global.fetch = async (url, options) => {
     if (!String(url).startsWith('https://api.mercadopago.com/')) return nativeFetch(url, options);
     calls++;
@@ -39,13 +42,17 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     }
     if (String(url).endsWith('/users/me')) {
       assert.equal(options.method, 'GET');
-      return Response.json({ id: 777, email: 'buyer@example.test', tags: ['test_user'], site_id: 'MLB', status: { mercadopago_tc_accepted: true } });
+      if (sellerFailure === 'network') throw new Error('fake-test-token private provider error');
+      if (sellerFailure === 'http') return Response.json({ error: 'fake-test-token' }, { status: 403 });
+      if (sellerFailure === 'invalid-json') return new Response('not-json');
+      return Response.json({ id: 777, email: sellerEmail, tags: ['test_user'], site_id: 'MLB', status: { mercadopago_tc_accepted: true } });
     }
     if (String(url).endsWith('/v1/payment_methods')) {
       assert.equal(options.method, 'GET');
       return Response.json([{ id: 'pix', status: 'active', payment_type_id: 'bank_transfer' }]);
     }
     if (String(url).endsWith('/checkout/preferences')) {
+      preferenceCalls++;
       preference = JSON.parse(options.body);
       return Response.json({ id: crypto.randomUUID(), init_point: 'https://www.mercadopago.com.br/checkout/v1/redirect?prod=1', sandbox_init_point: 'https://sandbox.mercadopago.com.br/checkout/v1/redirect?test=1' });
     }
@@ -81,9 +88,45 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     process.env.MERCADO_PAGO_ACCESS_TOKEN = 'fake-test-token';
     process.env.MERCADO_PAGO_WEBHOOK_SECRET = 'fake-webhook-secret';
   });
+  await t.test('comprador igual ao vendedor e falha na identificacao nao criam pedido ou preferencia', async () => {
+    const snapshot = async () => ({
+      subscription: await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [id]),
+      orders: await db.allAsync('SELECT * FROM mercado_pago_orders ORDER BY reference'),
+    });
+    const before = await snapshot();
+    const count = preferenceCalls;
+    try {
+      for (const email of [signup.email, ' BUYER@EXAMPLE.TEST ']) {
+        sellerEmail = email;
+        const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha, email: 'different@example.test', payer: { email: 'different@example.test' } });
+        assert.equal(response.status, 409);
+        const body = await response.json();
+        assert.match(body.error, /Vendedor e comprador precisam ser diferentes/);
+        assert.equal(body.checkoutUrl, undefined);
+        assert.deepEqual(await snapshot(), before);
+      }
+      for (const failure of ['http', 'network', 'invalid-json']) {
+        sellerFailure = failure;
+        const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha });
+        assert.equal(response.status, 503);
+        assert.doesNotMatch(await response.text(), /fake-test-token|private provider/);
+        assert.deepEqual(await snapshot(), before);
+      }
+      sellerFailure = null;
+      for (const email of [undefined, '', 'invalid', 123]) {
+        sellerEmail = email;
+        const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha });
+        assert.equal(response.status, 503);
+        assert.deepEqual(await snapshot(), before);
+      }
+      assert.equal(preferenceCalls, count);
+    } finally { sellerEmail = 'seller@example.test'; sellerFailure = null; }
+  });
   await t.test('checkout autenticado, preco do banco, referencia unica e reutilizacao', async () => {
     assert.equal((await post(`/api/publico/assinaturas/${id}/checkout`, {})).status, 401);
-    const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha, valor: 0.01 });
+    await db.runAsync('UPDATE assinaturas SET email=$1 WHERE id=$2', [' Buyer@Example.Test ', id]);
+    const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha, valor: 0.01, email: sellerEmail, payer: { email: sellerEmail } });
+    await db.runAsync('UPDATE assinaturas SET email=$1 WHERE id=$2', [signup.email, id]);
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.match(result.checkoutUrl, /^https:\/\/sandbox.mercadopago/);
@@ -101,10 +144,22 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     assert.equal(result.plan.durationDays, 30);
     assert.equal(preference.notification_url, 'https://example.test/api/mercadopago/webhook');
     assert.ok(preference.external_reference);
-    const count = calls;
+    const count = preferenceCalls;
     assert.equal((await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha })).status, 200);
-    assert.equal(calls, count);
+    assert.equal(preferenceCalls, count);
     assert.equal((await post('/api/barbeiro/login', { identificador: signup.email, senha: signup.senha })).status, 403);
+  });
+  await t.test('link existente tambem e bloqueado quando o vendedor passa a coincidir', async () => {
+    const before = await db.allAsync('SELECT * FROM mercado_pago_orders ORDER BY reference');
+    const count = preferenceCalls;
+    sellerEmail = signup.email;
+    try {
+      const response = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha });
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).checkoutUrl, undefined);
+      assert.deepEqual(await db.allAsync('SELECT * FROM mercado_pago_orders ORDER BY reference'), before);
+      assert.equal(preferenceCalls, count);
+    } finally { sellerEmail = 'seller@example.test'; }
   });
   await t.test('diagnostico exige admin, usa apenas GET e nao altera banco nem expoe segredos', async () => {
     const order = await db.getAsync('SELECT * FROM mercado_pago_orders WHERE assinatura_id=$1', [id]);
@@ -122,8 +177,8 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     assert.equal(response.headers.get('cache-control'), 'no-store');
     const report = await response.json();
     assert.equal(report.checks.collectorMatchesCredential, true);
-    assert.equal(report.checks.payerMatchesSeller, true);
-    assert.equal(report.checks.subscriptionMatchesSeller, true);
+    assert.equal(report.checks.payerMatchesSeller, false);
+    assert.equal(report.checks.subscriptionMatchesSeller, false);
     assert.equal(report.checks.sellerIsTestUser, true);
     assert.equal(report.checks.referenceMatches, true);
     assert.equal(report.webhookConfigured, true);

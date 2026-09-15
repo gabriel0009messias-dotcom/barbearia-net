@@ -18,6 +18,10 @@ test('cadastro novo nao assume contratos existentes', async t => {
   const nativeFetch = global.fetch;
   let providerCalls = 0;
   global.fetch = async (url, options) => {
+    if (String(url) === 'https://api.mercadopago.com/users/me') {
+      assert.equal(options.method, 'GET');
+      return Response.json({ email: 'seller@example.test' });
+    }
     assert.equal(String(url), 'https://api.mercadopago.com/checkout/preferences');
     providerCalls++;
     assert.equal(JSON.parse(options.body).items[0].unit_price, 65);

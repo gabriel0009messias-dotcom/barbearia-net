@@ -111,6 +111,10 @@ test('preco do plano: migration protege contratos e historico', async t => {
     const nativeFetch = global.fetch;
     const sent = [];
     global.fetch = async (url, options) => {
+      if (String(url) === 'https://api.mercadopago.com/users/me') {
+        assert.equal(options.method, 'GET');
+        return Response.json({ email: 'seller@example.test' });
+      }
       assert.equal(url, 'https://api.mercadopago.com/checkout/preferences');
       assert.equal(options.method, 'POST');
       sent.push(JSON.parse(options.body));

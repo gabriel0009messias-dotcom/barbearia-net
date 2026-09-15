@@ -33,6 +33,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
   app.post('/api/publico/assinaturas/17/checkout', (req, res) => {
     checkoutCalls++;
     if (failure === 'checkout') return res.status(503).json({ error: 'Configure as credenciais e o webhook do Mercado Pago no servidor.' });
+    if (failure === 'same-seller') return res.status(409).json({ error: 'Vendedor e comprador precisam ser diferentes. Este cadastro usa o e-mail da conta vendedora do Mercado Pago. Para testar uma compra, use um cadastro de cliente com outro e-mail e uma conta compradora diferente.' });
     res.json({ checkoutUrl: failure === 'url' ? null : paymentUrl, plan });
   });
   app.get('/api/publico/assinaturas/17/status', (req, res) => res.json({ liberado: false }));
@@ -86,6 +87,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     ['signup', 'HTTP 400'], ['missing', 'HTTP 404'], ['server', 'HTTP 500'],
     ['html', 'HTTP 502'], ['json', 'resposta invalida'],
     ['checkout', 'Cadastro salvo, mas'], ['url', 'URL de pagamento valida'],
+    ['same-seller', 'Vendedor e comprador precisam ser diferentes'],
     ['network', 'Verifique sua conexao'], ['timeout', 'demorou para responder'],
   ]) {
     await t.test(`falha ${scenario} aparece no formulario e permite tentar novamente`, async () => {
@@ -100,7 +102,8 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
           const box = element.getBoundingClientRect();
           return box.height > 0 && box.top >= 0 && box.bottom <= innerHeight;
         }), true);
-        if (!['checkout', 'url'].includes(scenario)) assert.equal(checkoutCalls, priorCheckouts);
+        if (!['checkout', 'url', 'same-seller'].includes(scenario)) assert.equal(checkoutCalls, priorCheckouts);
+        if (scenario === 'same-seller') assert.equal(page.url(), `${base}/cadastro.html`);
         if (scenario === 'existing') {
           assert.equal(page.url(), `${base}/cadastro.html`);
           assert.equal(await page.$eval('#assinaturaExistenteActions', element => element.hidden), false);
