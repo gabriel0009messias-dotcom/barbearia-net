@@ -9,6 +9,7 @@ const adminLoginMessage = document.getElementById('adminLoginMessage');
 const adminResumo = document.getElementById('adminResumo');
 const adminResumoLista = document.getElementById('adminResumoLista');
 const adminAssinaturasBody = document.getElementById('adminAssinaturasBody');
+const adminPendentesBody = document.getElementById('adminPendentesBody');
 const adminTableMessage = document.getElementById('adminTableMessage');
 const adminSuporteInput = document.getElementById('adminSuporteInput');
 const salvarSuporteButton = document.getElementById('salvarSuporteButton');
@@ -84,7 +85,8 @@ function renderResumo(assinaturas) {
   `;
 }
 
-function montarLinhaAssinatura(assinatura) {
+function montarLinhaAssinatura(assinatura, pendente = false) {
+  const adminTableMessage = document.getElementById(pendente ? 'adminPendentesMessage' : 'adminTableMessage');
   const tr = document.createElement('tr');
   const status = ({ ativa: 'ativo', bloqueada: 'bloqueado' })[assinatura.status] || assinatura.status;
   const contato = [assinatura.email, assinatura.telefone].filter(Boolean).join(' / ');
@@ -99,10 +101,21 @@ function montarLinhaAssinatura(assinatura) {
         <option value="bloqueado"${status === 'bloqueado' ? ' selected' : ''}>Bloqueado</option>
       </select>
     </td>
-    <td><button class="table-action danger-button" type="button">Salvar</button> <button class="table-action grant-days" type="button">Liberar dias</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
+    <td><button class="table-action danger-button save-status" type="button">Salvar</button> <button class="table-action grant-days" type="button">Liberar dias</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
   `;
 
-  [assinatura.barbearia_nome, assinatura.responsavel_nome, contato, pagamento].forEach((value, index) => {
+  let values = [assinatura.barbearia_nome, assinatura.responsavel_nome, contato, pagamento];
+  if (pendente) {
+    tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>' +
+      '<td><button class="table-action grant-days" type="button">Liberar acesso manualmente</button> ' +
+      '<button class="table-action danger-button delete-account" type="button">Excluir cadastro</button></td>';
+    const cadastro = new Date(assinatura.created_at);
+    values = [assinatura.barbearia_nome, assinatura.responsavel_nome, assinatura.email,
+      assinatura.whatsapp_numero || assinatura.telefone,
+      assinatura.metodo_pagamento === 'mercado_pago' ? 'Mercado Pago' : assinatura.metodo_pagamento,
+      'Aguardando pagamento', assinatura.created_at && Number.isFinite(cadastro.getTime()) ? cadastro.toLocaleString('pt-BR') : '--'];
+  }
+  values.forEach((value, index) => {
     tr.cells[index].textContent = value || '--';
   });
   if (Date.parse(assinatura.acesso_manual_ate || '') > Date.now()) {
@@ -141,7 +154,7 @@ function montarLinhaAssinatura(assinatura) {
     if (!window.confirm('Tem certeza que deseja excluir esta conta? Esta ação não poderá ser desfeita.')) return;
     deleteButton.disabled = true;
     grantButton.disabled = true;
-    button.disabled = true;
+    if (button) button.disabled = true;
     adminTableMessage.textContent = 'Excluindo conta...';
     try {
       const result = await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
@@ -156,14 +169,14 @@ function montarLinhaAssinatura(assinatura) {
     } finally {
       deleteButton.disabled = false;
       grantButton.disabled = false;
-      button.disabled = false;
+      if (button) button.disabled = false;
     }
   });
   const select = tr.querySelector('select');
-  select.addEventListener('change', () => { select.dataset.alterado = 'true'; });
-  const button = tr.querySelector('button');
+  select?.addEventListener('change', () => { select.dataset.alterado = 'true'; });
+  const button = tr.querySelector('.save-status');
 
-  button.addEventListener('click', async () => {
+  button?.addEventListener('click', async () => {
     if (select.value === 'ativo') {
       if (status === 'ativo') {
         adminTableMessage.textContent = 'Esta conta ja esta ativa. Use Liberar dias para conceder acesso temporario.';
@@ -200,10 +213,11 @@ async function carregarPainelAdmin() {
   if (carregandoAdmin) return;
   carregandoAdmin = true;
   try {
-    const [config, assinaturas] = await Promise.all([
+    const [config, grupos] = await Promise.all([
       buscarJson('/api/admin/assinatura-config'),
-      buscarJson('/api/admin/assinaturas'),
+      buscarJson('/api/admin/assinaturas?incluirPendentes=1'),
     ]);
+    const { assinaturas, pendentes } = grupos;
 
     if (adminSuporteInput.dataset.alterado !== 'true') adminSuporteInput.value = config.suporteNumero || '';
     renderResumo(assinaturas);
@@ -211,12 +225,14 @@ async function carregarPainelAdmin() {
 
     if (!assinaturas.length) {
       adminAssinaturasBody.innerHTML = '<tr><td colspan="6">Nenhuma assinatura com pagamento aprovado ou liberacao manual.</td></tr>';
-      return;
     }
 
     assinaturas.forEach((assinatura) => {
       adminAssinaturasBody.appendChild(montarLinhaAssinatura(assinatura));
     });
+    adminPendentesBody.innerHTML = '';
+    if (!pendentes.length) adminPendentesBody.innerHTML = '<tr><td colspan="8">Nenhum cadastro aguardando pagamento.</td></tr>';
+    pendentes.forEach(assinatura => adminPendentesBody.appendChild(montarLinhaAssinatura(assinatura, true)));
   } finally {
     carregandoAdmin = false;
   }

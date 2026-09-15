@@ -13,7 +13,7 @@ test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por ema
   let grants = 0;
   let listRequests = 0;
   app.get('/api/admin/assinatura-config', (req, res) => res.json({}));
-  app.get('/api/admin/assinaturas', (req, res) => { listRequests++; res.json(rows); });
+  app.get('/api/admin/assinaturas', (req, res) => { listRequests++; res.json({ assinaturas: rows, pendentes: [] }); });
   app.get('/api/admin/assinaturas/por-email', (req, res) => {
     assert.equal(req.headers['x-admin-token'], 'fake-admin-session');
     assert.equal(req.query.email, 'hidden@example.test');
@@ -74,7 +74,7 @@ test('botao Excluir: confirmacao, erro e linha correta', { skip: !executablePath
   let fail = false;
   let grants = 0;
   app.get('/api/admin/assinatura-config', (req, res) => res.json({}));
-  app.get('/api/admin/assinaturas', (req, res) => res.json(rows));
+  app.get('/api/admin/assinaturas', (req, res) => res.json({ assinaturas: rows, pendentes: [] }));
   app.post('/api/admin/assinaturas/:id/liberar-dias', (req, res) => {
     grants++;
     assert.equal(req.headers['x-admin-token'], 'fake-admin-session');

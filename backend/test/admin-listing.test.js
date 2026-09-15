@@ -47,6 +47,22 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     assert.equal(response.status, 200);
     return response.json();
   };
+  const groups = async () => {
+    const response = await request('/admin/assinaturas?incluirPendentes=1', 'GET', undefined, admin);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const result = await response.json();
+    const allIds = [...result.assinaturas, ...result.pendentes].map(row => row.id);
+    assert.equal(new Set(allIds).size, allIds.length, 'cadastro nao aparece nas duas secoes');
+    for (const pending of result.pendentes) {
+      assert.equal(pending.status, 'aguardando_pagamento');
+      assert.match(pending.deleteConfirmationToken, /^[a-f0-9]{64}$/);
+      assert.equal(pending.senha_hash, undefined);
+      assert.equal(pending.senha_salt, undefined);
+      assert.equal(pending.whatsapp_bridge_token, undefined);
+    }
+    return result;
+  };
   const ids = [];
   for (const n of [1, 2, 3, 4]) {
     const response = await request('/publico/assinaturas', 'POST', {
@@ -65,8 +81,18 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
       VALUES ('uncredited-payment','uncredited-order',$1,'approved',6500)`, [ids[3]]);
     const before = await snapshot();
     assert.deepEqual(await list(), []);
+    const separated = await groups();
+    assert.deepEqual(separated.assinaturas, []);
+    assert.deepEqual(separated.pendentes.map(row => row.id).sort(), [...ids].sort());
+    const pending = separated.pendentes.find(row => row.id === ids[0]);
+    assert.equal(pending.barbearia_nome, 'Salao 1');
+    assert.equal(pending.responsavel_nome, 'Teste');
+    assert.equal(pending.email, 'list1@example.test');
+    assert.equal(pending.metodo_pagamento, 'mercado_pago');
+    assert.ok(pending.created_at);
     assert.deepEqual(await snapshot(), before);
     assert.equal((await request('/admin/assinaturas')).status, 401);
+    assert.equal((await request('/admin/assinaturas?incluirPendentes=1')).status, 401);
   });
   await t.test('pedido e checkout criados nao sao pagamento aprovado', async () => {
     const checkout = await request(`/publico/assinaturas/${ids[0]}/checkout`, 'POST', { senha: 'test-password' });
@@ -91,12 +117,17 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
       await notify(status);
       const before = await snapshot();
       assert.deepEqual(await list(), [], status);
+      assert.ok((await groups()).pendentes.some(row => row.id === ids[0]), status);
       assert.deepEqual(await snapshot(), before);
+      const login = await request('/barbeiro/login', 'POST', { identificador: 'list1@example.test', senha: 'test-password' });
+      assert.equal(login.status, 403, status);
     }
   });
   await t.test('webhook approved libera 30 dias e inclui automaticamente sem duplicar', async () => {
     await notify('approved');
     assert.deepEqual((await list()).map(row => row.id), [ids[0]]);
+    assert.ok(!(await groups()).pendentes.some(row => row.id === ids[0]));
+    assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list1@example.test', senha: 'test-password' })).status, 200);
     const row = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [ids[0]]);
     assert.equal(row.proximo_vencimento, '2026-10-15');
     assert.equal(row.bloqueado, 0);
@@ -116,10 +147,14 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     assert.equal((await request('/admin/assinaturas/por-email?email=missing@example.test', 'GET', undefined, admin)).status, 404);
     assert.equal((await request(`/admin/assinaturas/${ids[1]}/liberar-dias`, 'POST', { dias: 1 }, admin)).status, 200);
     assert.deepEqual((await list()).map(row => row.id).sort(), ids.slice(0, 2).sort());
+    assert.ok(!(await groups()).pendentes.some(row => row.id === ids[1]));
+    assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list2@example.test', senha: 'test-password' })).status, 200);
     assert.equal((await db.getAsync('SELECT count(*) AS total FROM mercado_pago_payments WHERE assinatura_id=$1', [ids[1]])).total, 0);
-    // Retain the manually admitted customer for management even after their free period ends.
+    // An expired manual grant without payment returns to pending and cannot grant access.
     await db.runAsync("UPDATE assinaturas SET acesso_manual_ate='2000-01-01T00:00:00Z' WHERE id=$1", [ids[1]]);
-    assert.ok((await list()).some(row => row.id === ids[1]));
+    assert.ok(!(await list()).some(row => row.id === ids[1]));
+    assert.ok((await groups()).pendentes.some(row => row.id === ids[1]));
+    assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list2@example.test', senha: 'test-password' })).status, 403);
   });
   await t.test('cliente pago ativo legado continua visivel sem depender so do status', async () => {
     await db.runAsync(`UPDATE assinaturas SET status='ativa', status_assinatura='ATIVA', gateway_status='approved',
@@ -139,5 +174,17 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     const visible = (await list()).map(row => row.id);
     assert.ok(visible.includes(ids[0]));
     assert.ok(visible.includes(ids[2]));
+    assert.ok(!(await groups()).pendentes.some(row => [ids[0], ids[2]].includes(row.id)));
+  });
+  await t.test('excluir pendente exige admin e confirmacao correta e preserva clientes pagos', async () => {
+    const pending = (await groups()).pendentes.find(row => row.id === ids[1]);
+    const paidBefore = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [ids[0]]);
+    const body = { confirmationToken: pending.deleteConfirmationToken };
+    assert.equal((await request(`/admin/assinaturas/${pending.id}`, 'DELETE', body)).status, 401);
+    assert.equal((await request(`/admin/assinaturas/${ids[0]}`, 'DELETE', body, admin)).status, 409);
+    assert.equal((await request(`/admin/assinaturas/${pending.id}`, 'DELETE', body, admin)).status, 200);
+    assert.equal(await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [pending.id]), undefined);
+    assert.ok(!(await groups()).pendentes.some(row => row.id === pending.id));
+    assert.deepEqual(await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [ids[0]]), paidBefore);
   });
 });

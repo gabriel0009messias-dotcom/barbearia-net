@@ -764,13 +764,10 @@ async function listarServicosDaAssinatura(assinaturaId) {
 
 async function listarAssinaturasComServicos() {
   const assinaturas = await allAsync(
-    `SELECT s.*
-     FROM assinaturas s
-     WHERE EXISTS (
+    `SELECT s.*, (EXISTS (
        SELECT 1 FROM mercado_pago_payments p
        WHERE p.assinatura_id=s.id AND p.status='approved' AND p.credited_at IS NOT NULL
      )
-     OR NULLIF(BTRIM(s.acesso_manual_ate), '') IS NOT NULL
      OR (
        s.gateway_status='approved'
        AND NULLIF(BTRIM(s.payment_id), '') IS NOT NULL
@@ -778,7 +775,8 @@ async function listarAssinaturasComServicos() {
        AND NOT EXISTS (
          SELECT 1 FROM mercado_pago_payments p WHERE p.assinatura_id=s.id AND p.payment_id=s.payment_id
        )
-     )
+     )) AS pagamento_aprovado_confirmado
+     FROM assinaturas s
       ORDER BY
        CASE status
          WHEN 'bloqueado' THEN 0
@@ -790,8 +788,20 @@ async function listarAssinaturasComServicos() {
        created_at DESC`
   );
 
+  const admitidas = [];
+  const pendentes = [];
+  for (const { pagamento_aprovado_confirmado, ...assinatura } of assinaturas) {
+    if (pagamento_aprovado_confirmado || acessoManualAtivo(assinatura)) {
+      admitidas.push(assinatura);
+    } else {
+      // Showing a pending registration must not change its access or billing state.
+      const { id, barbearia_nome, responsavel_nome, email, telefone, whatsapp_numero, metodo_pagamento, created_at } = assinatura;
+      pendentes.push({ id, barbearia_nome, responsavel_nome, email, telefone, whatsapp_numero, metodo_pagamento, created_at,
+        status: 'aguardando_pagamento' });
+    }
+  }
   const detalhadas = await Promise.all(
-    assinaturas.map(async (assinatura) => {
+    admitidas.map(async (assinatura) => {
       const enriquecida = await enriquecerAssinatura(assinatura);
 
       return {
@@ -801,7 +811,7 @@ async function listarAssinaturasComServicos() {
     })
   );
 
-  return detalhadas;
+  return { assinaturas: detalhadas, pendentes };
 }
 
 async function montarRespostaAssinatura(assinaturaId) {
@@ -2941,10 +2951,15 @@ router.get('/admin/mercadopago/diagnostico/:preferenceId', requireAdmin, async (
 router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    const assinaturas = await listarAssinaturasComServicos();
-    res.json(assinaturas.map(assinatura => ({ ...assinatura,
+    const grupos = await listarAssinaturasComServicos();
+    const withConfirmation = assinatura => ({ ...assinatura,
       deleteConfirmationToken: assinaturaDeleteToken(assinatura, req.headers['x-admin-token']),
-    })));
+    });
+    const assinaturas = grupos.assinaturas.map(withConfirmation);
+    if (req.query.incluirPendentes === '1') {
+      return res.json({ assinaturas, pendentes: grupos.pendentes.map(withConfirmation) });
+    }
+    res.json(assinaturas);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

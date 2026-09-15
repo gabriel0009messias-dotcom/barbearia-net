@@ -124,9 +124,29 @@
 
           <p id="adminTableMessage" class="form-message"></p>
         </section>
+        <section class="panel-card admin-card">
+          <div class="card-header">
+            <div>
+              <h3>Cadastros aguardando pagamento</h3>
+              <p>Estes cadastros aguardam pagamento aprovado ou liberacao manual de acesso.</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Salão</th><th>Responsável</th><th>E-mail</th><th>WhatsApp</th>
+                  <th>Forma de pagamento</th><th>Status</th><th>Data do cadastro</th><th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="adminPendentesBody"></tbody>
+            </table>
+          </div>
+          <p id="adminPendentesMessage" class="form-message" aria-live="polite"></p>
+        </section>
       </div>
     </section>
 
-    <script src="./controle-interno.js?v=paid-list-1"></script>
+    <script src="./controle-interno.js?v=pending-list-1"></script>
   </body>
 </html>
