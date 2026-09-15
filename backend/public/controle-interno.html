@@ -83,10 +83,26 @@
         </section>
 
         <section class="panel-card admin-card">
+          <h3>Liberar acesso por e-mail</h3>
+          <p>Use esta opcao para liberar um cliente que ainda nao aparece na lista.</p>
+          <form id="adminLiberacaoForm" class="form-grid">
+            <label>E-mail do cliente
+              <input id="adminLiberacaoEmail" type="email" required />
+            </label>
+            <label>Dias de acesso gratuito
+              <input id="adminLiberacaoDias" type="number" min="1" max="365" step="1" value="1" required />
+            </label>
+            <button type="submit" class="secondary-pill-button">Liberar dias</button>
+          </form>
+          <p id="adminLiberacaoMessage" class="form-message"></p>
+        </section>
+
+        <section class="panel-card admin-card">
           <div class="card-header">
             <div>
               <p class="eyebrow">Clientes</p>
               <h3>Assinaturas cadastradas</h3>
+              <p>Clientes com pagamento aprovado ou acesso liberado pelo administrador.</p>
             </div>
           </div>
 
@@ -111,6 +127,6 @@
       </div>
     </section>
 
-    <script src="./controle-interno.js?v=manual-access-1"></script>
+    <script src="./controle-interno.js?v=paid-list-1"></script>
   </body>
 </html>

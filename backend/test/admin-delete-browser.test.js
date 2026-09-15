@@ -6,6 +6,66 @@ const path = require('node:path');
 const puppeteer = require('puppeteer');
 const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(p => p && fs.existsSync(p));
 
+test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por email', { skip: !executablePath }, async t => {
+  const app = express();
+  app.use(express.json());
+  let rows = [];
+  let grants = 0;
+  let listRequests = 0;
+  app.get('/api/admin/assinatura-config', (req, res) => res.json({}));
+  app.get('/api/admin/assinaturas', (req, res) => { listRequests++; res.json(rows); });
+  app.get('/api/admin/assinaturas/por-email', (req, res) => {
+    assert.equal(req.headers['x-admin-token'], 'fake-admin-session');
+    assert.equal(req.query.email, 'hidden@example.test');
+    res.json({ id: 9, email: 'hidden@example.test', barbearia_nome: 'Cliente oculto' });
+  });
+  app.post('/api/admin/assinaturas/9/liberar-dias', (req, res) => {
+    grants++;
+    assert.equal(req.body.dias, 2);
+    const ate = new Date(Date.now() + 2 * 86400000).toISOString();
+    rows.push({ id: 9, email: 'hidden@example.test', barbearia_nome: 'Cliente oculto', status: 'ativa', acesso_manual_ate: ate });
+    res.json({ sucesso: true, id: 9, acesso_manual_ate: ate });
+  });
+  app.use(express.static(path.resolve(__dirname, '../public')));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
+  t.after(async () => { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('admin_token_salaoflix', 'fake-admin-session');
+    const original = window.setInterval;
+    window.setInterval = (callback, delay, ...args) => {
+      if (delay === 30000) { window.refreshAdminForTest = callback; return 0; }
+      return original(callback, delay, ...args);
+    };
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/controle-interno.html`);
+  await page.waitForFunction(() => document.querySelector('#adminResumo').textContent.startsWith('0 assinaturas'));
+  assert.equal(await page.$eval('#adminAssinaturasBody', node => node.textContent.includes('Cliente oculto')), false);
+  await page.type('#adminSuporteInput', '5511999999999');
+  rows.push({ id: 1, barbearia_nome: 'Cliente pago', status: 'ativa' });
+  await page.evaluate(() => window.refreshAdminForTest());
+  await page.waitForFunction(() => document.querySelector('#adminResumo').textContent.startsWith('1 assinaturas'));
+  assert.match(await page.$eval('#adminAssinaturasBody', node => node.textContent), /Cliente pago/);
+  assert.equal(await page.$eval('#adminSuporteInput', node => node.value), '5511999999999');
+  await page.type('#adminLiberacaoEmail', 'hidden@example.test');
+  await page.$eval('#adminLiberacaoDias', node => { node.value = '2'; });
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.click('#adminLiberacaoForm button');
+  await page.waitForFunction(() => document.querySelector('#adminLiberacaoMessage').textContent.includes('cancelada'));
+  assert.equal(grants, 0);
+  page.once('dialog', dialog => dialog.accept());
+  await page.click('#adminLiberacaoForm button');
+  await page.waitForFunction(() => document.querySelector('#adminResumo').textContent.startsWith('2 assinaturas'));
+  assert.equal(grants, 1);
+  assert.match(await page.$eval('#adminAssinaturasBody', node => node.textContent), /Cliente oculto/);
+  await page.select('.status-select', 'bloqueado');
+  const before = listRequests;
+  await page.evaluate(() => window.refreshAdminForTest());
+  assert.equal(listRequests, before, 'atualizacao automatica preserva alteracao de status nao salva');
+});
+
 test('botao Excluir: confirmacao, erro e linha correta', { skip: !executablePath }, async t => {
   const app = express();
   app.use(express.json());

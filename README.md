@@ -52,6 +52,10 @@ Se a operacao falhar no banco, a transacao e desfeita. Se houver falha de conexa
 
 ## Liberacao manual de acesso
 
+A lista **Assinaturas cadastradas** mostra apenas clientes com pagamento aprovado e creditado pelo backend ou com registro de liberacao manual. Cadastros sem pagamento continuam no banco e seguem para o checkout normalmente. Pedidos e pagamentos pendentes, rejeitados ou em processamento nao incluem novos clientes na lista. Clientes pagos continuam visiveis durante uma renovacao pendente; registros antigos com confirmacao, ID e data de pagamento tambem sao preservados na listagem.
+
+Para liberar uma conta oculta, use **Liberar acesso por e-mail**, informe o e-mail completo e os dias, e confirme o cliente encontrado. O painel atualiza a lista a cada 30 segundos enquanto estiver visivel e sem alteracoes de status aguardando salvamento. Clientes admitidos por liberacao manual permanecem listados quando o prazo termina, para permitir gerenciamento; isso nao prorroga seu acesso.
+
 No controle interno, **Liberar dias** concede de 1 a 365 dias de acesso sem pagamento, contados a partir de agora. A lista mostra a data e a hora de termino. Um prazo manual mais longo ja concedido e preservado. Selecionar **Ativo** e salvar uma conta inativa tambem abre essa opcao; salvar uma conta ja ativa apenas informa seu estado.
 
 A liberacao e exclusiva do administrador, fica registrada nas observacoes e nao altera pagamentos nem o vencimento da cobranca. Ao expirar, o acesso volta a seguir a situacao da assinatura, inclusive a tolerancia normal de atraso. Para encerrar a liberacao antes do prazo, selecione **Bloqueado** e clique em **Salvar**. A migration `004_manual_access.sql` adiciona o prazo na inicializacao do servidor.

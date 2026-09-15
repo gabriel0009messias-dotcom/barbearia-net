@@ -14,6 +14,10 @@ const adminSuporteInput = document.getElementById('adminSuporteInput');
 const salvarSuporteButton = document.getElementById('salvarSuporteButton');
 const recarregarAdminButton = document.getElementById('recarregarAdminButton');
 const sairAdminButton = document.getElementById('sairAdminButton');
+const adminLiberacaoForm = document.getElementById('adminLiberacaoForm');
+const adminLiberacaoMessage = document.getElementById('adminLiberacaoMessage');
+let carregandoAdmin = false;
+adminSuporteInput?.addEventListener('input', () => { adminSuporteInput.dataset.alterado = 'true'; });
 
 
 function getAdminToken() {
@@ -156,6 +160,7 @@ function montarLinhaAssinatura(assinatura) {
     }
   });
   const select = tr.querySelector('select');
+  select.addEventListener('change', () => { select.dataset.alterado = 'true'; });
   const button = tr.querySelector('button');
 
   button.addEventListener('click', async () => {
@@ -192,24 +197,67 @@ function montarLinhaAssinatura(assinatura) {
 }
 
 async function carregarPainelAdmin() {
-  const [config, assinaturas] = await Promise.all([
-    buscarJson('/api/admin/assinatura-config'),
-    buscarJson('/api/admin/assinaturas'),
-  ]);
+  if (carregandoAdmin) return;
+  carregandoAdmin = true;
+  try {
+    const [config, assinaturas] = await Promise.all([
+      buscarJson('/api/admin/assinatura-config'),
+      buscarJson('/api/admin/assinaturas'),
+    ]);
 
-  adminSuporteInput.value = config.suporteNumero || '';
-  renderResumo(assinaturas);
-  adminAssinaturasBody.innerHTML = '';
+    if (adminSuporteInput.dataset.alterado !== 'true') adminSuporteInput.value = config.suporteNumero || '';
+    renderResumo(assinaturas);
+    adminAssinaturasBody.innerHTML = '';
 
-  if (!assinaturas.length) {
-    adminAssinaturasBody.innerHTML = '<tr><td colspan="6">Nenhuma assinatura cadastrada.</td></tr>';
+    if (!assinaturas.length) {
+      adminAssinaturasBody.innerHTML = '<tr><td colspan="6">Nenhuma assinatura com pagamento aprovado ou liberacao manual.</td></tr>';
+      return;
+    }
+
+    assinaturas.forEach((assinatura) => {
+      adminAssinaturasBody.appendChild(montarLinhaAssinatura(assinatura));
+    });
+  } finally {
+    carregandoAdmin = false;
+  }
+}
+
+adminLiberacaoForm?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const email = document.getElementById('adminLiberacaoEmail').value.trim();
+  const dias = Number(document.getElementById('adminLiberacaoDias').value);
+  if (!Number.isInteger(dias) || dias < 1 || dias > 365) {
+    adminLiberacaoMessage.textContent = 'Informe de 1 a 365 dias inteiros.';
     return;
   }
+  const button = adminLiberacaoForm.querySelector('button');
+  button.disabled = true;
+  adminLiberacaoMessage.textContent = 'Buscando cadastro...';
+  try {
+    const account = await buscarJson(`/api/admin/assinaturas/por-email?email=${encodeURIComponent(email)}`);
+    if (!window.confirm(`Liberar ${dias} dia(s) sem pagamento para ${account.barbearia_nome} (${account.email})?`)) {
+      adminLiberacaoMessage.textContent = 'Liberacao cancelada.';
+      return;
+    }
+    const result = await buscarJson(`/api/admin/assinaturas/${account.id}/liberar-dias`, {
+      method: 'POST', body: JSON.stringify({ dias }),
+    });
+    if (result.sucesso !== true || result.id !== account.id) throw new Error('Atualize a lista para conferir a liberacao.');
+    adminLiberacaoMessage.textContent = `Acesso liberado ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR')}.`;
+    try { await carregarPainelAdmin(); } catch { adminLiberacaoMessage.textContent = 'Acesso liberado. Recarregue a lista para ver o cliente.'; }
+  } catch (error) {
+    adminLiberacaoMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 
-  assinaturas.forEach((assinatura) => {
-    adminAssinaturasBody.appendChild(montarLinhaAssinatura(assinatura));
-  });
-}
+window.setInterval(() => {
+  if (adminPanel.hidden || document.hidden || carregandoAdmin ||
+      adminPanel.querySelector('button:disabled, select[data-alterado="true"]') ||
+      document.activeElement?.tagName === 'SELECT') return;
+  carregarPainelAdmin().catch(() => {});
+}, 30000);
 
 async function iniciarSessaoAdmin() {
   adminLoginCard.hidden = true;
@@ -257,6 +305,7 @@ salvarSuporteButton?.addEventListener('click', async () => {
       body: JSON.stringify({ suporteNumero: adminSuporteInput.value.trim() }),
     });
     adminSuporteInput.value = resposta.suporteNumero || adminSuporteInput.value;
+    delete adminSuporteInput.dataset.alterado;
     await carregarPainelAdmin();
     adminTableMessage.textContent = 'Suporte atualizado com sucesso.';
   } catch (error) {

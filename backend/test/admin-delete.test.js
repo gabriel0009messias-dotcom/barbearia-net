@@ -42,7 +42,7 @@ test('exclusao administrativa isolada e atomica', async t => {
     await db.runAsync("INSERT INTO password_reset_tokens(assinatura_id,token_hash,expires_at) VALUES ($1,'fake-hash','2099-01-01')", [id]);
     await db.runAsync("INSERT INTO whatsapp_messages(assinatura_id,instance,phone,message_id,response) VALUES ($1,$2,'test','message','test')", [id, `instance${id}`]);
     await db.runAsync("INSERT INTO mercado_pago_orders(reference,assinatura_id,amount_cents,live_mode,expires_at) VALUES ($1,$2,6500,0,'2099-01-01')", [`order${id}`, id]);
-    await db.runAsync("INSERT INTO mercado_pago_payments(payment_id,order_reference,assinatura_id,status,amount_cents) VALUES ($1,$2,$3,'approved',6500)", [`payment${id}`, `order${id}`, id]);
+    await db.runAsync("INSERT INTO mercado_pago_payments(payment_id,order_reference,assinatura_id,status,amount_cents,credited_at) VALUES ($1,$2,$3,'approved',6500,CURRENT_TIMESTAMP)", [`payment${id}`, `order${id}`, id]);
   }
   const barberResponse = await request('/barbeiro/login', 'POST', { identificador: 'owner2@example.test', senha: 'test-password' });
   assert.equal(barberResponse.status, 200);

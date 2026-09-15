@@ -764,8 +764,21 @@ async function listarServicosDaAssinatura(assinaturaId) {
 
 async function listarAssinaturasComServicos() {
   const assinaturas = await allAsync(
-    `SELECT *
-     FROM assinaturas
+    `SELECT s.*
+     FROM assinaturas s
+     WHERE EXISTS (
+       SELECT 1 FROM mercado_pago_payments p
+       WHERE p.assinatura_id=s.id AND p.status='approved' AND p.credited_at IS NOT NULL
+     )
+     OR NULLIF(BTRIM(s.acesso_manual_ate), '') IS NOT NULL
+     OR (
+       s.gateway_status='approved'
+       AND NULLIF(BTRIM(s.payment_id), '') IS NOT NULL
+       AND NULLIF(BTRIM(s.ultimo_pagamento), '') IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM mercado_pago_payments p WHERE p.assinatura_id=s.id AND p.payment_id=s.payment_id
+       )
+     )
       ORDER BY
        CASE status
          WHEN 'bloqueado' THEN 0
@@ -2926,6 +2939,7 @@ router.get('/admin/mercadopago/diagnostico/:preferenceId', requireAdmin, async (
 });
 
 router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
     const assinaturas = await listarAssinaturasComServicos();
     res.json(assinaturas.map(assinatura => ({ ...assinatura,
@@ -2933,6 +2947,23 @@ router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
     })));
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/admin/assinaturas/por-email', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const email = normalizarEmail(req.query.email);
+  if (typeof req.query.email !== 'string' || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Informe o e-mail completo do cliente.' });
+  }
+  try {
+    const accounts = await allAsync(`SELECT id, barbearia_nome, email FROM assinaturas
+      WHERE LOWER(BTRIM(email))=$1 LIMIT 2`, [email]);
+    if (!accounts.length) return res.status(404).json({ error: 'Nenhum cadastro encontrado para este e-mail.' });
+    if (accounts.length > 1) return res.status(409).json({ error: 'Mais de um cadastro usa este e-mail. Confira os cadastros antes de liberar.' });
+    res.json(accounts[0]);
+  } catch {
+    res.status(500).json({ error: 'Nao foi possivel consultar o cadastro.' });
   }
 });
 
