@@ -49,3 +49,9 @@ O funcionamento do atendimento esta documentado em [WHATSAPP-AGENDAMENTO.md](WHA
 Em `/controle-interno.html`, entre com o login administrativo e use **Excluir** na linha da conta. A exclusao exige confirmacao e remove a assinatura e seus dados vinculados em uma unica transacao: servicos da conta, agendamentos, bloqueios, sessoes, tokens de recuperacao, mensagens e registros locais de pagamentos. As outras contas e os cadastros compartilhados de clientes e servicos sao preservados.
 
 Se a operacao falhar no banco, a transacao e desfeita. Se houver falha de conexao, recarregue a lista para conferir o resultado antes de tentar novamente. A migration `003_account_delete_relations.sql` e aplicada automaticamente na inicializacao. A exclusao de registros locais nao realiza estornos no Mercado Pago nem remove instancias na Evolution API.
+
+## Liberacao manual de acesso
+
+No controle interno, **Liberar dias** concede de 1 a 365 dias de acesso sem pagamento, contados a partir de agora. A lista mostra a data e a hora de termino. Um prazo manual mais longo ja concedido e preservado. Selecionar **Ativo** e salvar uma conta inativa tambem abre essa opcao; salvar uma conta ja ativa apenas informa seu estado.
+
+A liberacao e exclusiva do administrador, fica registrada nas observacoes e nao altera pagamentos nem o vencimento da cobranca. Ao expirar, o acesso volta a seguir a situacao da assinatura, inclusive a tolerancia normal de atraso. Para encerrar a liberacao antes do prazo, selecione **Bloqueado** e clique em **Salvar**. A migration `004_manual_access.sql` adiciona o prazo na inicializacao do servidor.

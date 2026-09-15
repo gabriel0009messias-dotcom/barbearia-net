@@ -231,7 +231,20 @@ function criarLinkWhatsApp(numero, mensagem) {
   return `https://wa.me/${telefone}?text=${encodeURIComponent(mensagem)}`;
 }
 
+function acessoManualAtivo(assinatura) {
+  return Date.parse(assinatura?.acesso_manual_ate || '') > Date.now();
+}
+
 function calcularResumoPagamento(assinatura) {
+  if (acessoManualAtivo(assinatura)) {
+    return {
+      diasAtraso: 0, atrasado: false, venceHoje: false, bloqueiaHoje: false,
+      bloqueado: false, statusSugerido: 'ativa', statusAssinaturaSugerido: 'ATIVA',
+      indicadorAtraso: 'Acesso liberado pelo administrador',
+      mensagemAdmin: 'Acesso temporario sem confirmacao de pagamento.',
+      mensagemCliente: 'Seu acesso temporario esta liberado.',
+    };
+  }
   if (!assinatura?.proximo_vencimento) {
     return {
       diasAtraso: 0,
@@ -369,6 +382,10 @@ function criarLembretePagamento(assinatura) {
 }
 
 async function sincronizarStatusPorVencimento(assinatura) {
+  // Temporary access is projected in responses; billing state stays unchanged in storage.
+  if (acessoManualAtivo(assinatura)) {
+    return { ...assinatura, status: 'ativa', status_assinatura: 'ATIVA', bloqueado: 0 };
+  }
   if (!assinatura || !assinatura.proximo_vencimento) {
     return assinatura;
   }
@@ -2905,6 +2922,30 @@ router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/admin/assinaturas/:id/liberar-dias', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const dias = req.body?.dias;
+  if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(id) ||
+      !Number.isInteger(dias) || dias < 1 || dias > 365) {
+    return res.status(400).json({ error: 'Informe uma conta valida e de 1 a 365 dias inteiros.' });
+  }
+  try {
+    const result = await db.transaction(async connection => {
+      const account = await connection.getAsync('SELECT id, acesso_manual_ate FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      if (!account) return null;
+      const ate = new Date(Math.max(Date.now() + dias * 86400000, Date.parse(account.acesso_manual_ate || '') || 0)).toISOString();
+      await connection.runAsync(`UPDATE assinaturas SET acesso_manual_ate=$1,
+        observacoes=concat_ws(E'\\n', NULLIF(observacoes,''), $2::text), updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
+      [ate, `Liberacao administrativa sem pagamento: ${dias} dia(s) a partir de agora, ate ${ate}.`, id]);
+      return { sucesso: true, id, acesso_manual_ate: ate };
+    });
+    if (!result) return res.status(404).json({ error: 'Conta nao encontrada.' });
+    res.json(result);
+  } catch {
+    res.status(500).json({ error: 'Nao foi possivel liberar o acesso. Tente novamente.' });
+  }
+});
+
 router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { status, observacoes } = req.body;
@@ -2931,6 +2972,7 @@ router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
     await runAsync(
       `UPDATE assinaturas
        SET status = $1,
+           acesso_manual_ate = NULL,
            ultimo_pagamento = $2,
            proximo_vencimento = $3,
            observacoes = $4,
@@ -2978,6 +3020,7 @@ router.post('/admin/assinaturas/:id/bloquear', requireAdmin, async (req, res) =>
     await runAsync(
       `UPDATE assinaturas
        SET status = 'bloqueado',
+           acesso_manual_ate = NULL,
            observacoes = $1,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $2`,

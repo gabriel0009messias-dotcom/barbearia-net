@@ -59,7 +59,8 @@ function contarStatus(assinaturas) {
   };
 
   for (const assinatura of assinaturas) {
-    const status = String(assinatura.status || '').toLowerCase();
+    const original = String(assinatura.status || '').toLowerCase();
+    const status = ({ ativa: 'ativo', bloqueada: 'bloqueado' })[original] || original;
     if (status in resumo) {
       resumo[status] += 1;
     }
@@ -81,6 +82,7 @@ function renderResumo(assinaturas) {
 
 function montarLinhaAssinatura(assinatura) {
   const tr = document.createElement('tr');
+  const status = ({ ativa: 'ativo', bloqueada: 'bloqueado' })[assinatura.status] || assinatura.status;
   const contato = [assinatura.email, assinatura.telefone].filter(Boolean).join(' / ');
   const pagamento = `${assinatura.metodo_pagamento || '--'} / dia ${assinatura.dia_vencimento || '--'}`;
 
@@ -88,21 +90,53 @@ function montarLinhaAssinatura(assinatura) {
     <td></td><td></td><td></td><td></td>
     <td>
       <select class="status-select">
-        <option value="pendente"${assinatura.status === 'pendente' ? ' selected' : ''}>Pendente</option>
-        <option value="ativo"${assinatura.status === 'ativo' ? ' selected' : ''}>Ativo</option>
-        <option value="bloqueado"${assinatura.status === 'bloqueado' ? ' selected' : ''}>Bloqueado</option>
+        <option value="pendente"${status === 'pendente' ? ' selected' : ''}>Pendente</option>
+        <option value="ativo"${status === 'ativo' ? ' selected' : ''}>Ativo</option>
+        <option value="bloqueado"${status === 'bloqueado' ? ' selected' : ''}>Bloqueado</option>
       </select>
     </td>
-    <td><button class="table-action danger-button" type="button">Salvar</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
+    <td><button class="table-action danger-button" type="button">Salvar</button> <button class="table-action grant-days" type="button">Liberar dias</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
   `;
 
   [assinatura.barbearia_nome, assinatura.responsavel_nome, contato, pagamento].forEach((value, index) => {
     tr.cells[index].textContent = value || '--';
   });
+  if (Date.parse(assinatura.acesso_manual_ate || '') > Date.now()) {
+    const prazo = document.createElement('small');
+    prazo.style.display = 'block';
+    prazo.textContent = `Acesso gratuito ate ${new Date(assinatura.acesso_manual_ate).toLocaleString('pt-BR')}`;
+    tr.cells[4].appendChild(prazo);
+  }
+  const grantButton = tr.querySelector('.grant-days');
+  async function liberarDias() {
+    const value = window.prompt(`Liberar acesso sem pagamento para ${assinatura.barbearia_nome || 'esta conta'} por quantos dias a partir de agora? (1 a 365)`, '1');
+    if (value === null) return;
+    const dias = Number(value);
+    if (!/^\d+$/.test(value.trim()) || !Number.isInteger(dias) || dias < 1 || dias > 365) {
+      adminTableMessage.textContent = 'Informe de 1 a 365 dias inteiros.';
+      return;
+    }
+    tr.querySelectorAll('button').forEach(node => { node.disabled = true; });
+    adminTableMessage.textContent = 'Liberando acesso...';
+    try {
+      const result = await buscarJson(`/api/admin/assinaturas/${assinatura.id}/liberar-dias`, {
+        method: 'POST', body: JSON.stringify({ dias }),
+      });
+      if (result.sucesso !== true || result.id !== assinatura.id) throw new Error('Atualize a lista para conferir a liberacao.');
+      adminTableMessage.textContent = `Acesso liberado sem pagamento ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR')}.`;
+      try { await carregarPainelAdmin(); } catch { adminTableMessage.textContent = 'Acesso liberado. Recarregue a lista para ver o prazo.'; }
+    } catch (error) {
+      adminTableMessage.textContent = error.message;
+    } finally {
+      tr.querySelectorAll('button').forEach(node => { node.disabled = false; });
+    }
+  }
+  grantButton.addEventListener('click', liberarDias);
   const deleteButton = tr.querySelector('.delete-account');
   deleteButton.addEventListener('click', async () => {
     if (!window.confirm('Tem certeza que deseja excluir esta conta? Esta ação não poderá ser desfeita.')) return;
     deleteButton.disabled = true;
+    grantButton.disabled = true;
     button.disabled = true;
     adminTableMessage.textContent = 'Excluindo conta...';
     try {
@@ -117,6 +151,7 @@ function montarLinhaAssinatura(assinatura) {
       adminTableMessage.textContent = error instanceof TypeError ? 'Falha de conexao. Verifique a lista antes de tentar novamente.' : error.message;
     } finally {
       deleteButton.disabled = false;
+      grantButton.disabled = false;
       button.disabled = false;
     }
   });
@@ -124,22 +159,23 @@ function montarLinhaAssinatura(assinatura) {
   const button = tr.querySelector('button');
 
   button.addEventListener('click', async () => {
+    if (select.value === 'ativo') {
+      if (status === 'ativo') {
+        adminTableMessage.textContent = 'Esta conta ja esta ativa. Use Liberar dias para conceder acesso temporario.';
+        return;
+      }
+      await liberarDias();
+      return;
+    }
     button.disabled = true;
     deleteButton.disabled = true;
+    grantButton.disabled = true;
     adminTableMessage.textContent = 'Salvando status...';
 
     try {
-      if (select.value === 'ativo') {
-        const paymentId = window.prompt('ID do pagamento no Mercado Pago. O backend consultara a aprovacao:');
-        if (!paymentId) return;
-        await buscarJson(`/api/admin/assinaturas/${assinatura.id}/confirmar-pagamento`, {
-          method: 'POST', body: JSON.stringify({ paymentId: paymentId.trim() }),
-        });
-      } else {
-        await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
-          method: 'PATCH', body: JSON.stringify({ status: select.value }),
-        });
-      }
+      await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
+        method: 'PATCH', body: JSON.stringify({ status: select.value }),
+      });
 
       adminTableMessage.textContent = 'Status atualizado com sucesso.';
       await carregarPainelAdmin();
@@ -148,6 +184,7 @@ function montarLinhaAssinatura(assinatura) {
     } finally {
       button.disabled = false;
       deleteButton.disabled = false;
+      grantButton.disabled = false;
     }
   });
 
