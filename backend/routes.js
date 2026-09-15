@@ -2292,74 +2292,10 @@ router.post('/publico/assinaturas', async (req, res) => {
     );
 
     if (assinaturaExistente) {
-      if (verificarSenha(senha, assinaturaExistente)) {
-        return res.json({ mensagem: 'Cadastro encontrado. Continue para o pagamento.', assinatura: await montarRespostaAssinatura(assinaturaExistente.id) });
-      }
-      if (!assinaturaExistente.senha_hash || !assinaturaExistente.senha_salt) {
-        const credenciais = criarCredenciaisSenha(senha);
-
-        await runAsync(
-          `UPDATE assinaturas
-           SET barbearia_nome = $1,
-               responsavel_nome = $2,
-               telefone = $3,
-               email = $4,
-               metodo_pagamento = $5,
-               dia_vencimento = $6,
-               whatsapp_numero = $7,
-               dias_funcionamento = $8,
-               horario_abertura = $9,
-               horario_almoco_inicio = $10,
-               horario_almoco_fim = $11,
-               horario_fechamento = $12,
-               status = CASE WHEN status = 'ativo' THEN 'ativo' ELSE 'pendente' END,
-               senha_hash = $13,
-               senha_salt = $14,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $15`,
-          [
-            barbeariaNome,
-            responsavelNome,
-            telefone,
-            email || '',
-            metodoPagamento,
-            dia,
-            whatsappNumero || telefone,
-            serializarDiasFuncionamento(diasFuncionamento),
-            horarioAbertura || '08:00',
-            horarioAlmocoInicio || '12:00',
-            horarioAlmocoFim || '13:00',
-            horarioFechamento || '18:00',
-            credenciais.hash,
-            credenciais.salt,
-            assinaturaExistente.id,
-          ]
-        );
-
-        await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [assinaturaExistente.id]);
-
-        for (const servico of servicosValidos) {
-          await runAsync(
-            "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
-            [assinaturaExistente.id, servico.nome, servico.preco]
-          );
-        }
-
-        const assinaturaAtualizada = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinaturaExistente.id]);
-        const assinaturaCompleta = await montarRespostaAssinatura(assinaturaExistente.id);
-
-        res.status(200).json({
-          mensagem: 'Cadastro atualizado. Finalize o pagamento no Mercado Pago para liberar o acesso.',
-          pix: assinaturaCompleta.pix,
-          assinatura: assinaturaCompleta,
-        });
-        return;
-      }
-
-      res.status(409).json({
-        error: 'Essa barbearia ja possui assinatura registrada. Pague pelo Mercado Pago para liberar o acesso.',
+      return res.status(409).json({
+        code: 'ASSINATURA_EXISTENTE',
+        error: 'Os dados informados pertencem a uma assinatura existente. Entre pela pagina inicial para consultar seu contrato e continuar o pagamento. Nenhum novo cadastro foi criado.',
       });
-      return;
     }
 
     const suporteNumero = await getConfiguracao('suporte_numero');

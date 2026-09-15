@@ -64,7 +64,7 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     assert.match((await checkoutResponse.json()).error, /Configure as credenciais/);
     assert.equal(calls, 0);
     assert.equal((await db.getAsync('SELECT status FROM assinaturas WHERE id = $1', [id])).status, 'pendente');
-    assert.equal((await post('/api/publico/assinaturas', signup)).status, 200);
+    assert.equal((await post('/api/publico/assinaturas', signup)).status, 409);
     assert.equal((await db.getAsync('SELECT count(*) AS total FROM assinaturas WHERE email = $1', [signup.email])).total, 1);
     process.env.MERCADO_PAGO_ACCESS_TOKEN = 'fake-test-token';
     process.env.MERCADO_PAGO_WEBHOOK_SECRET = 'fake-webhook-secret';

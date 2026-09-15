@@ -22,6 +22,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
   });
   app.post('/api/publico/assinaturas', (req, res) => {
     signupCalls++;
+    if (failure === 'existing') return res.status(409).json({ code: 'ASSINATURA_EXISTENTE', error: 'Os dados informados pertencem a uma assinatura existente.', assinatura: { id: 17 } });
     if (failure === 'signup') return res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
     if (failure === 'missing') return res.status(404).json({ error: 'Rota nao encontrada.' });
     if (failure === 'server') return res.status(500).json({ error: 'Nao foi possivel salvar o cadastro. Tente novamente.' });
@@ -81,6 +82,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     } finally { await page.close(); }
   });
   for (const [scenario, expected] of [
+    ['existing', 'HTTP 409'],
     ['signup', 'HTTP 400'], ['missing', 'HTTP 404'], ['server', 'HTTP 500'],
     ['html', 'HTTP 502'], ['json', 'resposta invalida'],
     ['checkout', 'Cadastro salvo, mas'], ['url', 'URL de pagamento valida'],
@@ -99,6 +101,13 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
           return box.height > 0 && box.top >= 0 && box.bottom <= innerHeight;
         }), true);
         if (!['checkout', 'url'].includes(scenario)) assert.equal(checkoutCalls, priorCheckouts);
+        if (scenario === 'existing') {
+          assert.equal(page.url(), `${base}/cadastro.html`);
+          assert.equal(await page.$eval('#assinaturaExistenteActions', element => element.hidden), false);
+          assert.equal(await page.$eval('#assinaturaExistenteActions a', element => element.getAttribute('href')), '/');
+          assert.equal(await page.$eval('#gatewayCheckoutButton', element => element.hidden), true);
+          assert.equal(await page.evaluate(() => localStorage.getItem('barbearia_pending_signup')), null);
+        }
         assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('test-password')), false);
       } finally { await page.close(); failure = null; }
     });

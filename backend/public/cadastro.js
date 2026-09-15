@@ -12,6 +12,7 @@ const pixQrImage = document.getElementById('pixQrImage');
 const pixCopiaColaLabel = document.getElementById('pixCopiaColaLabel');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const assinaturaForm = document.getElementById('assinaturaForm');
+const assinaturaExistenteActions = document.getElementById('assinaturaExistenteActions');
 const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
 const submitButton = assinaturaForm.querySelector('button[type="submit"]');
@@ -79,7 +80,10 @@ async function buscarJson(url, options = {}) {
     }
     if (!response.ok) {
       const message = typeof payload?.error === 'string' ? payload.error : 'Nao foi possivel concluir a solicitacao.';
-      throw new Error(`${message} (HTTP ${response.status})`);
+      const error = new Error(`${message} (HTTP ${response.status})`);
+      error.code = payload?.code;
+      error.status = response.status;
+      throw error;
     }
     if (!payload || typeof payload !== 'object') throw new Error('Resposta invalida do servidor. Tente novamente.');
     return payload;
@@ -204,6 +208,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
   assinaturaForm.setAttribute('aria-busy', 'true');
   limparMonitorLiberacao();
   renderizarCheckout();
+  assinaturaExistenteActions.hidden = true;
   mostrarMensagem('Salvando seu cadastro...');
   let cadastroSalvo = false;
 
@@ -247,6 +252,10 @@ assinaturaForm.addEventListener('submit', async (event) => {
     mostrarMensagem('Redirecionando ao Mercado Pago. Se nao abrir, clique em Pagar com Mercado Pago.', true);
     window.location.assign(checkout.checkoutUrl);
   } catch (error) {
+    if (!cadastroSalvo && error.status === 409) {
+      gravarStorage(PENDING_SIGNUP_STORAGE_KEY, null);
+      assinaturaExistenteActions.hidden = false;
+    }
     mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo, mas nao foi possivel abrir o pagamento. ' : ''}${error.message}`, true);
   } finally {
     enviando = false;
