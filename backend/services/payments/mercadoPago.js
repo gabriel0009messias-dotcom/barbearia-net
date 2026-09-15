@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const db = require('../../database');
 const { validateSignature } = require('./signature');
 const { PROFESSIONAL_PLAN, subscriptionPlan } = require('./plan');
+const { redact } = require('./diagnostics');
 require('../../loadEnv');
 
 function fail(message, statusCode = 503) {
@@ -34,6 +35,12 @@ async function request(path, options = {}) {
     throw fail('Mercado Pago indisponivel. Tente novamente.');
   }
   const data = await response.json().catch(() => ({}));
+  if (path === '/checkout/preferences') {
+    console.info('[Mercado Pago preference]', JSON.stringify(redact({
+      event: 'preference_response', status: response.status, requestId: response.headers.get('x-request-id'),
+      mode: mode(), request: options.body, response: data,
+    })));
+  }
   if (!response.ok) throw fail('Nao foi possivel consultar ou criar o pagamento no Mercado Pago.');
   return data;
 }

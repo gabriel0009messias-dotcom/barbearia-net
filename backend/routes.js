@@ -2911,6 +2911,20 @@ router.patch('/admin/assinatura-config', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/admin/mercadopago/diagnostico/:preferenceId', requireAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const preferenceId = req.params.preferenceId;
+  if (!/^[a-zA-Z0-9-]{1,150}$/.test(preferenceId)) return res.status(400).json({ error: 'Preferencia invalida.' });
+  try {
+    const order = await getAsync(`SELECT o.*, s.email FROM mercado_pago_orders o
+      JOIN assinaturas s ON s.id=o.assinatura_id WHERE o.preference_id=$1`, [preferenceId]);
+    if (!order) return res.status(404).json({ error: 'Preferencia nao encontrada neste sistema.' });
+    res.json(await require('./services/payments/diagnostics').diagnose(order));
+  } catch {
+    res.status(503).json({ error: 'Nao foi possivel consultar o diagnostico.' });
+  }
+});
+
 router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
   try {
     const assinaturas = await listarAssinaturasComServicos();
