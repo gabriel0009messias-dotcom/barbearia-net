@@ -75,26 +75,41 @@ function formatarDataISO(data) {
   return data.toISOString().slice(0, 10);
 }
 
-// Endpoint para excluir assinatura (admin)
-router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
-  if (emAmbienteHospedado()) {
-    res.status(410).json({ error: 'Remocao legado-admin desativada no ambiente hospedado.' });
-    return;
-  }
+const deleteConfirmationKey = crypto.randomBytes(32);
+function assinaturaDeleteToken(assinatura, adminToken) {
+  return crypto.createHmac('sha256', deleteConfirmationKey)
+    .update(JSON.stringify([assinatura.id, assinatura.created_at, adminToken])).digest('hex');
+}
 
-  const { id } = req.params;
+router.delete('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(id)) {
+    return res.status(400).json({ error: 'Conta invalida. Atualize a lista e tente novamente.' });
+  }
   try {
-    // Remove serviços vinculados
-    await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [id]);
-    // Remove a assinatura
-    const result = await runAsync("DELETE FROM assinaturas WHERE id = $1", [id]);
-    if (result.changes === 0) {
-      res.status(404).json({ error: 'Assinatura não encontrada.' });
-      return;
+    const result = await db.transaction(async connection => {
+      const assinatura = await connection.getAsync('SELECT id, created_at FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      if (!assinatura) return 404;
+      const supplied = req.body?.confirmationToken;
+      const expected = assinaturaDeleteToken(assinatura, req.headers['x-admin-token']);
+      if (typeof supplied !== 'string' || !/^[a-f0-9]{64}$/.test(supplied) ||
+          !crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return 409;
+      // Explicit ownership filters also cover imported schemas without cascading FKs.
+      for (const table of ['mercado_pago_payments', 'mercado_pago_orders', 'whatsapp_messages',
+        'agendamentos', 'bloqueios', 'sessoes', 'password_reset_tokens', 'servicos_assinatura']) {
+        await connection.runAsync(`DELETE FROM ${table} WHERE assinatura_id=$1`, [id]);
+      }
+      await connection.runAsync('DELETE FROM assinaturas WHERE id=$1', [id]);
+      return 200;
+    });
+    if (result === 404) return res.status(404).json({ error: 'Conta nao encontrada. Atualize a lista.' });
+    if (result === 409) return res.status(409).json({ error: 'A confirmacao nao corresponde a esta conta. Atualize a lista e confirme novamente.' });
+    for (const [token, session] of barberSessions) {
+      if (session.assinaturaId === id) barberSessions.delete(token);
     }
-    res.json({ sucesso: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ sucesso: true, id });
+  } catch {
+    res.status(500).json({ error: 'Nao foi possivel excluir a conta. Nenhuma exclusao foi concluida. Tente novamente.' });
   }
 });
 
@@ -2881,7 +2896,10 @@ router.patch('/admin/assinatura-config', requireAdmin, async (req, res) => {
 
 router.get('/admin/assinaturas', requireAdmin, async (req, res) => {
   try {
-    res.json(await listarAssinaturasComServicos());
+    const assinaturas = await listarAssinaturasComServicos();
+    res.json(assinaturas.map(assinatura => ({ ...assinatura,
+      deleteConfirmationToken: assinaturaDeleteToken(assinatura, req.headers['x-admin-token']),
+    })));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -43,3 +43,9 @@ Com Root Directory `backend`, use Build Command `PUPPETEER_SKIP_DOWNLOAD=true np
 ## WhatsApp
 
 O funcionamento do atendimento esta documentado em [WHATSAPP-AGENDAMENTO.md](WHATSAPP-AGENDAMENTO.md). Suas configuracoes e credenciais sao independentes das de pagamento.
+
+## Exclusao de contas no controle interno
+
+Em `/controle-interno.html`, entre com o login administrativo e use **Excluir** na linha da conta. A exclusao exige confirmacao e remove a assinatura e seus dados vinculados em uma unica transacao: servicos da conta, agendamentos, bloqueios, sessoes, tokens de recuperacao, mensagens e registros locais de pagamentos. As outras contas e os cadastros compartilhados de clientes e servicos sao preservados.
+
+Se a operacao falhar no banco, a transacao e desfeita. Se houver falha de conexao, recarregue a lista para conferir o resultado antes de tentar novamente. A migration `003_account_delete_relations.sql` e aplicada automaticamente na inicializacao. A exclusao de registros locais nao realiza estornos no Mercado Pago nem remove instancias na Evolution API.

@@ -39,7 +39,9 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
 
   await t.test('migrations concorrentes e repetidas nao destroem dados', async () => {
     await Promise.all([migrate(pool), migrate(pool)]);
-    assert.equal((await pool.query('SELECT count(*) FROM schema_migrations')).rows[0].count, 2);
+    assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
+      '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
+    ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);
     assert.equal((await pool.query("SELECT valor FROM configuracoes WHERE chave='admin_pin'")).rows[0].valor, 'preservar');

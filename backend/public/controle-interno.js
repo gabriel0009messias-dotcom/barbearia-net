@@ -14,7 +14,7 @@ const adminSuporteInput = document.getElementById('adminSuporteInput');
 const salvarSuporteButton = document.getElementById('salvarSuporteButton');
 const recarregarAdminButton = document.getElementById('recarregarAdminButton');
 const sairAdminButton = document.getElementById('sairAdminButton');
-const adminAcessoRapidoButton = document.getElementById('adminAcessoRapidoButton');
+
 
 function getAdminToken() {
   return window.localStorage.getItem(adminTokenKey) || '';
@@ -85,10 +85,7 @@ function montarLinhaAssinatura(assinatura) {
   const pagamento = `${assinatura.metodo_pagamento || '--'} / dia ${assinatura.dia_vencimento || '--'}`;
 
   tr.innerHTML = `
-    <td>${assinatura.barbearia_nome || '--'}</td>
-    <td>${assinatura.responsavel_nome || '--'}</td>
-    <td>${contato || '--'}</td>
-    <td>${pagamento}</td>
+    <td></td><td></td><td></td><td></td>
     <td>
       <select class="status-select">
         <option value="pendente"${assinatura.status === 'pendente' ? ' selected' : ''}>Pendente</option>
@@ -96,14 +93,39 @@ function montarLinhaAssinatura(assinatura) {
         <option value="bloqueado"${assinatura.status === 'bloqueado' ? ' selected' : ''}>Bloqueado</option>
       </select>
     </td>
-    <td><button class="table-action danger-button" type="button">Salvar</button></td>
+    <td><button class="table-action danger-button" type="button">Salvar</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
   `;
 
+  [assinatura.barbearia_nome, assinatura.responsavel_nome, contato, pagamento].forEach((value, index) => {
+    tr.cells[index].textContent = value || '--';
+  });
+  const deleteButton = tr.querySelector('.delete-account');
+  deleteButton.addEventListener('click', async () => {
+    if (!window.confirm('Tem certeza que deseja excluir esta conta? Esta ação não poderá ser desfeita.')) return;
+    deleteButton.disabled = true;
+    button.disabled = true;
+    adminTableMessage.textContent = 'Excluindo conta...';
+    try {
+      const result = await buscarJson(`/api/admin/assinaturas/${assinatura.id}`, {
+        method: 'DELETE', body: JSON.stringify({ confirmationToken: assinatura.deleteConfirmationToken }),
+      });
+      if (result.sucesso !== true || result.id !== assinatura.id) throw new Error('Nao foi possivel confirmar a exclusao. Atualize a lista.');
+      tr.remove();
+      adminTableMessage.textContent = 'Conta excluida com sucesso.';
+      try { await carregarPainelAdmin(); } catch { adminTableMessage.textContent = 'Conta excluida. Recarregue a lista para atualizar o resumo.'; }
+    } catch (error) {
+      adminTableMessage.textContent = error instanceof TypeError ? 'Falha de conexao. Verifique a lista antes de tentar novamente.' : error.message;
+    } finally {
+      deleteButton.disabled = false;
+      button.disabled = false;
+    }
+  });
   const select = tr.querySelector('select');
   const button = tr.querySelector('button');
 
   button.addEventListener('click', async () => {
     button.disabled = true;
+    deleteButton.disabled = true;
     adminTableMessage.textContent = 'Salvando status...';
 
     try {
@@ -125,6 +147,7 @@ function montarLinhaAssinatura(assinatura) {
       adminTableMessage.textContent = error.message;
     } finally {
       button.disabled = false;
+      deleteButton.disabled = false;
     }
   });
 
@@ -183,18 +206,6 @@ adminLoginForm?.addEventListener('submit', async (event) => {
 
   try {
     await fazerLoginAdmin(adminEmailInput.value.trim(), adminSenhaInput.value);
-  } catch (error) {
-    adminLoginMessage.textContent = error.message;
-  }
-});
-
-adminAcessoRapidoButton?.addEventListener('click', async () => {
-  adminEmailInput.value = 'gabriel0009messias@gmail.com';
-  adminSenhaInput.value = 'rios123456';
-  adminLoginMessage.textContent = 'Entrando...';
-
-  try {
-    await fazerLoginAdmin('gabriel0009messias@gmail.com', 'rios123456');
   } catch (error) {
     adminLoginMessage.textContent = error.message;
   }
