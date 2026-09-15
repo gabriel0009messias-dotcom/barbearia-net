@@ -38,9 +38,10 @@ const STATUS_ASSINATURA = ['pendente', 'ativo', 'ativa', 'atrasada', 'bloqueado'
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const BARBER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const payments = require('./services/payments/mercadoPago');
-const VALOR_MENSAL_PADRAO = 65;
+const { PROFESSIONAL_PLAN, subscriptionPlan } = require('./services/payments/plan');
+const VALOR_MENSAL_PADRAO = PROFESSIONAL_PLAN.amountCents / 100;
 const TOLERANCIA_ATRASO_DIAS = 4;
-const NOME_PLANO_PADRAO = 'Plano Profissional';
+const NOME_PLANO_PADRAO = PROFESSIONAL_PLAN.name;
 const MENSAGEM_COMPROVANTE_WHATSAPP = 'Ola, regularizei a assinatura e preciso confirmar a liberacao do acesso.';
 const MENSAGEM_COBRANCA_PADRAO = 'Sua assinatura esta em atraso. Regularize o pagamento para continuar usando o sistema.';
 function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
@@ -173,7 +174,7 @@ function mapearAssinatura(assinatura) {
     ...assinatura,
     nome: assinatura.barbearia_nome,
     plano: assinatura.plano || NOME_PLANO_PADRAO,
-    valor_plano: Number(assinatura.valor_plano || assinatura.valor_mensal || VALOR_MENSAL_PADRAO),
+    valor_plano: subscriptionPlan(assinatura).amountCents / 100,
     subscription_id: assinatura.subscription_id || assinatura.mercado_preapproval_id || null,
     customer_id: assinatura.customer_id || null,
     payment_id: assinatura.payment_id || null,
@@ -496,7 +497,7 @@ function montarEstadoPagamento(assinatura) {
     },
     bloqueado: resumo.bloqueado,
     plano: assinatura.plano || NOME_PLANO_PADRAO,
-    valor: Number(assinatura.valor_plano || assinatura.valor_mensal || VALOR_MENSAL_PADRAO),
+    valor: subscriptionPlan(assinatura).amountCents / 100,
     gatewayCheckoutUrl: assinatura.gateway_checkout_url || null,
     gatewayProvider: assinatura.gateway_provider || 'mercado_pago',
     mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
@@ -1921,6 +1922,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
       suporteNumero,
       valorMensal: VALOR_MENSAL_PADRAO,
       whatsappBridgeUrl: null,
+      plan: PROFESSIONAL_PLAN,
       whatsappLocalOnly: provider === 'wppconnect_local',
       whatsappProvider: provider,
       whatsappEnabled: true,
@@ -2004,6 +2006,7 @@ router.post('/publico/assinaturas/:id/checkout', async (req, res) => {
 
     res.json({
       checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
+      plan: checkout.plan,
       gatewayStatus: checkout.status || 'pending',
       provider: 'mercado_pago',
     });
@@ -2388,8 +2391,10 @@ router.post('/publico/assinaturas', async (req, res) => {
         horario_almoco_fim,
         horario_fechamento,
         senha_hash,
-        senha_salt
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+        senha_salt,
+        valor_plano,
+        plano
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $7, $24)`,
       [
         barbeariaNome,
         responsavelNome,
@@ -2414,6 +2419,7 @@ router.post('/publico/assinaturas', async (req, res) => {
         horarioFechamento || '18:00',
         credenciais.hash,
         credenciais.salt,
+        NOME_PLANO_PADRAO,
       ]
     );
 
@@ -2896,6 +2902,7 @@ router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
       suporteNumero,
       valorMensal: VALOR_MENSAL_PADRAO,
       gateway: { provider: 'mercado_pago', label: 'Mercado Pago', enabled: payments.configured() },
+      plan: PROFESSIONAL_PLAN,
       pix: null,
       mensagemCobranca: MENSAGEM_COBRANCA_PADRAO,
       diasVencimento: DIAS_VENCIMENTO,

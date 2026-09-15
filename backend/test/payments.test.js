@@ -54,9 +54,10 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     process.env.MERCADO_PAGO_ACCESS_TOKEN = '';
     process.env.MERCADO_PAGO_WEBHOOK_SECRET = '';
     assert.equal((await post('/api/publico/assinaturas', { ...signup, metodoPagamento: 'pix' })).status, 400);
-    const response = await post('/api/publico/assinaturas', signup);
+    const response = await post('/api/publico/assinaturas', { ...signup, valor_mensal: 50, valor_plano: 1, amountCents: 100 });
     assert.equal(response.status, 201, await response.clone().text());
     id = (await response.json()).assinatura.id;
+    assert.deepEqual(await db.getAsync('SELECT valor_mensal, valor_plano FROM assinaturas WHERE id = $1', [id]), { valor_mensal: 65, valor_plano: 65 });
     assert.equal((await db.getAsync("SELECT status FROM assinaturas WHERE id = $1", [id])).status, 'pendente');
     const checkoutResponse = await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha });
     assert.equal(checkoutResponse.status, 503);
@@ -75,6 +76,11 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     const result = await response.json();
     assert.match(result.checkoutUrl, /^https:\/\/sandbox.mercadopago/);
     assert.equal(preference.items[0].unit_price, 65);
+    const config = await (await nativeFetch(base + '/api/publico/assinatura-config')).json();
+    assert.equal(config.valorMensal, 65);
+    assert.deepEqual(result.plan, config.plan);
+    assert.equal(result.plan.amountCents, 6500);
+    assert.equal(result.plan.durationDays, 30);
     assert.equal(preference.notification_url, 'https://example.test/api/mercadopago/webhook');
     assert.ok(preference.external_reference);
     const count = calls;

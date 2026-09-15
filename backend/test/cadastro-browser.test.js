@@ -12,12 +12,13 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
   app.use(express.json());
   let failure = null;
   let gatewayEnabled = true;
+  let plan = { name: 'Plano Profissional', amountCents: 6500, currency: 'BRL', durationDays: 30 };
   let signupCalls = 0;
   let checkoutCalls = 0;
   const paymentUrl = 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=browser-test';
   app.get('/api/publico/assinatura-config', (req, res) => {
     if (failure === 'config') return res.status(503).json({ error: 'Configuracao indisponivel.' });
-    res.json({ diasVencimento: [5, 12, 24], gateway: { enabled: gatewayEnabled } });
+    res.json({ diasVencimento: [5, 12, 24], gateway: { enabled: gatewayEnabled }, plan });
   });
   app.post('/api/publico/assinaturas', (req, res) => {
     signupCalls++;
@@ -31,7 +32,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
   app.post('/api/publico/assinaturas/17/checkout', (req, res) => {
     checkoutCalls++;
     if (failure === 'checkout') return res.status(503).json({ error: 'Configure as credenciais e o webhook do Mercado Pago no servidor.' });
-    res.json({ checkoutUrl: failure === 'url' ? null : paymentUrl });
+    res.json({ checkoutUrl: failure === 'url' ? null : paymentUrl, plan });
   });
   app.get('/api/publico/assinaturas/17/status', (req, res) => res.json({ liberado: false }));
   app.use(express.static(path.resolve(__dirname, '../public')));
@@ -115,6 +116,17 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     try {
       assert.match(await page.$eval('#cadastroConfigMessage', element => element.textContent), /configurar o Mercado Pago/);
     } finally { await page.close(); gatewayEnabled = true; }
+  });
+  await t.test('preco exibido vem da API, sem valor independente no HTML ou JS', async () => {
+    const original = plan;
+    plan = { ...plan, amountCents: 7200, durationDays: 45 };
+    const page = await openForm();
+    try {
+      assert.match(await page.$eval('#planPriceLabel', element => element.textContent), /72,00 por 45 dias/);
+      for (const file of ['cadastro.html', 'cadastro.js']) {
+        assert.doesNotMatch(fs.readFileSync(path.resolve(__dirname, '../public', file), 'utf8'), /R\$\s*65|6500/);
+      }
+    } finally { await page.close(); plan = original; }
   });
   await t.test('erro na configuracao aparece sem deixar selects vazios', async () => {
     failure = 'config';

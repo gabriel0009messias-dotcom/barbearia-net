@@ -16,10 +16,24 @@ const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
 const submitButton = assinaturaForm.querySelector('button[type="submit"]');
 const cadastroConfigMessage = document.getElementById('cadastroConfigMessage');
+const planPriceLabel = document.getElementById('planPriceLabel');
 let authToken = lerStorage(TOKEN_STORAGE_KEY);
 let enviando = false;
 let monitorLiberacao = null;
 let checkoutUrl = null;
+let planoAtual = null;
+
+function exibirPlano(plan) {
+  if (!plan || !Number.isSafeInteger(plan.amountCents) || plan.amountCents <= 0 ||
+      !Number.isSafeInteger(plan.durationDays) || plan.durationDays <= 0 || plan.currency !== 'BRL' || !plan.name) {
+    throw new Error('O servidor nao informou um plano valido. Tente novamente.');
+  }
+  planoAtual = plan;
+  const valor = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: plan.currency }).format(plan.amountCents / 100);
+  const label = `${plan.name} - ${valor} por ${plan.durationDays} dias`;
+  planPriceLabel.textContent = label;
+  gatewayMethodLabel.textContent = label;
+}
 
 function lerStorage(key) {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -110,7 +124,7 @@ function renderizarCheckout(url = null) {
   gatewayInfoCard.hidden = false;
   gatewayCheckoutButton.hidden = !url;
   gatewayCheckoutButton.textContent = 'Pagar com Mercado Pago';
-  gatewayMethodLabel.textContent = 'Plano Profissional - R$ 65,00 por 30 dias';
+  if (planoAtual) exibirPlano(planoAtual);
   gatewayHelpLabel.textContent = 'Pague no Mercado Pago. O acesso sera liberado apos a confirmacao do pagamento.';
   pixQrCard.hidden = true;
 }
@@ -162,6 +176,7 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
 async function carregarConfiguracao() {
   try {
     const config = await buscarJson('/api/publico/assinatura-config');
+    if (!checkoutUrl) exibirPlano(config.plan);
     supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
     metodoPagamentoInput.innerHTML = '<option value="mercado_pago">Mercado Pago</option>';
     if (!Array.isArray(config.diasVencimento) || !config.diasVencimento.length) throw new Error('Configuracao de vencimento indisponivel.');
@@ -226,6 +241,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
     if (typeof checkout.checkoutUrl !== 'string' || !/^https:\/\/([a-z0-9-]+\.)*mercadopago\.(com|com\.br)\//i.test(checkout.checkoutUrl)) {
       throw new Error('O Mercado Pago nao retornou uma URL de pagamento valida. Tente novamente.');
     }
+    exibirPlano(checkout.plan);
     renderizarCheckout(checkout.checkoutUrl);
     iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
     mostrarMensagem('Redirecionando ao Mercado Pago. Se nao abrir, clique em Pagar com Mercado Pago.', true);

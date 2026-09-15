@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 
 const db = require('../../database');
 const { validateSignature } = require('./signature');
+const { PROFESSIONAL_PLAN, subscriptionPlan } = require('./plan');
 require('../../loadEnv');
 
 function fail(message, statusCode = 503) {
@@ -45,24 +46,38 @@ async function checkout(subscription) {
   if (!configured()) throw fail('Configure as credenciais e o webhook do Mercado Pago no servidor.');
   const appUrl = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
   if (!/^https:\/\/[^/]+/.test(appUrl)) throw fail('Configure PUBLIC_APP_URL com a URL HTTPS do sistema.');
-  const amount = Math.round(Number(subscription.valor_mensal) * 100);
-  if (!Number.isSafeInteger(amount) || amount <= 0) throw fail('Valor do plano invalido.', 400);
-  if (!subscription.email) throw fail('Cadastre um email para pagar.', 400);
   const live = mode() === 'production';
-  await db.ready;
-  // One unpaid checkout per customer: retries reuse the URL without creating more charges.
-  const existing = await db.getAsync(`SELECT * FROM mercado_pago_orders WHERE assinatura_id = $1
-    AND amount_cents = $2 AND live_mode = $3 AND credited_payment_id IS NULL AND checkout_url IS NOT NULL
-    AND expires_at > $4 ORDER BY created_at DESC LIMIT 1`, [subscription.id, amount, live ? 1 : 0, new Date().toISOString()]);
-  if (existing) return { init_point: existing.checkout_url, id: existing.preference_id, status: 'pending' };
-
-  const reference = crypto.randomUUID();
-  const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  await db.runAsync(`INSERT INTO mercado_pago_orders (reference, assinatura_id, amount_cents, live_mode, expires_at)
-    VALUES ($1, $2, $3, $4, $5)`, [reference, subscription.id, amount, live ? 1 : 0, expiry]);
+  // Read the current contract and reserve the order under the same row lock.
+  // A migration cannot reprice the row between this read and recording payment intent.
+  const state = await transaction(async ({ run, get }) => {
+    const stored = await get('SELECT * FROM assinaturas WHERE id = $1 FOR UPDATE', [subscription.id]);
+    if (!stored) throw fail('Assinatura nao encontrada.', 404);
+    const plan = subscriptionPlan(stored);
+    const amount = plan.amountCents;
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw fail('Valor do plano invalido.', 400);
+    if (!stored.email) throw fail('Cadastre um email para pagar.', 400);
+    if (String(stored.status).trim().toLowerCase() === 'pendente' &&
+        String(stored.status_assinatura).trim().toLowerCase() === 'pendente') {
+      const conflicting = await get(`SELECT reference FROM mercado_pago_orders
+        WHERE assinatura_id = $1 AND amount_cents <> $2 AND credited_payment_id IS NULL LIMIT 1`, [stored.id, amount]);
+      if (conflicting) throw fail('Existe um pagamento anterior com outro valor. Entre em contato com o suporte para conferir o pagamento antes de gerar um novo checkout.', 409);
+    }
+    const existing = await get(`SELECT * FROM mercado_pago_orders WHERE assinatura_id = $1
+      AND amount_cents = $2 AND live_mode = $3 AND credited_payment_id IS NULL AND checkout_url IS NOT NULL
+      AND expires_at > $4 ORDER BY created_at DESC LIMIT 1`, [stored.id, amount, live ? 1 : 0, new Date().toISOString()]);
+    if (existing) return { existing, plan, stored };
+    const reference = crypto.randomUUID();
+    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await run(`INSERT INTO mercado_pago_orders (reference, assinatura_id, amount_cents, live_mode, expires_at)
+      VALUES ($1, $2, $3, $4, $5)`, [reference, stored.id, amount, live ? 1 : 0, expiry]);
+    return { reference, expiry, plan, stored };
+  });
+  const { plan, existing, reference, expiry } = state;
+  subscription = state.stored;
+  if (existing) return { init_point: existing.checkout_url, id: existing.preference_id, status: 'pending', plan };
   const backUrl = `${appUrl}/cadastro.html?assinatura=${subscription.id}&gateway=mercado_pago`;
   const preference = await request('/checkout/preferences', { body: {
-    items: [{ id: 'plano-profissional-mensal', title: 'Plano Profissional - 30 dias', quantity: 1, currency_id: 'BRL', unit_price: amount / 100 }],
+    items: [{ id: plan.code, title: `${plan.name} - ${plan.durationDays} dias`, quantity: 1, currency_id: plan.currency, unit_price: plan.amountCents / 100 }],
     payer: { email: subscription.email },
     external_reference: reference,
     notification_url: `${appUrl}/api/mercadopago/webhook`,
@@ -81,7 +96,7 @@ async function checkout(subscription) {
       gateway_external_reference = $1, gateway_checkout_url = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
     [reference, checkoutUrl, subscription.id]);
   });
-  return { ...preference, init_point: checkoutUrl, status: 'pending' };
+  return { ...preference, init_point: checkoutUrl, status: 'pending', plan };
 }
 
 async function reconcile(paymentId, expectedSubscriptionId) {
@@ -100,6 +115,10 @@ async function reconcile(paymentId, expectedSubscriptionId) {
     if (expectedSubscriptionId && payment.status !== 'approved') throw fail('Pagamento ainda nao esta aprovado no Mercado Pago.', 409);
     const subscription = await get("SELECT * FROM assinaturas WHERE id = $1", [order.assinatura_id]);
     if (!subscription) return { ignored: true, reason: 'subscription_removed' };
+    if (payment.status === 'approved' && !order.credited_payment_id &&
+        order.amount_cents !== subscriptionPlan(subscription).amountCents) {
+      throw fail('O valor do pagamento difere do valor contratado. O suporte precisa conferir o pagamento antes de liberar o acesso.', 409);
+    }
     await run(`INSERT INTO mercado_pago_payments (payment_id, order_reference, assinatura_id, status, amount_cents)
       VALUES ($1, $2, $3, $4, $5) ON CONFLICT(payment_id) DO UPDATE SET status = excluded.status, updated_at = CURRENT_TIMESTAMP`,
     [String(payment.id), order.reference, subscription.id, payment.status, order.amount_cents]);
@@ -109,8 +128,9 @@ async function reconcile(paymentId, expectedSubscriptionId) {
       if (!payment.date_approved || !Number.isFinite(paid.getTime())) throw fail('Data de aprovacao invalida.', 422);
       const currentDue = new Date(`${subscription.proximo_vencimento}T00:00:00Z`);
       const base = subscription.ultimo_pagamento && currentDue > paid ? currentDue : paid;
-      const due = new Date(base.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+      const due = new Date(base.getTime() + PROFESSIONAL_PLAN.durationDays * 86400000).toISOString().slice(0, 10);
       await run(`UPDATE assinaturas SET status = 'ativo', status_assinatura = 'ATIVA', bloqueado = 0,
+        valor_plano = valor_mensal,
         data_bloqueio = NULL, dias_atraso = 0, gateway_provider = 'mercado_pago', gateway_status = 'approved',
         metodo_pagamento = 'mercado_pago', payment_id = $1, ultimo_pagamento = $2, proximo_vencimento = $3,
         data_vencimento = $4, gateway_checkout_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $5`,
