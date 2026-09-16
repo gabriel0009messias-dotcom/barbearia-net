@@ -52,7 +52,7 @@ No serviço Evolution, confira `AUTHENTICATION_API_KEY`, os dados de PostgreSQL/
 
 ## Testes após a atualização
 
-1. Entre em `barbeiro.html`, informe `5575981218107` e clique em **Conectar WhatsApp**. Os logs devem percorrer `fetchInstances`, eventualmente `create`, `connectionState` e `connect`.
+1. Entre em `barbeiro.html`, informe `5575981218107` e clique em **Conectar WhatsApp**. Os logs devem iniciar em `connectionState`; uma instancia existente segue diretamente para `connect` quando necessario, sem `fetchInstances`. Criacao e busca de confirmacao ficam restritas aos casos descritos abaixo.
 2. O envio para a Evolution é `GET /instance/connect/barbearia-ID?number=5575981218107`, com autenticação `apikey` apenas no backend.
 3. No celular: **Aparelhos conectados > Conectar um aparelho > Conectar com número de telefone**. Digite o código exibido.
 4. Aguarde **WhatsApp conectado**, recarregue a página e confirme que o estado continua conectado.
@@ -92,12 +92,12 @@ Quantidade de chamadas por operacao, sem concorrencia nem erro:
 
 | Situacao | Busca | Criacao | Estado | Connect | Webhook apos codigo | Total |
 | --- | --- | --- | --- | --- | --- | --- |
-| Existente desconectada, codigo imediato | 1 | 0 | 1 | 1 | 1 | 4 |
-| Instancia nova, codigo imediato | 1 | 1 | 1 | 1 | 1 | 5 |
-| Ja conectada | 1 | 0 | 1 | 0 | 0 | 2 |
+| Existente desconectada, codigo imediato | 0 | 0 | 1 | 1 | 1 | 3 |
+| Instancia nova, ausencia confirmada por HTTP 404 especifico | 0 | 1 | 2 | 1 | 1 | 5 |
+| Ja conectada | 0 | 0 | 1 | 0 | 0 | 1 |
 
 O webhook depende de PUBLIC_APP_URL/RENDER_EXTERNAL_URL configurada. Sem ela,
-os dois primeiros totais sao 3 e 4. Codigo atrasado acrescenta no maximo uma chamada
+os dois primeiros totais sao 2 e 4. Codigo atrasado acrescenta no maximo uma chamada
 connect. Conflito ao criar acrescenta uma busca de confirmacao. Se as duas respostas
 vierem sem codigo, nao ha configuracao de webhook. Durante cooldown, sao zero chamadas.
 A consulta inicial do painel e o polling posterior sao operacoes separadas desses totais.
@@ -112,3 +112,28 @@ o painel mostra a contagem regressiva e bloqueia os botoes de conexao.
 Os testes usam Evolution simulada, navegador local e schemas temporarios em PostgreSQL
 exclusivo de testes. Nao validam o pareamento em um telefone de producao. Logs preservam
 endpoint, HTTP, identificador da tentativa e prazo de espera, com dados sensiveis sanitizados.
+
+
+## Estado primeiro e cache de existencia
+
+`garantirInstanciaWhatsapp` consulta `connectionState` antes de qualquer busca.
+A mesma resposta e usada para persistir o estado de WhatsApp e decidir se precisa
+conectar. Instancia existente, conectada ou desconectada, faz zero `fetchInstances`.
+Somente HTTP 404 especifico de instancia ausente autoriza criacao direta. Erros de
+rede, timeout, 401/403, 429 e 5xx interrompem o fluxo, sem busca alternativa nem criacao.
+
+Quando o estado vem em formato desconhecido ou ha HTTP 404 generico, a busca filtrada
+pode esclarecer a existencia. Se a busca confirma ausencia, cria uma vez e consulta
+estado novamente. Se confirma existencia mas o estado continua desconhecido, retorna
+erro seguro e nao gera codigo. Conflito ao criar exige uma busca de confirmacao fresca.
+
+`evolutionExistenceCache.js` guarda apenas confirmacao positiva com TTL de 60 segundos,
+por URL da Evolution e nome da instancia. Nunca armazena respostas completas, estado
+conectado/desconectado, tokens, chaves, pairing ou ausencia. Consultas simultaneas
+compartilham a verificacao. Estado valido e criacao bem-sucedida confirmam existencia.
+Ausencia explicita, exclusao e inicio de recriacao invalidam a confirmacao. Respostas
+antigas de busca nao repovoam entradas invalidadas. Cooldown e verificado antes de usar
+cache. O cache e local ao processo e nao evita consultar estado atual em nova conexao.
+
+No indicador visual, cooldown aparece como `Aguardando nova tentativa (55s)`, com
+contagem atualizada; ao expirar, o indicador deixa de mostrar a espera.

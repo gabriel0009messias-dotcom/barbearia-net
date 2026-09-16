@@ -18,6 +18,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
   let connectGate = null;
   let connectEntered = null;
   let createConflict = false;
+  let uncertainStateOnce = false;
   const mock = express();
   mock.use(express.json());
   mock.use(async (req, res) => {
@@ -40,6 +41,10 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     if (req.path.startsWith('/webhook/')) {
       assert.equal(req.body.webhook.enabled, true);
       return res.json({ success: true });
+    }
+    if (uncertainStateOnce && req.path.startsWith('/instance/connectionState/')) {
+      uncertainStateOnce = false;
+      return res.json({});
     }
     const instance = instances.get(name);
     if (!instance) return res.status(404).json({ message: 'Instance does not exist' });
@@ -89,8 +94,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     tokens.push(result.body.token);
   }
   const route = '/publico/assinaturas/1/whatsapp';
-  const guard = require('../evolutionConnectionGuard');
-  const clearCode = id => guard.invalidateConnection(`${process.env.EVOLUTION_API_URL}|barbearia-${id}`);
+  const clearCode = id => api.invalidarExistenciaInstancia(`barbearia-${id}`);
   t.beforeEach(() => { clearCode(1); clearCode(2); });
 
   await t.test('login obrigatorio e isolamento entre assinaturas', async () => {
@@ -233,7 +237,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     createConflict = false;
     assert.equal(result.status, 200);
     assert.equal(result.body.pairingCode, 'ABCD1234');
-    assert.equal(calls.filter((call) => call.path === '/instance/fetchInstances').length - before, 2);
+    assert.equal(calls.filter((call) => call.path === '/instance/fetchInstances').length - before, 1);
   });
   await t.test('falha de criacao identifica a etapa sem expor detalhes', async () => {
     instances.delete('barbearia-2');
@@ -266,17 +270,102 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
       assert.equal(result.status, 200);
       await new Promise(resolve => setTimeout(resolve, 30)); // webhook disparado apos o codigo
       const paths = calls.slice(before).map(call => call.path);
-      const expected = ['/instance/fetchInstances'];
-      if (scenario === 'new') expected.push('/instance/create');
-      expected.push('/instance/connectionState/barbearia-1');
+      const expected = ['/instance/connectionState/barbearia-1'];
+      if (scenario === 'new') expected.push('/instance/create', '/instance/connectionState/barbearia-1');
       if (scenario !== 'connected') expected.push('/instance/connect/barbearia-1', '/webhook/set/barbearia-1');
       assert.deepEqual(paths, expected);
     }
   });
+  await t.test('QR em instancia existente nao busca instancias; open/connected nao geram codigo', async () => {
+    for (const state of ['close', 'open', 'connected', 'CONNECTED']) {
+      clearCode(2);
+      instances.set('barbearia-2', { state });
+      const before = calls.length;
+      const result = await request('/publico/assinaturas/2/whatsapp/iniciar', tokens[1], {});
+      assert.equal(result.status, 200);
+      const paths = calls.slice(before).map(call => call.path).filter(path => !path.startsWith('/webhook/'));
+      assert.deepEqual(paths, state === 'close'
+        ? ['/instance/connectionState/barbearia-2', '/instance/connect/barbearia-2']
+        : ['/instance/connectionState/barbearia-2']);
+      if (state !== 'close') assert.equal(result.body.conectado, true);
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+  });
+  await t.test('estado incerto usa busca excepcional; existencia em cache evita repetir busca', async () => {
+    instances.set('barbearia-1', { state: 'close' });
+    for (const expectedSearches of [1, 0]) {
+      uncertainStateOnce = true;
+      const before = calls.length;
+      const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+      assert.equal(result.body.errorCode, 'EVOLUTION_STATE_UNKNOWN');
+      const paths = calls.slice(before).map(call => call.path);
+      assert.equal(paths.filter(path => path === '/instance/fetchInstances').length, expectedSearches);
+      assert.equal(paths.filter(path => path === '/instance/create' || path.includes('/connect/')).length, 0);
+    }
+  });
+  await t.test('404 generico de rota nao e ausencia: consulta excepcional sem criar', async () => {
+    instances.set('barbearia-1', { state: 'close' });
+    failure = { path: '/instance/connectionState/barbearia-1', status: 404,
+      body: { path: '/instance/connectionState/barbearia-1', message: 'Not Found' } };
+    const before = calls.length;
+    try {
+      const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+      assert.equal(result.body.errorCode, 'EVOLUTION_ENDPOINT_NOT_FOUND');
+      assert.deepEqual(calls.slice(before).map(call => call.path), ['/instance/connectionState/barbearia-1', '/instance/fetchInstances']);
+    } finally { failure = null; }
+  });
+  await t.test('estado incerto e busca confirma ausencia: cria uma vez e consulta estado novamente', async () => {
+    instances.delete('barbearia-1');
+    uncertainStateOnce = true;
+    const before = calls.length;
+    const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+    assert.equal(result.status, 200);
+    const paths = calls.slice(before).map(call => call.path).filter(path => !path.startsWith('/webhook/'));
+    assert.deepEqual(paths, ['/instance/connectionState/barbearia-1', '/instance/fetchInstances', '/instance/create', '/instance/connectionState/barbearia-1', '/instance/connect/barbearia-1']);
+    await new Promise(resolve => setTimeout(resolve, 30));
+  });
+  await t.test('401, 403 e 5xx de estado nao buscam nem criam instancia', async () => {
+    for (const status of [401, 403, 500, 502, 503, 504]) {
+      failure = { path: '/instance/connectionState/barbearia-1', status, body: { message: 'Instance not found' } };
+      const before = calls.length;
+      const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+      assert.ok(result.status >= 400);
+      assert.deepEqual(calls.slice(before).map(call => call.path), ['/instance/connectionState/barbearia-1']);
+    }
+    failure = null;
+  });
+  await t.test('timeout e erro de rede de estado interrompem sem busca ou criacao', async sub => {
+    const nativeFetch = global.fetch;
+    let simulated;
+    sub.mock.method(global, 'fetch', (url, options) => {
+      if (String(url).startsWith(process.env.EVOLUTION_API_URL + '/instance/connectionState/')) return Promise.reject(simulated);
+      return nativeFetch(url, options);
+    });
+    for (const error of [new DOMException('Timeout', 'AbortError'), new TypeError('fetch failed')]) {
+      simulated = error;
+      const before = calls.length;
+      const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+      assert.ok(['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE'].includes(result.body.errorCode));
+      assert.equal(calls.length, before);
+    }
+  });
+  await t.test('conflito de criacao com confirmacao negada nao conecta nem repete criacao', async () => {
+    instances.delete('barbearia-2');
+    createConflict = true;
+    failure = { path: '/instance/fetchInstances', status: 401, body: { message: 'Unauthorized' } };
+    const before = calls.length;
+    try {
+      const result = await request('/publico/assinaturas/2/whatsapp/pairing-code', tokens[1], { phone: '75983179933' });
+      assert.equal(result.body.errorCode, 'EVOLUTION_INVALID_KEY');
+      assert.deepEqual(calls.slice(before).map(call => call.path), ['/instance/connectionState/barbearia-2', '/instance/create', '/instance/fetchInstances']);
+    } finally { createConflict = false; failure = null; }
+  });
   await t.test('429 nas rotas preserva prazo e bloqueia pairing, QR e status sem acessar Evolution', async () => {
     instances.set('barbearia-1', { state: 'close' });
     failure = { path: '/instance/connectionState/barbearia-1', status: 429, retryAfter: '120', body: { message: 'Too Many Requests' } };
+    const initial = calls.length;
     const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
+    assert.deepEqual(calls.slice(initial).map(call => call.path), ['/instance/connectionState/barbearia-1']);
     assert.equal(result.status, 429);
     assert.equal(result.retryAfter, '120');
     assert.equal(result.body.retryAfterSeconds, 120);

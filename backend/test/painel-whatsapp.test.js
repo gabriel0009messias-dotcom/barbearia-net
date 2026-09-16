@@ -148,6 +148,9 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     await page.click('#generatePairingButton');
     await page.waitForFunction(() => document.getElementById('qrStatusMessage').textContent.includes('segundos'));
     assert.equal(await page.$eval('#generatePairingButton', e => e.disabled), true);
+    assert.match(await page.$eval('#whatsappStatusBadge', e => e.textContent), /^Aguardando nova tentativa \(\d+s\)$/);
+    await page.evaluate(() => { whatsappCooldownUntil -= 5000; atualizarCooldownWhatsapp(); });
+    assert.match(await page.$eval('#whatsappStatusBadge', e => e.textContent), /\(5[0-5]s\)/);
     const before = pairingCalls;
     await page.evaluate(() => solicitarPairingCode());
     assert.equal(pairingCalls, before);

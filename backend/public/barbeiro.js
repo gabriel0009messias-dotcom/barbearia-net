@@ -122,10 +122,12 @@ function atualizarCooldownWhatsapp() {
   const seconds = Math.max(0, Math.ceil((whatsappCooldownUntil - Date.now()) / 1000));
   atualizarBotoesWhatsapp();
   if (seconds) {
+    whatsappStatusBadge.textContent = `Aguardando nova tentativa (${seconds}s)`;
     qrStatusMessage.textContent = `Muitas solicitacoes ao WhatsApp. Tente novamente em ${seconds} segundos.`;
     if (whatsappVisible()) whatsappCooldownTimer = setTimeout(atualizarCooldownWhatsapp, 1000);
   } else if (whatsappCooldownUntil) {
     whatsappCooldownUntil = 0;
+    whatsappStatusBadge.textContent = whatsappConnected ? 'Conectado' : 'Desconectado';
     qrStatusMessage.textContent = 'Voce ja pode tentar conectar o WhatsApp novamente.';
   }
 }
@@ -617,7 +619,7 @@ async function consultarStatusWhatsapp() {
     whatsappPollingErrors += 1;
     qrStatusMessage.textContent = error.message;
     whatsappStatusBadge.textContent = 'Falha ao consultar conexao';
-    if ([400, 401, 403, 404, 409].includes(error.status) || ['EVOLUTION_INVALID_KEY', 'EVOLUTION_NOT_CONFIGURED', 'EVOLUTION_INVALID_URL', 'EVOLUTION_ENDPOINT_NOT_FOUND', 'EVOLUTION_INVALID_RESPONSE'].includes(error.details?.errorCode) || whatsappPollingErrors >= 3) {
+    if ([400, 401, 403, 404, 409].includes(error.status) || ['EVOLUTION_INVALID_KEY', 'EVOLUTION_NOT_CONFIGURED', 'EVOLUTION_INVALID_URL', 'EVOLUTION_ENDPOINT_NOT_FOUND', 'EVOLUTION_INVALID_RESPONSE', 'EVOLUTION_STATE_UNKNOWN'].includes(error.details?.errorCode) || whatsappPollingErrors >= 3) {
       whatsappStatusPaused = true;
       pararPollingWhatsapp();
     }

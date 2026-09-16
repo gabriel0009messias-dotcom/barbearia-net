@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { logEvolution, sanitize } = require('./evolutionLog');
 const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
+const existence = require('./evolutionExistenceCache');
 function connectionKey(instance) { return `${getEvolutionConfig().baseUrl}|${instance}`; }
 
 function normalizarBaseUrl(url = '') {
@@ -94,7 +95,9 @@ function classifyFailure(status, payload, path) {
   if ([408, 504].includes(status)) return ['Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT'];
   if (status === 429) return ['Evolution API recebeu muitas solicitacoes. Aguarde e tente novamente.', 429, 'EVOLUTION_RATE_LIMIT'];
   if (status === 400 && path.startsWith('/instance/logout/') && /instance.*is not connected/i.test(technical)) return ['WhatsApp ja esta desconectado.', 400, 'EVOLUTION_ALREADY_DISCONNECTED'];
-  if (/instance.*(?:not.*found|does not exist|nao encontrada|inexistente)/i.test(technical)) return ['A instancia do WhatsApp nao foi encontrada na Evolution API.', 404, 'EVOLUTION_INSTANCE_NOT_FOUND'];
+  const messages = [payload?.message, payload?.response?.message, payload?.error, typeof payload === 'string' ? payload : null].flat();
+  const missingInstance = messages.some(message => typeof message === 'string' && /^\s*(?:the\s+)?instance\b.*\b(?:not\s+found|does\s+not\s+exist)\b/i.test(message));
+  if (status === 404 && missingInstance) return ['A instancia do WhatsApp nao foi encontrada na Evolution API.', 404, 'EVOLUTION_INSTANCE_NOT_FOUND'];
   if (path === '/instance/create' && (status === 409 || /already|duplicate|already in use/i.test(technical))) return ['A instancia ja existe na Evolution API.', 409, 'EVOLUTION_INSTANCE_EXISTS'];
   if (status === 404) return ['Endpoint da Evolution API nao encontrado. Verifique a URL e a versao do servico.', 502, 'EVOLUTION_ENDPOINT_NOT_FOUND'];
   if (path === '/instance/create') return ['Nao foi possivel criar a instancia.', 502, 'EVOLUTION_CREATE_FAILED'];
@@ -151,11 +154,13 @@ async function requestTransport(path, options = {}) {
       logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started, response: payload });
       if (!response.ok || payload?.error) {
         const [message, status, code] = classifyFailure(httpStatus, payload, endpoint);
+        if (code === 'EVOLUTION_INSTANCE_NOT_FOUND' && instance) invalidarExistenciaInstancia(instance);
         throw Object.assign(createEvolutionError(message, status, code, payload), { upstreamStatus: httpStatus });
       }
       if (payload?.nonJson || payload === null || typeof payload !== 'object') {
         throw createEvolutionError('Evolution API retornou uma resposta invalida. Verifique a URL e a inicializacao do servico.', 502, 'EVOLUTION_INVALID_RESPONSE', payload);
       }
+      if (endpoint.startsWith('/instance/delete/') && instance) invalidarExistenciaInstancia(instance);
       return payload;
     } catch (original) {
       let error = original;
@@ -275,10 +280,27 @@ async function buscarInstancia(instanceName, options = {}) {
     throw error;
   }
 
-  return (
-    instancias.find((item) => String(item?.instance?.instanceName || item?.instanceName || item?.name || '').trim() === String(instanceName || '').trim()) ||
-    null
-  );
+  const nameOf = item => String(item?.instance?.instanceName || item?.instanceName || item?.name || '').trim();
+  if (instancias.some(item => !nameOf(item))) throw createEvolutionError('Resposta de instancias incompativel com a Evolution API.', 502, 'EVOLUTION_INVALID_RESPONSE');
+  return instancias.find(item => nameOf(item) === String(instanceName || '').trim()) || null;
+}
+
+function invalidarExistenciaInstancia(instanceName) {
+  existence.invalidate(connectionKey(instanceName));
+  guard.invalidateConnection(connectionKey(instanceName));
+}
+
+function extrairEstadoInstancia(payload) {
+  const state = String(payload?.instance?.state || payload?.state || payload?.instance?.status || '').trim().toLowerCase();
+  return ['open', 'connected', 'close', 'closed', 'disconnected', 'logout', 'connecting', 'pairing', 'syncing'].includes(state) ? state : null;
+}
+
+async function confirmarExistenciaInstancia(instanceName, options = {}) {
+  ensureEvolutionConfigured();
+  guard.checkCooldown(connectionKey('global'));
+  guard.checkCooldown(connectionKey(instanceName));
+  const { force = false, ...requestOptions } = options;
+  return existence.confirm(connectionKey(instanceName), async () => Boolean(await buscarInstancia(instanceName, requestOptions)), force);
 }
 
 async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
@@ -287,7 +309,8 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
   const readStatus = parseBooleanEnv(process.env.EVOLUTION_READ_STATUS, false);
   const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, true);
 
-  return evolutionRequest('/instance/create', {
+  invalidarExistenciaInstancia(instanceName);
+  const result = await evolutionRequest('/instance/create', {
     ...options, instanceName, method: 'POST',
     body: JSON.stringify({
       instanceName,
@@ -302,6 +325,8 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
       groupsIgnore: true,
     }),
   });
+  existence.remember(connectionKey(instanceName));
+  return result;
 }
 
 async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
@@ -334,6 +359,7 @@ async function obterEstadoConexao(instanceName, options = {}) {
   const job = evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
     ...options, instanceName, method: 'GET', retryAttempts: 1,
   }).then(result => {
+    if (extrairEstadoInstancia(result)) existence.remember(key);
     if (['open', 'connected'].includes(String(result?.instance?.state || result?.state || '').toLowerCase())) guard.invalidateConnection(key);
     return result;
   }).finally(() => statusRequests.delete(key));
@@ -413,6 +439,9 @@ module.exports = {
   validarConexaoApi,
   buscarInstancias,
   buscarInstancia,
+  confirmarExistenciaInstancia,
+  invalidarExistenciaInstancia,
+  extrairEstadoInstancia,
   criarInstancia,
   conectarInstancia,
   extrairPairingCode,

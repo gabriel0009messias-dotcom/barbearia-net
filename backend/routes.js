@@ -13,7 +13,8 @@ const {
   extrairConteudoQr,
   construirQrCodeUrl,
   validarConexaoApi,
-  buscarInstancia,
+  confirmarExistenciaInstancia,
+  extrairEstadoInstancia,
   criarInstancia,
   conectarInstancia,
   extrairPairingCode,
@@ -1559,38 +1560,41 @@ async function configurarWebhookEvolutionSePossivel(instanceName) {
 
 async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '', options = {}) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim() || gerarNomeInstancia(assinatura.id);
-
-  console.info('[WHATSAPP] Criando/carregando sessao', { assinaturaId: assinatura.id, instanceName });
-  const existente = await buscarInstancia(instanceName, options);
-
-  if (existente) {
-    if (instanceName !== assinatura?.whatsapp_session) {
-      await persistirSessaoWhatsapp(assinatura.id, {
-        whatsappSession: instanceName,
-      });
-    }
-
-    return instanceName;
-  }
-
+  let estado;
+  let ausente = false;
+  let incerto = null;
   try {
-    await criarInstancia(instanceName, phoneNumber, options);
+    estado = await obterEstadoConexao(instanceName, options);
+    if (!extrairEstadoInstancia(estado)) {
+      incerto = createEvolutionError('Nao foi possivel confirmar o estado da instancia do WhatsApp.', 502, 'EVOLUTION_STATE_UNKNOWN');
+    }
   } catch (error) {
-    if (error.code !== 'EVOLUTION_INSTANCE_EXISTS') throw error;
-    // Outra requisicao/processo pode ter criado a instancia entre fetch e create.
-    if (!(await buscarInstancia(instanceName, options))) throw error;
+    if (error.code === 'EVOLUTION_INSTANCE_NOT_FOUND' && error.upstreamStatus === 404) ausente = true;
+    else if (error.code === 'EVOLUTION_ENDPOINT_NOT_FOUND' && error.upstreamStatus === 404) incerto = error;
+    else throw error; // 429, autenticacao, rede, timeout e 5xx nunca autorizam criar.
   }
-
+  if (incerto) {
+    const existe = await confirmarExistenciaInstancia(instanceName, options);
+    if (existe) throw incerto; // Existencia confirmada nao substitui estado atual desconhecido.
+    ausente = true;
+  }
+  if (ausente) {
+    try {
+      await criarInstancia(instanceName, phoneNumber, options);
+    } catch (error) {
+      if (error.code !== 'EVOLUTION_INSTANCE_EXISTS') throw error;
+      if (!(await confirmarExistenciaInstancia(instanceName, { ...options, force: true }))) throw error;
+    }
+    estado = await obterEstadoConexao(instanceName, options);
+    if (!extrairEstadoInstancia(estado)) throw createEvolutionError('Nao foi possivel confirmar o estado da instancia do WhatsApp.', 502, 'EVOLUTION_STATE_UNKNOWN');
+  }
   if (instanceName !== assinatura?.whatsapp_session) {
-    await persistirSessaoWhatsapp(assinatura.id, {
-      whatsappSession: instanceName,
-    });
+    await persistirSessaoWhatsapp(assinatura.id, { whatsappSession: instanceName });
   }
-
-  return instanceName;
+  return { instanceName, estado };
 }
 
-async function consultarStatusWhatsappEvolution(assinatura, options = {}) {
+async function consultarStatusWhatsappEvolution(assinatura, options = {}, estadoConfirmado = null) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim();
 
   if (!instanceName) {
@@ -1610,7 +1614,7 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}) {
   }
 
   try {
-    const estado = await obterEstadoConexao(instanceName, { timeoutMs: 12000, ...options });
+    const estado = estadoConfirmado || await obterEstadoConexao(instanceName, { timeoutMs: 12000, ...options });
     const statusMapeado = mapearStatusWhatsappEvolution(estado?.instance?.state || estado?.state || estado?.instance?.status);
 
     await persistirSessaoWhatsapp(assinatura.id, {
@@ -1684,8 +1688,8 @@ async function gerarQrWhatsappEvolution(assinatura) {
     const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'qr', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     try {
-      const instanceName = await garantirInstanciaWhatsapp(assinatura, '', options);
-      const estado = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options);
+      const { instanceName, estado: estadoConfirmado } = await garantirInstanciaWhatsapp(assinatura, '', options);
+      const estado = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options, estadoConfirmado);
       if (!estado.success) throw Object.assign(createEvolutionError(estado.message, estado.httpStatus, estado.errorCode), { retryAfterSeconds: estado.retryAfterSeconds, retryAt: estado.retryAt });
       if (estado.conectado) return { ...estado, qrCode: null, qr: null };
       let conexao;
@@ -2445,8 +2449,8 @@ async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id), async () => {
     const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'pairing', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
-    const instanceName = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
-    const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options);
+    const { instanceName, estado } = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
+    const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options, estado);
     if (!estadoAtual.success) throw Object.assign(createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode), { retryAfterSeconds: estadoAtual.retryAfterSeconds, retryAt: estadoAtual.retryAt });
     if (estadoAtual.conectado) return { ...estadoAtual, status: 'connected', code: null, pairingCode: null };
     if (estadoAtual.status === 'iniciando' && assinatura.whatsapp_numero && assinatura.whatsapp_numero !== numeroWhatsapp) {
