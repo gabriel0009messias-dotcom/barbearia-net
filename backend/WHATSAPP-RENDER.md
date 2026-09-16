@@ -67,3 +67,48 @@ Resultado local: `npm test` passou com **39 testes, zero falhas e zero testes ig
 - [Rotas oficiais da Evolution 2.3.7](https://github.com/EvolutionAPI/evolution-api/blob/2.3.7/src/api/routes/instance.router.ts)
 - [Criação, conexão, autenticação de fetchInstances e logout na 2.3.7](https://github.com/EvolutionAPI/evolution-api/blob/2.3.7/src/api/controllers/instance.controller.ts)
 - [Suspensão e limites dos serviços Free no Render](https://render.com/docs/free)
+
+
+## Controle local de chamadas e HTTP 429
+
+O fluxo de `npm start` usa `evolutionConnectionGuard.js` por meio de `evolutionApi.js`.
+As operacoes de pairing/QR/logout compartilham um bloqueio pelo nome da instancia.
+Chamadas de transporte para a mesma instancia sao serializadas, consultas de status
+simultaneas compartilham a resposta e resultados de connect podem ser reutilizados por 15 segundos.
+Essa coordenacao e o cooldown ficam na memoria de um processo Node: nao sao um lock
+distribuido e sao perdidos ao reiniciar. Multiplas replicas exigem coordenacao compartilhada.
+
+HTTP 429 encerra a tentativa, retorna HTTP 429 ao painel e preserva `Retry-After`.
+O prazo aceita segundos ou data HTTP. O backoff local cresce em 30, 60, 120, 240 e
+300 segundos; um prazo maior informado pelo provedor prevalece. Nenhuma nova chamada
+de conexao da instancia atravessa o guard durante esse prazo, inclusive as ja enfileiradas.
+Nao ha retry automatico de transporte nos endpoints de instancia.
+
+Para codigo ausente em resposta bem-sucedida, pairing e QR fazem no maximo duas
+chamadas connect, esperando 15 segundos depois da primeira resposta. Erros HTTP
+encerram o fluxo; nao consomem uma segunda tentativa connect.
+
+Quantidade de chamadas por operacao, sem concorrencia nem erro:
+
+| Situacao | Busca | Criacao | Estado | Connect | Webhook apos codigo | Total |
+| --- | --- | --- | --- | --- | --- | --- |
+| Existente desconectada, codigo imediato | 1 | 0 | 1 | 1 | 1 | 4 |
+| Instancia nova, codigo imediato | 1 | 1 | 1 | 1 | 1 | 5 |
+| Ja conectada | 1 | 0 | 1 | 0 | 0 | 2 |
+
+O webhook depende de PUBLIC_APP_URL/RENDER_EXTERNAL_URL configurada. Sem ela,
+os dois primeiros totais sao 3 e 4. Codigo atrasado acrescenta no maximo uma chamada
+connect. Conflito ao criar acrescenta uma busca de confirmacao. Se as duas respostas
+vierem sem codigo, nao ha configuracao de webhook. Durante cooldown, sao zero chamadas.
+A consulta inicial do painel e o polling posterior sao operacoes separadas desses totais.
+
+O painel consulta status uma vez ao carregar. A atualizacao geral de 30 segundos nao
+consulta mais a Evolution. Apos gerar codigo/QR, o polling espera no minimo 15 segundos
+entre consultas, termina em ate 12 consultas ou 3 minutos e para ao conectar, ocorrer
+erro definitivo, sair da secao, ocultar a aba ou sair da pagina. Respostas tardias sao
+ignoradas. Tres falhas transitorias tambem encerram as consultas. Durante cooldown,
+o painel mostra a contagem regressiva e bloqueia os botoes de conexao.
+
+Os testes usam Evolution simulada, navegador local e schemas temporarios em PostgreSQL
+exclusivo de testes. Nao validam o pareamento em um telefone de producao. Logs preservam
+endpoint, HTTP, identificador da tentativa e prazo de espera, com dados sensiveis sanitizados.

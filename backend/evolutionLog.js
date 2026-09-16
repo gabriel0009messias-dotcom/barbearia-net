@@ -27,7 +27,7 @@ function sanitize(value, seen = new WeakSet()) {
   seen.add(value);
   if (value instanceof Error) {
     return sanitize({ name: value.name, message: value.message, stack: value.stack,
-      errorCode: value.code, statusCode: value.statusCode, upstreamStatus: value.upstreamStatus,
+      errorCode: value.code, statusCode: value.statusCode, upstreamStatus: value.upstreamStatus, retryAfterSeconds: value.retryAfterSeconds, retryAt: value.retryAt,
       cause: value.cause, details: value.details, errors: value.errors }, seen);
   }
   if (Array.isArray(value)) return value.map((item) => sanitize(item, seen));

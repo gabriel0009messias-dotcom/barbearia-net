@@ -1,5 +1,8 @@
 const { randomUUID } = require('node:crypto');
 const { logEvolution, sanitize } = require('./evolutionLog');
+const guard = require('./evolutionConnectionGuard');
+const statusRequests = new Map();
+function connectionKey(instance) { return `${getEvolutionConfig().baseUrl}|${instance}`; }
 
 function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -89,7 +92,7 @@ function classifyFailure(status, payload, path) {
   if ([401, 403].includes(status)) return ['Erro de autenticacao com a Evolution API. Verifique a chave no servidor.', 502, 'EVOLUTION_INVALID_KEY'];
   if ([502, 503].includes(status)) return ['Evolution API esta offline ou indisponivel.', 503, 'EVOLUTION_OFFLINE'];
   if ([408, 504].includes(status)) return ['Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT'];
-  if (status === 429) return ['Evolution API recebeu muitas solicitacoes. Aguarde e tente novamente.', 503, 'EVOLUTION_RATE_LIMIT'];
+  if (status === 429) return ['Evolution API recebeu muitas solicitacoes. Aguarde e tente novamente.', 429, 'EVOLUTION_RATE_LIMIT'];
   if (status === 400 && path.startsWith('/instance/logout/') && /instance.*is not connected/i.test(technical)) return ['WhatsApp ja esta desconectado.', 400, 'EVOLUTION_ALREADY_DISCONNECTED'];
   if (/instance.*(?:not.*found|does not exist|nao encontrada|inexistente)/i.test(technical)) return ['A instancia do WhatsApp nao foi encontrada na Evolution API.', 404, 'EVOLUTION_INSTANCE_NOT_FOUND'];
   if (path === '/instance/create' && (status === 409 || /already|duplicate|already in use/i.test(technical))) return ['A instancia ja existe na Evolution API.', 409, 'EVOLUTION_INSTANCE_EXISTS'];
@@ -100,12 +103,22 @@ function classifyFailure(status, payload, path) {
 }
 
 async function evolutionRequest(path, options = {}) {
+  const endpoint = path.split('?')[0];
+  const instance = options.instanceName || endpoint.split('/')[3];
+  guard.checkCooldown(connectionKey('global'));
+  if (instance && /^(\/instance\/|\/webhook\/set\/)/.test(endpoint)) {
+    return guard.serialize(connectionKey(instance), () => requestTransport(path, options));
+  }
+  return requestTransport(path, options);
+}
+
+async function requestTransport(path, options = {}) {
   const config = ensureEvolutionConfigured();
   const { retryAttempts = config.retryAttempts, retryDelayMs = config.retryDelayMs,
     timeoutMs = config.timeoutMs, deadline, requestId = randomUUID(), instanceName,
     ...fetchOptions } = options;
   // Criacao e outras mutacoes nao podem ser repetidas cegamente apos timeout.
-  const attempts = (fetchOptions.method || 'GET') === 'GET' ? Math.max(1, retryAttempts) : 1;
+  const attempts = path.startsWith('/instance/') ? 1 : (fetchOptions.method || 'GET') === 'GET' ? Math.max(1, retryAttempts) : 1;
   const endpoint = path.split('?')[0];
   const instance = instanceName || endpoint.split('/')[3] || null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -125,6 +138,12 @@ async function evolutionRequest(path, options = {}) {
         headers: { apikey: config.apiKey, ...(fetchOptions.body ? { 'Content-Type': 'application/json' } : {}), ...(fetchOptions.headers || {}) },
       });
       httpStatus = response.status;
+      if (httpStatus === 429) {
+        const error = guard.recordRateLimit(connectionKey(instance || 'global'), response.headers.get('retry-after'));
+        void response.body?.cancel().catch(() => {});
+        logEvolution('rate_limit', { ...context, httpStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
+        throw error;
+      }
       const raw = await response.text();
       let payload;
       try { payload = JSON.parse(raw); }
@@ -149,7 +168,7 @@ async function evolutionRequest(path, options = {}) {
       }
       if (error !== original) error.cause = original;
       logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started, error }, 'error');
-      const retryable = ['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE', 'EVOLUTION_RATE_LIMIT'].includes(error.code);
+      const retryable = ['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE'].includes(error.code);
       if (attempt >= attempts || !retryable || (deadline && deadline - Date.now() <= retryDelayMs)) throw error;
     } finally {
       clearTimeout(timer);
@@ -288,9 +307,9 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
 async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
   const numero = String(phoneNumber || '').trim();
   const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
-  return evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
-    ...options, method: 'GET',
-  });
+  return guard.connectOnce(connectionKey(instanceName), numero || 'qr', () => evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
+    ...options, instanceName, method: 'GET',
+  }));
 }
 
 function extrairPairingCode(payload = null) {
@@ -309,23 +328,37 @@ function extrairPairingCode(payload = null) {
 }
 
 async function obterEstadoConexao(instanceName, options = {}) {
-  return evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
-    ...options, method: 'GET',
-    retryAttempts: 1,
-  });
+  const key = connectionKey(instanceName);
+  guard.checkCooldown(key);
+  if (statusRequests.has(key)) return statusRequests.get(key);
+  const job = evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
+    ...options, instanceName, method: 'GET', retryAttempts: 1,
+  }).then(result => {
+    if (['open', 'connected'].includes(String(result?.instance?.state || result?.state || '').toLowerCase())) guard.invalidateConnection(key);
+    return result;
+  }).finally(() => statusRequests.delete(key));
+  statusRequests.set(key, job);
+  return job;
 }
 
 async function desconectarInstancia(instanceName) {
-  return evolutionRequest(`/instance/logout/${encodeURIComponent(instanceName)}`, {
-    timeoutMs: 15000,
-    method: 'DELETE',
-    retryAttempts: 1,
-  });
+  try {
+    const result = await evolutionRequest(`/instance/logout/${encodeURIComponent(instanceName)}`, {
+      instanceName, timeoutMs: 15000, method: 'DELETE', retryAttempts: 1,
+    });
+    guard.invalidateConnection(connectionKey(instanceName));
+    return result;
+  } catch (error) {
+    if (['EVOLUTION_INSTANCE_NOT_FOUND', 'EVOLUTION_ALREADY_DISCONNECTED'].includes(error.code)) {
+      guard.invalidateConnection(connectionKey(instanceName));
+    }
+    throw error;
+  }
 }
 
 async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']) {
   return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, {
-    timeoutMs: 5000,
+    instanceName, timeoutMs: 5000,
     method: 'POST',
     body: JSON.stringify({
       webhook: { enabled: true, url, byEvents: false, base64: false, events,

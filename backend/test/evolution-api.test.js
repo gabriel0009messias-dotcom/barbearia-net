@@ -78,11 +78,18 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
     reply(403, { response: { message: ['This name "barbearia-1" is already in use.'] } });
     await assert.rejects(api.criarInstancia('barbearia-1'), { code: 'EVOLUTION_INSTANCE_EXISTS' });
   });
-  await t.test('timeout durante leitura preserva causa e nao repete POST', async () => {
-    handler = (_, res) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.write('{'); };
-    const before = calls;
+  await t.test('timeout durante leitura preserva causa e nao repete POST', async sub => {
+    let transportCalls = 0;
+    sub.mock.method(global, 'fetch', async (_, options) => {
+      transportCalls++;
+      return { status: 200, ok: true, text: () => new Promise((resolve, reject) => {
+        const abort = () => reject(new DOMException('Aborted', 'AbortError'));
+        if (options.signal.aborted) abort();
+        else options.signal.addEventListener('abort', abort, { once: true });
+      }) };
+    });
     await assert.rejects(api.criarInstancia('barbearia-1', '', { timeoutMs: 30, retryAttempts: 3 }), (error) => error.code === 'EVOLUTION_TIMEOUT' && error.cause?.name === 'AbortError');
-    assert.equal(calls - before, 1);
+    assert.equal(transportCalls, 1);
   });
   await t.test('logs preservam evidencias e ocultam segredos, QR e pairing', async () => {
     reply(200, { pairingCode: 'ABCD1234', code: 'raw-qr-secret', base64: 'qr-image-secret', hash: 'instance-secret', token: 'session-secret', nested: { password: 'password-secret' } });
