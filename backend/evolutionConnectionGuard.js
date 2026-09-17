@@ -1,4 +1,5 @@
-// Coordination is local to this Node process. Pairing results are reusable for 15 seconds; expired entries are pruned.
+// Coordination is local to this Node process. Only confirmed connection/logout
+// or an external 429 ends an attempt; elapsed time never authorizes another connect.
 const queues = new Map();
 const cooldowns = new Map();
 const connections = new Map();
@@ -14,10 +15,11 @@ function retryAfterMs(value, now = Date.now()) {
   return Number.isFinite(date) ? Math.max(0, date - now) : 0;
 }
 
-function rateLimitError(state) {
+function rateLimitError(state, rateLimitSource = 'local_cooldown') {
   const retryAfterSeconds = Math.max(1, Math.ceil((state.until - Date.now()) / 1000));
   return Object.assign(new Error(`O WhatsApp recebeu muitas solicitacoes. Aguarde ${retryAfterSeconds} segundos para tentar novamente.`), {
-    code: 'EVOLUTION_RATE_LIMIT', statusCode: 429, upstreamStatus: 429,
+    code: 'EVOLUTION_RATE_LIMIT', statusCode: 429,
+    upstreamStatus: rateLimitSource === 'upstream' ? 429 : undefined, rateLimitSource,
     retryAfterSeconds, retryAt: state.until,
     localBackoffSeconds: state.localBackoffSeconds,
   });
@@ -35,7 +37,8 @@ function recordRateLimit(key, header) {
   const delay = Math.max(retryAfterMs(header), localBackoffSeconds * 1000);
   const state = { failures, until: Date.now() + delay, localBackoffSeconds };
   cooldowns.set(key, state);
-  return rateLimitError(state);
+  connections.delete(key);
+  return rateLimitError(state, 'upstream');
 }
 
 function serialize(key, task) {
@@ -49,27 +52,34 @@ function serialize(key, task) {
 function connectOnce(key, mode, task) {
   checkCooldown(key);
   const current = connections.get(key);
-  if (current && (current.pending || current.until > Date.now())) {
+  if (current) {
     if (current.mode !== mode) throw Object.assign(new Error('Existe uma tentativa de conexao em andamento. Aguarde antes de trocar o metodo ou numero.'), { statusCode: 409, code: 'WHATSAPP_BUSY' });
     return current.promise;
   }
-  const entry = { mode, pending: true, until: 0 };
+  const entry = { mode, pending: true };
   entry.promise = Promise.resolve().then(task).then(result => {
     entry.pending = false;
-    entry.until = Date.now() + 15000;
     return result;
-  }, error => { connections.delete(key); throw error; });
+  }, error => {
+    entry.pending = false;
+    // A timeout/network failure does not prove that the provider stopped.
+    if (error.code === 'EVOLUTION_RATE_LIMIT' && connections.get(key) === entry) connections.delete(key);
+    throw error;
+  });
   connections.set(key, entry);
   return entry.promise;
 }
 
-function invalidateConnection(key) { connections.delete(key); }
+function invalidateConnection(key, onlySettled = false) {
+  // A state request queued before connect must not erase its reservation.
+  if (!onlySettled || !connections.get(key)?.pending) connections.delete(key);
+}
+function hasConnection(key) { return connections.has(key); }
 
 // Bound retention without timers that keep the process alive.
 const cleanup = setInterval(() => {
   for (const [key, state] of cooldowns) if (Date.now() - state.until > 600000) cooldowns.delete(key);
-  for (const [key, state] of connections) if (!state.pending && state.until <= Date.now()) connections.delete(key);
 }, 60000);
 cleanup.unref();
 
-module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection };
+module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection };

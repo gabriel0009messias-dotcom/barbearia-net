@@ -4,6 +4,7 @@ const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
 const existence = require('./evolutionExistenceCache');
 function connectionKey(instance) { return `${getEvolutionConfig().baseUrl}|${instance}`; }
+function tentativaConexaoAtiva(instance) { return guard.hasConnection(connectionKey(instance)); }
 
 function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -403,7 +404,7 @@ async function obterEstadoConexao(instanceName, options = {}) {
     ...options, instanceName, method: 'GET', retryAttempts: 1,
   }).then(result => {
     if (extrairEstadoInstancia(result)) existence.remember(key);
-    if (['open', 'connected'].includes(String(result?.instance?.state || result?.state || '').toLowerCase())) guard.invalidateConnection(key);
+    if (['open', 'connected'].includes(String(result?.instance?.state || result?.state || '').toLowerCase())) guard.invalidateConnection(key, true);
     return result;
   }).finally(() => statusRequests.delete(key));
   statusRequests.set(key, job);
@@ -471,6 +472,7 @@ async function enviarListaInstancia(instanceName, number, options = {}) {
 }
 
 module.exports = {
+  tentativaConexaoAtiva,
   evolutionRequest,
   getEvolutionConfig,
   ensureEvolutionConfigured,

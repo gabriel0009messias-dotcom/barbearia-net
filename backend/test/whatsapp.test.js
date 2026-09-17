@@ -127,17 +127,58 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(calls.filter((call) => call.path === '/instance/create').length, 1);
     assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 0);
   });
-  await t.test('codigo atrasado e sessao connecting nunca provocam logout', async () => {
+  await t.test('resposta sem codigo inicia uma unica tentativa e polling apenas consulta estado', async () => {
+    instances.get('barbearia-1').state = 'close';
     emptyCodes = 1;
     const before = calls.length;
     const result = await request(route + '/pairing-code', tokens[0], { numero: '55983179933' });
     assert.equal(result.status, 200);
-    assert.equal(result.body.pairingCode, 'ABCD1234');
-    const connects = calls.slice(before).filter(call => call.path.includes('/connect/'));
-    assert.equal(connects.length, 2);
-    assert.ok(connects[1].at - connects[0].at >= 15000);
-    assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 0);
-    assert.equal((await request(route + '/status', tokens[0])).body.status, 'pairing');
+    assert.equal(result.body.pending, true);
+    assert.equal(result.body.connectionAttemptActive, true);
+    assert.equal(result.body.pairingCode, undefined);
+    const afterConnect = calls.length;
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await request(route + '/status', tokens[0])).body.connectionAttemptActive, true);
+    }
+    assert.ok(calls.slice(afterConnect).every(call => call.path.includes('/connectionState/')));
+    await request(route + '/pairing-code', tokens[0], { numero: '55983179933' });
+    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
+    assert.equal(calls.filter(call => call.path.includes('/logout/')).length, 0);
+  });
+  await t.test('codigo gerado bloqueia outro connect mesmo apos 15s e estado close, para pairing e QR', async sub => {
+    let now = Date.now();
+    sub.mock.method(Date, 'now', () => now);
+    for (const mode of ['pairing', 'qr']) {
+      clearCode(1);
+      instances.set('barbearia-1', { state: 'close' });
+      emptyCodes = 0;
+      const suffix = mode === 'pairing' ? '/pairing-code' : '/iniciar';
+      const body = mode === 'pairing' ? { phone: '75983179933' } : {};
+      const before = calls.length;
+      const first = await request(route + suffix, tokens[0], body);
+      assert.equal(first.status, 200);
+      assert.ok(first.body.pairingCode || first.body.qrCode);
+      assert.equal(first.body.connectionAttemptActive, true);
+      now += 240000;
+      instances.get('barbearia-1').state = 'close';
+      for (let i = 0; i < 3; i++) {
+        const status = await request(route + '/status', tokens[0]);
+        assert.equal(status.body.connectionAttemptActive, true);
+      }
+      const second = await request(route + suffix, tokens[0], body);
+      assert.equal(second.body.pending, true);
+      assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
+    }
+  });
+  await t.test('instancia ja connecting sem cache local nao recebe connect em nenhum metodo', async () => {
+    instances.set('barbearia-1', { state: 'connecting' });
+    const before = calls.length;
+    for (const [suffix, body] of [['/pairing-code', { phone: '75983179933' }], ['/iniciar', {}]]) {
+      const result = await request(route + suffix, tokens[0], body);
+      assert.equal(result.status, 200);
+      assert.equal(result.body.pending, true);
+    }
+    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 0);
   });
   await t.test('conectado nao cria instancia, nao pede outro codigo e preserva sessao', async () => {
     instances.get('barbearia-1').state = 'open';
@@ -177,7 +218,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     await assert.rejects(api.conectarInstancia('timeout-test', '5575983179933', { timeoutMs: 10, retryAttempts: 1 }), { code: 'EVOLUTION_TIMEOUT' });
     delayConnect = 0;
   });
-  await t.test('requisicoes simultaneas compartilham resultado, metodos nao se misturam', async () => {
+  await t.test('requisicoes simultaneas compartilham tentativa, metodos nao se misturam', async () => {
     instances.set('barbearia-1', { state: 'close' });
     let release;
     connectGate = new Promise(resolve => { release = resolve; });
@@ -194,8 +235,31 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
       connectGate = null;
       connectEntered = null;
     }
-    assert.equal((await first).body.code, (await second).body.code);
+    const firstResult = await first;
+    const secondResult = await second;
+    assert.equal(firstResult.body.code, 'ABCD1234');
+    assert.equal(secondResult.status, 200);
+    // If its database lookup finishes after the first response, the second
+    // request observes an active attempt instead of joining the in-flight job.
+    assert.ok(secondResult.body.code === firstResult.body.code || secondResult.body.pending === true);
+    assert.equal(secondResult.body.connectionAttemptActive, true);
     assert.equal(calls.filter(call => call.path === '/instance/connect/barbearia-1').length - beforeConnect, 1);
+  });
+  await t.test('duas requisicoes QR simultaneas iniciam apenas um connect', async () => {
+    instances.set('barbearia-1', { state: 'close' });
+    let release;
+    connectGate = new Promise(resolve => { release = resolve; });
+    const entered = new Promise(resolve => { connectEntered = resolve; });
+    const before = calls.length;
+    const first = request(route + '/iniciar', tokens[0], {});
+    await entered;
+    const second = request(route + '/iniciar', tokens[0], {});
+    release();
+    connectGate = null;
+    connectEntered = null;
+    const results = await Promise.all([first, second]);
+    assert.ok(results.every(result => result.status === 200 && result.body.connectionAttemptActive));
+    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
   });
   await t.test('cada cliente tem sua instancia; QR e desconexao explicita funcionam', async () => {
     const result = await request('/publico/assinaturas/2/whatsapp/iniciar', tokens[1], {});
@@ -219,10 +283,16 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(result.body.pairingCode, 'ABCD1234');
     assert.equal(calls.filter((call) => call.path === '/instance/create').length, before);
   });
-  await t.test('QR atrasado funciona e falha da Evolution retorna HTTP de erro', async () => {
+  await t.test('QR sem codigo permanece pendente sem repetir connect e preserva erros HTTP', async () => {
+    instances.get('barbearia-2').state = 'close';
     emptyCodes = 1;
+    const before = calls.length;
     const qrRoute = '/publico/assinaturas/2/whatsapp/iniciar';
-    assert.equal((await request(qrRoute, tokens[1], {})).status, 200);
+    const pending = await request(qrRoute, tokens[1], {});
+    assert.equal(pending.status, 200);
+    assert.equal(pending.body.pending, true);
+    await request(qrRoute, tokens[1], {});
+    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
     failure = { status: 401, body: '<html>Unauthorized</html>' };
     const result = await request(qrRoute, tokens[1], {});
     assert.equal(result.status, 502);
@@ -248,15 +318,16 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.doesNotMatch(JSON.stringify(result.body), /database/);
     failure = null;
   });
-  await t.test('ausencia de codigo termina com erro util, sem sucesso falso', async () => {
+  await t.test('ausencia de codigo informa pendencia sem afirmar que gerou codigo', async () => {
     instances.get('barbearia-1').state = 'close';
     emptyCodes = 2;
     const before = calls.length;
     const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
-    assert.equal(result.status, 503);
-    assert.equal(result.body.success, false);
-    assert.equal(result.body.errorCode, 'EVOLUTION_PAIRING_CODE_EMPTY');
-    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 2);
+    assert.equal(result.status, 200);
+    assert.equal(result.body.pending, true);
+    assert.equal(result.body.pairingCode, undefined);
+    assert.equal(result.body.status, 'pairing');
+    assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
     assert.equal(calls.filter((call) => call.path.includes('/logout/')).length, 2);
   });
   await t.test('contagem exata de chamadas: existente, nova e conectada', async () => {
@@ -360,6 +431,20 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
       assert.deepEqual(calls.slice(before).map(call => call.path), ['/instance/connectionState/barbearia-2', '/instance/create', '/instance/fetchInstances']);
     } finally { createConflict = false; failure = null; }
   });
+  await t.test('GETs de QR antigos consultam somente estado, antes e durante tentativa', async () => {
+    instances.set('barbearia-1', { state: 'close' });
+    const paths = [route + '/qr', '/whatsapp/qr'];
+    for (const state of ['close', 'connecting', 'open']) {
+      instances.get('barbearia-1').state = state;
+      const before = calls.length;
+      for (const path of paths) {
+        const result = await request(path, tokens[0]);
+        assert.equal(result.status, 200);
+      }
+      assert.ok(calls.slice(before).every(call => call.path === '/instance/connectionState/barbearia-1'));
+      assert.equal(calls.length - before, 2);
+    }
+  });
   await t.test('429 nas rotas preserva prazo e bloqueia pairing, QR e status sem acessar Evolution', async () => {
     instances.set('barbearia-1', { state: 'close' });
     failure = { path: '/instance/connectionState/barbearia-1', status: 429, retryAfter: '120', body: { message: 'Too Many Requests' } };
@@ -370,12 +455,19 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(result.retryAfter, '120');
     assert.equal(result.body.retryAfterSeconds, 120);
     assert.equal(result.body.errorCode, 'EVOLUTION_RATE_LIMIT');
+    assert.equal(result.body.rateLimitSource, 'upstream');
+    assert.equal(result.body.upstreamStatus, 429);
     const before = calls.length;
-    for (const [suffix, body] of [['/pairing-code', { phone: '75983179933' }], ['/iniciar', {}], ['/status', undefined]]) {
+    for (const [suffix, body] of [['/pairing-code', { phone: '75983179933' }], ['/iniciar', {}], ['/status', undefined], ['/qr', undefined]]) {
       const blocked = await request(route + suffix, tokens[0], body);
       assert.equal(blocked.status, 429);
+      assert.equal(blocked.body.rateLimitSource, 'local_cooldown');
+      assert.equal(blocked.body.upstreamStatus, undefined);
       assert.ok(Number(blocked.retryAfter) > 0);
     }
+    const legacy = await request('/whatsapp/qr', tokens[0]);
+    assert.equal(legacy.status, 429);
+    assert.equal(legacy.body.rateLimitSource, 'local_cooldown');
     assert.equal(calls.length, before);
     failure = null;
   });

@@ -9,6 +9,9 @@ const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:
 
 test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
   let connected = false;
+  let attemptActive = false;
+  let missingCode = false;
+  let qrCalls = 0;
   let pairingError = false;
   let statusError = false;
   let statusErrorCode = '';
@@ -25,20 +28,27 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
   app.get(['/api/agendamentos', '/api/bloqueios'], (_, res) => res.json([]));
   app.get('/api/publico/assinaturas/1/whatsapp/status', (_, res) => { statusCalls++; return statusError
     ? res.status(statusHttp).json({ success: false, message: 'Servidor do WhatsApp indisponivel.', errorCode: statusErrorCode, retryAfterSeconds: statusHttp === 429 ? 45 : undefined })
-    : res.json({ success: true, connected, status: connected ? 'connected' : 'pairing' }); });
+    : res.json({ success: true, connected, connectionAttemptActive: attemptActive, status: connected ? 'connected' : attemptActive ? 'pairing' : 'disconnected' }); });
   app.post('/api/publico/assinaturas/1/whatsapp/pairing-code', async (req, res) => {
     pairingCalls++;
     if (rateLimited) return res.status(429).set('Retry-After', '60').json({ errorCode: 'EVOLUTION_RATE_LIMIT', retryAfterSeconds: 60 });
     assert.equal(req.body.phone, '75983179933');
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     if (pairingError) return res.status(502).json({ message: 'Nao foi possivel gerar o codigo de conexao.' });
-    res.json({ success: true, status: 'pairing_code', code: 'ABCD1234' });
+    attemptActive = true;
+    res.json(missingCode ? { success: true, status: 'pairing', pending: true, connectionAttemptActive: true, message: 'Tentativa em andamento.' } : { success: true, status: 'pairing_code', code: 'ABCD1234', connectionAttemptActive: true });
   });
-  app.post('/api/publico/assinaturas/1/whatsapp/iniciar', (_, res) => res.json({
-    success: true, status: 'success', qrCode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+afo4AAAAASUVORK5CYII=',
-  }));
+  app.post('/api/publico/assinaturas/1/whatsapp/iniciar', (_, res) => {
+    qrCalls++;
+    attemptActive = true;
+    res.json(missingCode ? { success: true, status: 'pairing', pending: true, connectionAttemptActive: true, message: 'Tentativa em andamento.' } : {
+      success: true, status: 'success', connectionAttemptActive: true,
+      qrCode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+afo4AAAAASUVORK5CYII=',
+    });
+  });
   app.delete('/api/publico/assinaturas/1/whatsapp/logout', (_, res) => {
     connected = false;
+    attemptActive = false;
     res.json({ success: true, status: 'disconnected', connected: false });
   });
   app.use(express.static(path.resolve(__dirname, '../public')));
@@ -53,20 +63,24 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
   await page.waitForFunction(() => !document.getElementById('generatePairingButton').disabled);
   await page.type('#whatsappPairingNumber', '75983179933');
 
-  await t.test('um clique e duplo clique enviam somente um POST por operacao', async () => {
+  async function endAttempt() {
+    await page.click('#disconnectWhatsappButton');
+    await page.waitForFunction(() => !whatsappRequestInFlight && document.getElementById('qrStatusMessage').textContent.includes('WhatsApp desconectado'));
+  }
+  await t.test('duplo clique envia um POST e codigo exibido bloqueia novas geracoes', async () => {
     delay = 100;
-    let before = pairingCalls;
-    await page.click('#generatePairingButton');
-    await page.waitForFunction(() => !document.getElementById('generatePairingButton').disabled);
-    assert.equal(pairingCalls - before, 1);
-    before = pairingCalls;
+    const before = pairingCalls;
     await page.evaluate(() => {
       const button = document.getElementById('generatePairingButton');
       button.dispatchEvent(new MouseEvent('click'));
       button.dispatchEvent(new MouseEvent('click'));
     });
-    await page.waitForFunction(() => !document.getElementById('generatePairingButton').disabled);
+    await page.waitForFunction(() => !whatsappRequestInFlight);
     assert.equal(pairingCalls - before, 1);
+    await page.evaluate(() => solicitarPairingCode());
+    assert.equal(pairingCalls - before, 1);
+    assert.equal(await page.$eval('#generatePairingButton', e => e.disabled), true);
+    assert.equal(await page.$eval('#generateQrButton', e => e.disabled), true);
     delay = 0;
   });
   await t.test('codigo e instrucoes aparecem, atualizacao do painel preserva o codigo', async () => {
@@ -77,7 +91,23 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     assert.equal(await page.$eval('#copyPairingCodeButton', (element) => element.hidden), false);
     await page.evaluate(() => carregarPainelBarbeiro());
     assert.equal(await page.$eval('#pairingCodeValue', (element) => element.hidden), false);
-    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), false);
+    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), true);
+  });
+  await t.test('recarregar e abrir outra aba recuperam bloqueio apenas consultando estado', async () => {
+    const before = pairingCalls + qrCalls;
+    const tab = await browser.newPage();
+    try {
+      await tab.goto(`http://127.0.0.1:${server.address().port}/barbeiro.html`);
+      await tab.waitForFunction(() => whatsappAttemptActive && !whatsappStatusInFlight);
+      await tab.evaluate(() => solicitarPairingCode());
+      assert.equal(await tab.$eval('#generatePairingButton', e => e.disabled), true);
+      await tab.close();
+      await page.bringToFront();
+      await page.reload();
+      await page.waitForFunction(() => whatsappAttemptActive && !whatsappStatusInFlight);
+      assert.equal(await page.$eval('#generatePairingButton', e => e.disabled), true);
+      assert.equal(pairingCalls + qrCalls, before);
+    } finally { if (!tab.isClosed()) await tab.close(); }
   });
   await t.test('polling detecta conexao, oculta codigo e para', async () => {
     connected = true;
@@ -103,25 +133,29 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     await page.click('#generatePairingButton');
     await page.waitForFunction(() => !document.getElementById('pairingCodeValue').hidden);
   });
-  await t.test('falha exibe message e libera botao', async () => {
+  await t.test('falha incerta exibe message e impede outra conexao ate encerramento', async () => {
+    await endAttempt();
     connected = false;
     pairingError = true;
     await page.evaluate(() => atualizarStatusWhatsapp('disconnected'));
     await page.click('#generatePairingButton');
     await page.waitForFunction(() => document.getElementById('qrStatusMessage').textContent.includes('Nao foi possivel gerar'));
-    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), false);
+    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), true);
     assert.equal(await page.evaluate(() => whatsappPolling), null);
   });
-  await t.test('timeout libera botao mesmo sem resposta', async () => {
+  await t.test('timeout mantem bloqueio porque o socket remoto pode ter iniciado', async () => {
+    await endAttempt();
     pairingError = false;
     delay = 150;
     await page.evaluate(() => {
       const original = window.setTimeout;
+      window.restoreWhatsappTimeout = () => { window.setTimeout = original; };
       window.setTimeout = (callback, ms, ...args) => original(callback, ms === 70000 ? 30 : ms, ...args);
     });
     await page.click('#generatePairingButton');
     await page.waitForFunction(() => document.getElementById('qrStatusMessage').textContent.includes('demorou'));
-    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), false);
+    assert.equal(await page.$eval('#generatePairingButton', (element) => element.disabled), true);
+    await page.evaluate(() => window.restoreWhatsappTimeout());
   });
   await t.test('tres falhas de status param consultas automaticas', async () => {
     statusError = true;
@@ -144,6 +178,8 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     await page.evaluate(() => setActiveSection('inicio'));
   });
   await t.test('429 mostra contagem e impede cliques ate expirar', async () => {
+    await new Promise(resolve => setTimeout(resolve, 170));
+    await endAttempt();
     rateLimited = true;
     await page.click('#generatePairingButton');
     await page.waitForFunction(() => document.getElementById('qrStatusMessage').textContent.includes('segundos'));
@@ -159,6 +195,29 @@ test('painel WhatsApp no navegador', { skip: !executablePath }, async (t) => {
     assert.equal(await page.$eval('#generatePairingButton', e => e.disabled), false);
     rateLimited = false;
   });
+  for (const mode of ['pairing', 'qr']) {
+    await t.test(`${mode} sem codigo acompanha somente estado e mantem botoes bloqueados`, async () => {
+      statusError = false;
+      delay = 0;
+      missingCode = true;
+      await endAttempt();
+      const before = pairingCalls + qrCalls;
+      await page.waitForFunction(() => !document.getElementById('generatePairingButton').disabled);
+      await page.click(mode === 'pairing' ? '#generatePairingButton' : '#generateQrButton');
+      await page.waitForFunction(() => !whatsappRequestInFlight && whatsappAttemptActive);
+      assert.match(await page.$eval('#qrStatusMessage', e => e.textContent), /Tentativa em andamento/);
+      await page.evaluate(async () => {
+        await consultarStatusWhatsapp();
+        await carregarPainelBarbeiro();
+        await solicitarPairingCode();
+        await solicitarConexaoWhatsapp('qr');
+      });
+      assert.equal(pairingCalls + qrCalls, before + 1);
+      assert.equal(await page.$eval('#generatePairingButton', e => e.disabled), true);
+      assert.equal(await page.$eval('#generateQrButton', e => e.disabled), true);
+      missingCode = false;
+    });
+  }
   await t.test('pagehide encerra polling sem novas chamadas', async () => {
     const before = statusCalls;
     await page.evaluate(() => {
