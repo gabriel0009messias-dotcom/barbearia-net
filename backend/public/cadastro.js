@@ -24,6 +24,17 @@ let monitorLiberacao = null;
 let checkoutUrl = null;
 let planoAtual = null;
 
+document.querySelectorAll('[data-toggle-password]').forEach((button) => {
+  button.addEventListener('click', () => {
+    const input = document.getElementById(button.dataset.togglePassword);
+    if (!input) return;
+    const mostrar = input.type === 'password';
+    input.type = mostrar ? 'text' : 'password';
+    button.textContent = mostrar ? 'Ocultar' : 'Mostrar';
+    button.setAttribute('aria-pressed', String(mostrar));
+  });
+});
+
 function exibirPlano(plan) {
   if (!plan || !Number.isSafeInteger(plan.amountCents) || plan.amountCents <= 0 ||
       !Number.isSafeInteger(plan.durationDays) || plan.durationDays <= 0 || plan.currency !== 'BRL' || !plan.name) {
