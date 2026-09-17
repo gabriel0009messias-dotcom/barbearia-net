@@ -19,6 +19,7 @@ function rateLimitError(state) {
   return Object.assign(new Error(`O WhatsApp recebeu muitas solicitacoes. Aguarde ${retryAfterSeconds} segundos para tentar novamente.`), {
     code: 'EVOLUTION_RATE_LIMIT', statusCode: 429, upstreamStatus: 429,
     retryAfterSeconds, retryAt: state.until,
+    localBackoffSeconds: state.localBackoffSeconds,
   });
 }
 
@@ -30,8 +31,9 @@ function checkCooldown(key) {
 function recordRateLimit(key, header) {
   const previous = cooldowns.get(key);
   const failures = previous && Date.now() - previous.until < 600000 ? previous.failures + 1 : 1;
-  const delay = Math.max(retryAfterMs(header), Math.min(300000, 30000 * 2 ** Math.min(failures - 1, 4)));
-  const state = { failures, until: Date.now() + delay };
+  const localBackoffSeconds = Math.min(300, 30 * 2 ** Math.min(failures - 1, 4));
+  const delay = Math.max(retryAfterMs(header), localBackoffSeconds * 1000);
+  const state = { failures, until: Date.now() + delay, localBackoffSeconds };
   cooldowns.set(key, state);
   return rateLimitError(state);
 }

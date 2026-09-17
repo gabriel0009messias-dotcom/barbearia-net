@@ -62,6 +62,28 @@ Na Evolution 2.3.7, uma instancia que ja esta em `connecting` devolve o
 resultado existente. Se a tentativa foi iniciada por QR, o usuario pode usar
 **Desconectar WhatsApp** antes de iniciar por numero. Nao ha logout automatico.
 
+## Diagnostico de limite de requisicoes (HTTP 429)
+
+Quando a Evolution ou seu proxy responde 429, o backend registra o evento
+`evolution_upstream_429`, com endpoint, instancia, identificador da requisicao,
+status HTTP e uma lista restrita de headers de resposta. O campo
+`upstreamRetryAfter` mostra o header recebido (ou `null` quando ausente);
+`localBackoffSeconds` informa a espera calculada localmente e
+`effectiveRetryAfterSeconds` informa a espera aplicada, respeitando a maior delas.
+O backoff local comeca em 30 segundos e pode crescer ate 300 segundos.
+
+O corpo da resposta e sanitizado antes de ser limitado a 1000 caracteres.
+`bodyTruncated` indica truncamento ou omissao: corpos acima de 64 KiB, leitura
+com falha ou que exceda um segundo sao omitidos. Credenciais conhecidas,
+cookies, tokens, codigos de pareamento e telefones sao mascarados.
+O diagnostico nao repete a requisicao; durante a espera, novas consultas da
+mesma instancia sao bloqueadas localmente. Esses bloqueios nao geram outro
+evento `evolution_upstream_429`, pois nao houve nova resposta do provedor.
+
+Para investigar, correlacione o evento com os logs da Evolution ou do proxy
+usando o horario e os identificadores de requisicao. O 429 isolado nao determina
+qual componente aplicou o limite; estes metadados ajudam a localizar a origem.
+
 ## Render e persistencia
 
 O Web Service usa PostgreSQL via `DATABASE_URL`, sem disco persistente. A associacao entre assinatura, numero e instancia e o estado das conversas ficam no schema `salaoflix`. Consulte [POSTGRESQL-RENDER.md](POSTGRESQL-RENDER.md) para importar os dados locais.

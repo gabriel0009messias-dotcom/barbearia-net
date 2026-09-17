@@ -89,7 +89,11 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
   const adminTableMessage = document.getElementById(pendente ? 'adminPendentesMessage' : 'adminTableMessage');
   const tr = document.createElement('tr');
   const status = ({ ativa: 'ativo', bloqueada: 'bloqueado' })[assinatura.status] || assinatura.status;
-  const contato = [assinatura.email, assinatura.telefone].filter(Boolean).join(' / ');
+  const telefones = [
+    assinatura.telefone && `Telefone: ${assinatura.telefone}`,
+    assinatura.whatsapp_numero && `WhatsApp: ${assinatura.whatsapp_numero}`,
+  ].filter(Boolean).join(' / ');
+  const contato = [assinatura.email, telefones].filter(Boolean).join(' / ');
   const pagamento = `${assinatura.metodo_pagamento || '--'} / dia ${assinatura.dia_vencimento || '--'}`;
 
   tr.innerHTML = `
@@ -111,7 +115,7 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
       '<button class="table-action danger-button delete-account" type="button">Excluir cadastro</button></td>';
     const cadastro = new Date(assinatura.created_at);
     values = [assinatura.barbearia_nome, assinatura.responsavel_nome, assinatura.email,
-      assinatura.whatsapp_numero || assinatura.telefone,
+      telefones,
       assinatura.metodo_pagamento === 'mercado_pago' ? 'Mercado Pago' : assinatura.metodo_pagamento,
       'Aguardando pagamento', assinatura.created_at && Number.isFinite(cadastro.getTime()) ? cadastro.toLocaleString('pt-BR') : '--'];
   }

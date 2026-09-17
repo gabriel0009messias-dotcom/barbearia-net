@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { logEvolution, sanitize } = require('./evolutionLog');
+const { logEvolution, sanitize, sanitizeUpstreamBody } = require('./evolutionLog');
 const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
 const existence = require('./evolutionExistenceCache');
@@ -86,6 +86,35 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function upstream429Body(response) {
+  // Bound both memory and latency. Omit incomplete bodies instead of logging partial secrets.
+  let reader;
+  let timer;
+  const read = async () => {
+    const chunks = [];
+    let bytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return sanitizeUpstreamBody(Buffer.concat(chunks).toString('utf8'));
+      bytes += value.byteLength;
+      if (bytes > 65536) return { body: '[BODY OMITTED: size limit]', bodyTruncated: true };
+      chunks.push(Buffer.from(value));
+    }
+  };
+  try {
+    reader = response.body?.getReader();
+    if (!reader) return { body: '', bodyTruncated: false };
+    return await Promise.race([read(), new Promise(resolve => {
+      timer = setTimeout(() => resolve({ body: '[BODY OMITTED: read timeout]', bodyTruncated: true }), 1000);
+    })]);
+  } catch {
+    return { body: '[BODY OMITTED: read failure]', bodyTruncated: true };
+  } finally {
+    clearTimeout(timer);
+    if (reader) void reader.cancel().catch(() => {});
+  }
+}
+
 function classifyFailure(status, payload, path) {
   const technical = JSON.stringify(payload || {});
   // O guard oficial da 2.3.7 usa 403 para nome duplicado, nao apenas 409.
@@ -142,8 +171,22 @@ async function requestTransport(path, options = {}) {
       });
       httpStatus = response.status;
       if (httpStatus === 429) {
-        const error = guard.recordRateLimit(connectionKey(instance || 'global'), response.headers.get('retry-after'));
-        void response.body?.cancel().catch(() => {});
+        const upstreamRetryAfter = response.headers.get('retry-after');
+        const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter);
+        const metadata = {};
+        for (const name of ['content-type', 'server', 'via', 'cf-ray', 'x-ratelimit-limit',
+          'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining',
+          'ratelimit-reset', 'rndr-id', 'request-id', 'x-request-id']) {
+          const value = response.headers.get(name);
+          if (value !== null) metadata[name] = /^(?:x-)?ratelimit-/.test(name) && /^\d+$/.test(value)
+            ? value.slice(0, 256) : sanitizeUpstreamBody(value).body.slice(0, 256);
+        }
+        const body = await upstream429Body(response);
+        logEvolution('evolution_upstream_429', { ...context, httpStatus,
+          statusText: sanitizeUpstreamBody(response.statusText || '').body.slice(0, 256),
+          ...metadata, upstreamRetryAfter: upstreamRetryAfter === null ? null : sanitizeUpstreamBody(upstreamRetryAfter).body.slice(0, 256),
+          localBackoffSeconds: error.localBackoffSeconds,
+          effectiveRetryAfterSeconds: error.retryAfterSeconds, ...body });
         logEvolution('rate_limit', { ...context, httpStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
         throw error;
       }

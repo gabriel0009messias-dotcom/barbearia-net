@@ -11,7 +11,7 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
   app.use(express.json());
   const assinaturas = [];
   let pendentes = [1, 2, 3].map(id => ({ id, barbearia_nome: `Salao ${id}`, responsavel_nome: '<img src=x onerror=alert(1)>',
-    email: `pending${id}@example.test`, whatsapp_numero: '5511999999999', metodo_pagamento: 'mercado_pago',
+    email: `pending${id}@example.test`, telefone: '5511888888888', whatsapp_numero: '5511999999999', metodo_pagamento: 'mercado_pago',
     status: 'aguardando_pagamento', created_at: id === 2 ? null : '2026-09-15T12:00:00Z', deleteConfirmationToken: `confirm-${id}` }));
   let grants = 0;
   let deletes = 0;
@@ -63,7 +63,7 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
     assert.equal(await page.$$eval('#adminPendentesBody tr', nodes => nodes.length), 3);
     assert.equal(await page.$$eval('#adminPendentesBody img, #adminPendentesBody select', nodes => nodes.length), 0);
     const values = await page.$$eval('#adminPendentesBody tr:first-child td', nodes => nodes.map(node => node.textContent));
-    assert.deepEqual(values.slice(0, 6), ['Salao 1', '<img src=x onerror=alert(1)>', 'pending1@example.test', '5511999999999', 'Mercado Pago', 'Aguardando pagamento']);
+    assert.deepEqual(values.slice(0, 6), ['Salao 1', '<img src=x onerror=alert(1)>', 'pending1@example.test', 'Telefone: 5511888888888 / WhatsApp: 5511999999999', 'Mercado Pago', 'Aguardando pagamento']);
     assert.match(values[6], /15\/09\/2026/);
     assert.equal(await page.$eval('#adminPendentesBody tr:nth-child(2) td:nth-child(7)', node => node.textContent), '--');
   });
@@ -75,6 +75,8 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
     await page.click('#adminPendentesBody .grant-days');
     await page.waitForFunction(() => document.querySelector('#adminAssinaturasBody').textContent.includes('Salao 1'));
     assert.equal(grants, 1);
+    const contact = await page.$eval('#adminAssinaturasBody tr:first-child td:nth-child(3)', node => node.textContent);
+    assert.equal(contact, 'pending1@example.test / Telefone: 5511888888888 / WhatsApp: 5511999999999');
     assert.equal(await page.$eval('#adminPendentesBody', node => node.textContent.includes('Salao 1')), false);
     assert.match(await page.$eval('#adminPendentesMessage', node => node.textContent), /Acesso liberado/);
   });
