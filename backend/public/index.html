@@ -3,35 +3,51 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Salãoflix</title>
+    <title>STUDIOFY</title>
     <link rel="stylesheet" href="./styles.css?v=20260330e" />
-  </head>
+  <link rel="stylesheet" href="/studiofy-landing.css?v=neutral-2"></head>
   <body>
     <section id="authLanding" class="auth-landing">
       <div class="landing-overlay"></div>
       <header class="landing-topbar">
-        <div class="landing-brand">SALÃOFLIX</div>
+        <div class="landing-brand">Studio<span>fy</span></div><nav class="landing-nav"><a href="#authLanding">Início</a><a href="#studiofyBenefits">O sistema</a><a href="/cadastro.html">Começar agora</a></nav>
         <div class="landing-topbar-actions">
-          <button class="landing-topbar-button" type="button" data-open-cadastro>Fazer cadastro</button>
+          <a class="landing-topbar-button" href="#acessar">Entrar</a>
+          <button class="landing-login-button topbar-signup" type="button" data-open-cadastro>Começar agora</button>
         </div>
       </header>
 
       <div class="landing-grid">
         <div class="landing-copy">
-          <p class="landing-kicker">Assinatura mensal com WhatsApp integrado</p>
-          <h1>Agendamentos, QR Code e painel do barbeiro em um so lugar</h1>
+          <div class="hero-content">
+          <p class="landing-kicker">SISTEMA DE AGENDAMENTO</p>
+          <h1>Seu negócio<br>de beleza, mais<br><span>organizado.</span></h1>
           <p class="landing-subcopy">
-            Entre no seu painel ou clique em fazer cadastro para criar sua assinatura e liberar o acesso apos o pagamento.
+            Agendamentos, clientes, finanças e muito mais.<br>Tudo em um só lugar, para profissionais da beleza.
           </p>
+          <div class="hero-actions"><button type="button" data-open-cadastro class="landing-login-button">Começar agora ↗</button><a href="#studiofyBenefits">Conheça o sistema</a></div>
+          <div class="hero-features"><span>◷ Agendamento online</span><span>♧ Gestão de clientes</span><span>▤ Controle financeiro</span><span>◉ Lembretes no WhatsApp</span></div>
+          </div>
+          <div class="hero-sign" aria-hidden="true"><strong>Studio<span>fy</span></strong><p>PROFISSIONAIS<br>QUE FAZEM<br>A DIFERENÇA</p></div>
+        </div>
+        <div class="professionals-section">
+          <div id="studiofyBenefits" class="beauty-benefits"><p class="landing-kicker">PARA TODOS OS PROFISSIONAIS</p><h3>Organize, atenda e faça seu negócio crescer.</h3><div class="beauty-tags">
+            <figure><img src="/assets/service-barber.jpg" alt="" loading="lazy"><figcaption>Barbearia</figcaption></figure>
+            <figure><img src="/assets/service-hair.jpg" alt="" loading="lazy"><figcaption>Cabelo</figcaption></figure>
+            <figure><img src="/assets/service-skin.jpg" alt="" loading="lazy"><figcaption>Estética</figcaption></figure>
+            <figure><img src="/assets/service-nails.jpg" alt="" loading="lazy"><figcaption>Unhas</figcaption></figure>
+            <figure><img src="/assets/service-massage.jpg" alt="" loading="lazy"><figcaption>Massagem</figcaption></figure>
+          </div><p class="professionals-note">Seu talento, seu espaço. Serviços livres para todos os profissionais de beleza e bem-estar.</p></div>
+          <aside class="growth-card"><h3>Mais tempo<br>para o que<br>realmente importa.</h3><p>Sua agenda organizada.<br>Seu negócio crescendo.<br>Seus clientes por perto.</p><button type="button" data-open-cadastro class="landing-login-button">Começar agora ↗</button></aside>
         </div>
 
-        <div class="landing-panel">
-          <p class="eyebrow">Login do barbeiro</p>
-          <h2>Entre para continuar</h2>
-          <p class="landing-panel-copy">Use seu Gmail cadastrado para abrir seu painel.</p>
+        <div class="landing-panel" id="acessar">
+          <div class="login-brand">Studio<span>fy</span></div>
+          <h2>Acesse sua conta</h2>
+          <p class="landing-panel-copy">Seu negócio em boas mãos.</p>
 
           <form id="loginBarbeiroForm" class="landing-login-form">
-            <input id="loginIdentificadorInput" type="email" placeholder="Seu Gmail" required />
+            <input id="loginIdentificadorInput" type="email" placeholder="Seu e-mail" required />
             <div class="password-field">
               <input id="loginSenhaInput" type="password" placeholder="Senha" required />
               <button class="password-toggle" type="button" data-toggle-password="loginSenhaInput">Mostrar</button>

@@ -11,6 +11,25 @@ const { connectionConfig } = require('../database/config');
 const { migrate } = require('../database/migrate');
 const { importSqlite } = require('../scripts/import-sqlite');
 
+test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anteriores',async t=>{
+ const environment=testEnvironment();const pool=new Pool(connectionConfig());
+ t.after(async()=>{await pool.end();await environment.cleanup();});
+ const c=await pool.connect();
+ try{
+  await c.query(`CREATE SCHEMA "${environment.schema}"`);
+  for(const name of ['001_current_backend.sql','002_professional_plan_price.sql','003_account_delete_relations.sql','004_manual_access.sql'])await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations',name),'utf8'));
+  await c.query("INSERT INTO assinaturas (id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,payment_id,valor_plano) VALUES (42,'Existente','Pessoa','11999990000','mercado_pago',5,'','payment-preservado',65)");
+  await c.query("INSERT INTO servicos_assinatura (id,assinatura_id,nome,preco) VALUES (78,42,'Cuidado',90)");
+  const date=new Date(Date.now()+86400000*2).toISOString().slice(0,10);
+  await c.query("INSERT INTO agendamentos (id,assinatura_id,nome_cliente,servico_nome,preco,data,hora,status) VALUES (94,42,'Cliente','Cuidado',90,$1,'14:00','confirmado')",[date]);
+  await c.query('BEGIN');await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/005_studiofy.sql'),'utf8'));await c.query('COMMIT');
+  const a=(await c.query('SELECT * FROM assinaturas WHERE id=42')).rows[0];assert.equal(a.payment_id,'payment-preservado');assert.equal(a.valor_plano,65);assert.equal(a.public_slug,'studio-42');
+  const s=(await c.query('SELECT * FROM servicos_assinatura WHERE id=78')).rows[0];assert.equal(s.preco,90);assert.equal(s.duracao,30);assert.equal(s.ativo,true);
+  const booking=(await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0];assert.equal(booking.nome_cliente,'Cliente');assert.equal(booking.status,'confirmado');assert.ok(booking.profissional_id);
+  const reminder=(await c.query('SELECT * FROM appointment_reminders WHERE appointment_id=94')).rows[0];assert.equal(new Date(reminder.due_at).toISOString(),new Date(`${date}T13:40:00-03:00`).toISOString());
+ }finally{c.release();}
+});
+
 test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
   const environment = testEnvironment();
   const pool = new Pool(connectionConfig());
@@ -41,7 +60,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql',
+      '004_manual_access.sql', '005_studiofy.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);

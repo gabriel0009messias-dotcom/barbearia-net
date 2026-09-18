@@ -116,7 +116,7 @@ loginBarbeiroForm.addEventListener('submit', async (event) => {
     });
 
     localStorage.setItem(TOKEN_STORAGE_KEY, payload.token);
-    window.location.href = '/barbeiro.html';
+    window.location.href = '/studiofy.html';
   } catch (error) {
     console.error(error);
     loginBarbeiroMessage.textContent =

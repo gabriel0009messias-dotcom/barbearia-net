@@ -5,8 +5,8 @@
   --stroke: rgba(255, 255, 255, 0.08);
   --text: #f7f3ec;
   --muted: rgba(247, 243, 236, 0.68);
-  --accent: #e50914;
-  --accent-dark: #ff424d;
+  --accent: #2878ff;
+  --accent-dark: #5595ff;
   --ok: #7df0b1;
   --shadow: 0 22px 55px rgba(0, 0, 0, 0.45);
 }
@@ -59,7 +59,7 @@ a {
   color: #fff;
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.85)),
-    radial-gradient(circle at top right, rgba(229, 9, 20, 0.25), transparent 30%),
+    radial-gradient(circle at top right, rgba(40, 120, 255, 0.25), transparent 30%),
     radial-gradient(circle at bottom left, rgba(36, 36, 36, 0.4), transparent 30%),
     linear-gradient(120deg, #090909 0%, #1b1b1b 40%, #101010 100%);
   overflow: hidden;
@@ -71,7 +71,7 @@ a {
   inset: 0;
   background:
     linear-gradient(115deg, transparent 0 14%, rgba(255, 255, 255, 0.06) 14% 18%, transparent 18% 24%, rgba(255, 255, 255, 0.03) 24% 31%, transparent 31% 100%),
-    linear-gradient(25deg, transparent 0 32%, rgba(229, 9, 20, 0.12) 32% 36%, transparent 36% 40%, rgba(255, 255, 255, 0.05) 40% 45%, transparent 45% 100%);
+    linear-gradient(25deg, transparent 0 32%, rgba(40, 120, 255, 0.12) 32% 36%, transparent 36% 40%, rgba(255, 255, 255, 0.05) 40% 45%, transparent 45% 100%);
   mix-blend-mode: screen;
   pointer-events: none;
 }
@@ -101,7 +101,7 @@ a {
   font-size: clamp(2rem, 4vw, 4rem);
   font-weight: 900;
   letter-spacing: 0.08em;
-  color: #e50914;
+  color: #2878ff;
 }
 
 .landing-topbar-button,
@@ -432,7 +432,7 @@ a {
   padding: 24px;
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.6)),
-    radial-gradient(circle at top right, rgba(229, 9, 20, 0.16), transparent 24%),
+    radial-gradient(circle at top right, rgba(40, 120, 255, 0.16), transparent 24%),
     linear-gradient(115deg, transparent 0 12%, rgba(255, 255, 255, 0.05) 12% 17%, transparent 17% 24%, rgba(255, 255, 255, 0.03) 24% 31%, transparent 31% 100%),
     linear-gradient(135deg, #040404 0%, #101010 48%, #070707 100%);
   min-height: 100vh;
@@ -518,7 +518,7 @@ a {
   background: linear-gradient(135deg, var(--accent), #ff5a5f);
   color: #fff;
   border-color: transparent;
-  box-shadow: 0 14px 28px rgba(229, 9, 20, 0.28);
+  box-shadow: 0 14px 28px rgba(40, 120, 255, 0.28);
 }
 
 .panel-view {
@@ -630,8 +630,8 @@ a {
 
 .blocked-panel {
   margin: 20px 0;
-  border-color: rgba(229, 9, 20, 0.2);
-  background: rgba(229, 9, 20, 0.08);
+  border-color: rgba(40, 120, 255, 0.2);
+  background: rgba(40, 120, 255, 0.08);
 }
 
 .admin-card {
@@ -654,7 +654,7 @@ a {
 .badge {
   padding: 8px 12px;
   border-radius: 999px;
-  background: rgba(229, 9, 20, 0.12);
+  background: rgba(40, 120, 255, 0.12);
   color: #ff7f86;
   font-size: 0.85rem;
 }
@@ -863,12 +863,12 @@ select {
 }
 
 .danger {
-  background: rgba(229, 9, 20, 0.12);
+  background: rgba(40, 120, 255, 0.12);
   color: #ff8c92;
 }
 
 .danger-button {
-  background: rgba(229, 9, 20, 0.12);
+  background: rgba(40, 120, 255, 0.12);
   color: #ff8c92;
 }
 
@@ -1161,7 +1161,7 @@ code {
 .admin-help-note {
   margin: 16px 0 18px;
   border-color: rgba(255, 255, 255, 0.12);
-  background: rgba(229, 9, 20, 0.12);
+  background: rgba(40, 120, 255, 0.12);
 }
 
 .admin-help-note strong {

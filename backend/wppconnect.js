@@ -269,7 +269,7 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
         barberToken: sessao.barberToken,
         bridgeToken: sessao.bridgeToken,
       });
-      iniciarLoopDeLembretes(assinaturaId);
+      // Studiofy schedules persistent 20-minute reminders in the backend via Evolution.
       console.log(`Bot do WhatsApp conectado para a assinatura ${assinaturaId}.`);
       return client;
     })

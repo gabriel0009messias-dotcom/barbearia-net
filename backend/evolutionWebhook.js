@@ -1,7 +1,6 @@
 ﻿const crypto = require('crypto');
 const { transaction } = require('./services/whatsapp/sessionRepository');
 const { createScheduling } = require('./services/whatsapp/scheduling');
-const { transition } = require('./services/whatsapp/chatbot');
 const { enviarTextoInstancia } = require('./evolutionApi');
 const { sanitize } = require('./evolutionLog');
 
@@ -68,13 +67,18 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
   const envelope = extract(payload);
   if (!envelope) return { ok: true, ignored: true };
   const result = await transaction(async db => {
-    const tenants = await db.allAsync("SELECT id FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
+    const tenants = await db.allAsync("SELECT id,barbearia_nome,public_slug FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
     if (tenants.length !== 1) return { ok: true, ignored: true };
     const tenant = tenants[0].id;
     if (await db.getAsync("SELECT id FROM whatsapp_messages WHERE instance = $1 AND message_id = $2", [envelope.instance, envelope.messageId])) return { ok: true, duplicate: true };
     const stored = await db.getAsync("SELECT data_json FROM sessoes WHERE assinatura_id = $1 AND telefone = $2", [tenant, envelope.phone]);
     const previous = stored?.data_json ? JSON.parse(stored.data_json) : null;
-    const result = await transition(createScheduling(db, options.clock), tenant, envelope.phone, previous, envelope.text);
+    const base = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+    if (!/^https?:\/\//.test(base)) return { ok: true, ignored: true, reason: 'public_url_missing' };
+    await require('./services/studiofy').createStudio(db).ensure(tenant);
+    // Send a link on greeting only, leaving ordinary conversation to the establishment.
+    if (!/^(oi|ol[aá]|bom dia|boa tarde|boa noite|agendar|agendamento|menu)[!.,\s]*$/i.test(envelope.text)) return { ok: true, ignored: true };
+    const result = { session: { state: 'LINK' }, text: `Olá! 👋\nSeja bem-vindo(a) ao ${tenants[0].barbearia_nome}!\n\nPara agendar, veja nossos serviços, preços e horários disponíveis:\n${base}/agendar/${tenants[0].public_slug || 'studio-'+tenant}\n\nQualquer dúvida, estamos à disposição.` };
     await db.runAsync(`INSERT INTO sessoes (assinatura_id, telefone, etapa, nome, data_json) VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT(assinatura_id, telefone) DO UPDATE SET etapa = excluded.etapa, nome = excluded.nome,
         data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`, [tenant, envelope.phone, result.session.state, result.session.name || null, JSON.stringify(result.session)]);

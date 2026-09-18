@@ -33,13 +33,13 @@ const db = access(async (sql, params) => { await ready; return pool.query(sql, p
 db.ready = ready;
 db.pool = pool;
 db.dialect = 'postgres';
-db.transaction = async callback => {
+db.transaction = async (callback, { serialize = true } = {}) => {
   await ready;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     // Preserve serialized write transactions; external API calls remain outside the lock.
-    await client.query('SELECT pg_advisory_xact_lock(hashtext(current_schema()), 1)');
+    if (serialize) await client.query('SELECT pg_advisory_xact_lock(hashtext(current_schema()), 1)');
     const result = await callback(access((sql, params) => client.query(sql, params)));
     await client.query('COMMIT');
     return result;

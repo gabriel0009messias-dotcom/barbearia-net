@@ -758,7 +758,7 @@ async function listarServicosDaAssinatura(assinaturaId) {
   return allAsync(
     `SELECT id, nome, preco
      FROM servicos_assinatura
-     WHERE assinatura_id = $1
+     WHERE assinatura_id = $1 AND ativo=true
      ORDER BY id ASC`,
     [assinaturaId]
   );
@@ -873,7 +873,7 @@ async function buscarServicoDaAssinatura(assinaturaId, servicoId, servicoNome, s
   const servicoPorNome = await getAsync(
     `SELECT id, nome, preco
      FROM servicos_assinatura
-     WHERE assinatura_id = $1
+     WHERE assinatura_id = $1 AND ativo=true
        AND lower(nome) = lower($2)
      ORDER BY id ASC
      LIMIT 1`,
@@ -1722,6 +1722,8 @@ async function gerarQrWhatsappEvolution(assinatura) {
   });
 }
 
+router.use('/studiofy', require('./studiofyRoutes')(db, requireBarbeiro, async assinatura => avaliarAcessoAssinatura(await sincronizarStatusPorVencimento(assinatura))));
+
 router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
   const query = `
     SELECT
@@ -1788,7 +1790,7 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
 router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
   const { id } = req.params;
 
-  db.run("DELETE FROM agendamentos WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
+  db.run("UPDATE agendamentos SET status='cancelado' WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
     if (err) {
       res.status(500).json({ error: err.message });
       return;
@@ -2786,14 +2788,23 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
         return;
       }
 
-      await runAsync("DELETE FROM servicos_assinatura WHERE assinatura_id = $1", [id]);
-
-      for (const servico of servicosValidos) {
-        await runAsync(
-          "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
-          [id, servico.nome, servico.preco]
-        );
-      }
+      await db.transaction(async c => {
+        const existing = await c.allAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1', [id]);
+        const retained = [];
+        for (const servico of servicosValidos) {
+          const old = existing.find(item => item.nome === servico.nome);
+          if (old) {
+            await c.runAsync('UPDATE servicos_assinatura SET preco=$1,ativo=true WHERE id=$2 AND assinatura_id=$3', [servico.preco, old.id, id]);
+            retained.push(old.id);
+          } else {
+            const created = await c.runAsync('INSERT INTO servicos_assinatura (assinatura_id,nome,preco) VALUES ($1,$2,$3)', [id,servico.nome,servico.preco]);
+            retained.push(created.lastID);
+            const people = await c.allAsync('SELECT id FROM profissionais WHERE assinatura_id=$1', [id]);
+            if (people.length===1) await c.runAsync('INSERT INTO profissional_servicos VALUES ($1,$2,$3)', [id,people[0].id,created.lastID]);
+          }
+        }
+        for (const old of existing) if (!retained.includes(old.id)) await c.runAsync('UPDATE servicos_assinatura SET ativo=false WHERE assinatura_id=$1 AND id=$2', [id,old.id]);
+      });
     }
 
     res.json(await montarRespostaAssinatura(id));

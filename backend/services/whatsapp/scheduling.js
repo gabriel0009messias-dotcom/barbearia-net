@@ -12,26 +12,19 @@ const cleanPhoneSql = "replace(replace(replace(replace(replace(replace(replace(t
 const phoneSql = `(CASE WHEN length(${cleanPhoneSql}) IN (10, 11) THEN '55' || ${cleanPhoneSql} ELSE ${cleanPhoneSql} END)`;
 
 function createScheduling(db, clock = () => new Date()) {
-  const services = tenant => db.allAsync("SELECT id, nome AS name, preco AS price FROM servicos_assinatura WHERE assinatura_id = $1 ORDER BY id", [tenant]);
+  const services = tenant => db.allAsync("SELECT id, nome AS name, preco AS price, duracao FROM servicos_assinatura WHERE assinatura_id = $1 AND ativo=true ORDER BY id", [tenant]);
   const salon = tenant => db.getAsync("SELECT * FROM assinaturas WHERE id = $1", [tenant]);
-  async function times(tenant, date) {
-    const config = await salon(tenant);
-    const now = localNow(clock());
-    if (!config || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || date < now.date || date >= addDays(now.date, 14)) return [];
-    const days = String(config.dias_funcionamento ?? '1,2,3,4,5,6').split(',').map(Number);
-    if (!days.includes(new Date(`${date}T12:00:00Z`).getUTCDay())) return [];
-    const occupied = await db.allAsync(`SELECT hora FROM agendamentos WHERE assinatura_id = $1 AND data = $2 AND status = 'confirmado'
-      UNION SELECT hora FROM bloqueios WHERE assinatura_id = $3 AND data = $4`, [tenant, date, tenant, date]);
-    const taken = new Set(occupied.map(row => row.hora));
-    const result = [];
-    const lunchStart = minutes(config.horario_almoco_inicio), lunchEnd = minutes(config.horario_almoco_fim);
-    for (let cursor = minutes(config.horario_abertura); cursor + 30 <= minutes(config.horario_fechamento); cursor += 30) {
-      const time = hhmm(cursor);
-      if (date === now.date && time <= now.time) continue;
-      if (cursor < lunchEnd && cursor + 30 > lunchStart) continue;
-      if (!taken.has(time)) result.push(time);
-    }
-    return result;
+  async function times(tenant, date, service) {
+    const { createStudio } = require('../studiofy');
+    const run = async connection => {
+      const studio = createStudio(connection, clock);
+      await studio.ensure(tenant);
+      const selected = service?.id || service || (await services(tenant))[0]?.id;
+      const people = await studio.professionals(tenant);
+      const professional = people.find(p => p.ativo && p.servicos.includes(Number(selected)));
+      return professional ? studio.times(tenant,date,selected,professional.id) : [];
+    };
+    return db.transaction ? db.transaction(run) : run(db);
   }
   async function dates(tenant, service) {
     const result = [], today = localNow(clock()).date;
@@ -44,18 +37,16 @@ function createScheduling(db, clock = () => new Date()) {
       WHERE assinatura_id = $1 AND ${phoneSql} = $2 AND status = 'confirmado' AND (data > $3 OR (data = $4 AND hora > $5)) ORDER BY data, hora`, [tenant, phone, now.date, now.date, now.time]);
   }
   async function book(tenant, phone, session) {
-    if (!(await times(tenant, session.date)).includes(session.time)) return null;
-    const service = (await services(tenant)).find(s => s.id === session.service.id);
-    if (!service) return null;
-    // Denormalized fields are already the panel's source of truth. No global customer/service lookup.
+    const { createStudio } = require('../studiofy');
+    const studio = createStudio(db, clock);
+    await studio.ensure(tenant);
+    const people = await studio.professionals(tenant);
+    const professional = people.find(p => p.ativo && p.servicos.includes(Number(session.service.id)));
+    if (!professional) return null;
     try {
-      return await db.runAsync(`INSERT INTO agendamentos
-        (assinatura_id, nome_cliente, telefone, servico_nome, preco, data, hora, status)
-        SELECT $1, $2, $3, $4, $5, $6, $7, 'confirmado'
-        WHERE NOT EXISTS (SELECT 1 FROM bloqueios WHERE assinatura_id = $8 AND data = $9 AND hora = $10)
-        ON CONFLICT DO NOTHING`,
-      [tenant, session.name, phone, service.name, service.price, session.date, session.time, tenant, session.date, session.time]).then(r => r.changes ? r : null);
-    } catch (error) { if (error.code === '23505') return null; throw error; }
+      const result = await studio.book(tenant, {nome_cliente:session.name,telefone:phone,servico_id:session.service.id,profissional_id:professional.id,data:session.date,hora:session.time});
+      return {lastID:result.id,changes:1};
+    } catch (error) { if(error.statusCode===409 || error.code==='23505') return null; throw error; }
   }
   return {
     services, dates, times, book, future,

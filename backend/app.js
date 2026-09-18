@@ -206,10 +206,11 @@ function somarPorPeriodo(periodo, referenciaMes = '') {
     .reduce((total, item) => total + precoDoServico(item.servico), 0);
 }
 
-app.use(express.json());
+app.use(express.json({ limit: '6mb' }));
 app.use(express.static(painelPath));
 // Prioriza o backend modular persistido antes das rotas legadas em memoria.
 app.use('/api', apiRoutes);
+app.get('/agendar/:slug', (req, res) => res.sendFile(path.join(painelPath, 'agendar.html')));
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(painelPath, 'index.html'));
@@ -219,6 +220,8 @@ app.get('/health', (req, res) => {
   res.json({
     ok: true,
     service: 'barbearia-backend',
+    version: process.env.RENDER_GIT_COMMIT || null,
+    reminders: require('./services/reminders').getWorkerStatus(),
     uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });
@@ -228,6 +231,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
     service: 'barbearia-api',
+    version: process.env.RENDER_GIT_COMMIT || null,
+    reminders: require('./services/reminders').getWorkerStatus(),
     uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });
@@ -247,7 +252,7 @@ app.get('/controle-interno', (req, res) => {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Controle Interno | Salãoflix</title>
+    <title>Controle Interno | STUDIOFY</title>
     <style>
       * { box-sizing: border-box; }
       body {
@@ -257,7 +262,7 @@ app.get('/controle-interno', (req, res) => {
         color: #fff;
         background:
           linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.85)),
-          radial-gradient(circle at top right, rgba(229, 9, 20, 0.25), transparent 30%),
+          radial-gradient(circle at top right, rgba(40, 120, 255, 0.25), transparent 30%),
           radial-gradient(circle at bottom left, rgba(36, 36, 36, 0.4), transparent 30%),
           linear-gradient(120deg, #090909 0%, #1b1b1b 40%, #101010 100%);
       }
@@ -294,7 +299,7 @@ app.get('/controle-interno', (req, res) => {
         padding: 16px 18px;
         border-radius: 18px;
         border: 1px solid rgba(255,255,255,.12);
-        background: rgba(229, 9, 20, .12);
+        background: rgba(40, 120, 255, .12);
       }
       .grid {
         display: grid;
@@ -323,7 +328,7 @@ app.get('/controle-interno', (req, res) => {
         cursor: pointer;
       }
       .primary {
-        background: #e50914;
+        background: #2878ff;
         color: #fff;
         font-weight: 700;
       }
@@ -1217,6 +1222,7 @@ app.use((err, req, res, next) => {
 
 require('./database').ready.then(() => {
   require('./evolutionWebhook').startWorker();
+  require('./services/reminders').startWorker(require('./database'));
   const server = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });

@@ -213,103 +213,12 @@ async function processarMensagemWhatsapp({
     throw new Error('Mensagem invalida.');
   }
 
-  const sessao = await obterSessao(assinaturaId, telefoneNormalizado);
-  const comando = normalizarTexto(texto);
-
-  if (['oi', 'ola', 'olá', 'menu', 'iniciar'].includes(comando)) {
-    const servicos = await listarServicos(assinaturaId);
-
-    if (!servicos.length) {
-      return 'Nenhum servico esta cadastrado no momento. Tente novamente mais tarde.';
-    }
-
-    await salvarSessao(assinaturaId, telefoneNormalizado, {
-      etapa: 'aguardando_servico',
-      servico: null,
-      preco: null,
-      nome: null,
-      data: null,
-    });
-
-    return ['Escolha um servico:', '', ...servicos.map((item, index) => `${index + 1} - ${item.nome} (${formatarPreco(item.preco)})`)].join('\n');
-  }
-
-  if (!sessao) {
-    return 'Digite "oi" ou "menu" para iniciar seu agendamento.';
-  }
-
-  if (sessao.etapa === 'aguardando_servico') {
-    const servicos = await listarServicos(assinaturaId);
-    const indice = Number.parseInt(texto, 10) - 1;
-    const servico = servicos[indice];
-
-    if (!servico) {
-      return 'Servico invalido. Responda com o numero do servico desejado.';
-    }
-
-    await salvarSessao(assinaturaId, telefoneNormalizado, {
-      etapa: 'aguardando_nome',
-      servico: servico.nome,
-      preco: Number(servico.preco || 0),
-    });
-
-    return 'Digite seu nome:';
-  }
-
-  if (sessao.etapa === 'aguardando_nome') {
-    if (texto.length < 3 || /^\d+$/.test(texto)) {
-      return 'Nome invalido. Digite seu nome completo.';
-    }
-
-    await salvarSessao(assinaturaId, telefoneNormalizado, {
-      etapa: 'aguardando_data',
-      nome: texto,
-    });
-
-    return 'Escolha o dia (ex: 10/05):';
-  }
-
-  if (sessao.etapa === 'aguardando_data') {
-    const data = parseDataEntrada(texto);
-
-    if (!data) {
-      return 'Data invalida. Envie no formato 10/05.';
-    }
-
-    await salvarSessao(assinaturaId, telefoneNormalizado, {
-      etapa: 'aguardando_horario',
-      data,
-    });
-
-    return 'Escolha o horario (ex: 14:00):';
-  }
-
-  if (sessao.etapa === 'aguardando_horario') {
-    if (!horarioValido(texto)) {
-      return 'Horario invalido. Envie no formato 14:00.';
-    }
-
-    const disponivel = await horarioDisponivel(assinaturaId, sessao.data, texto);
-
-    if (!disponivel) {
-      return 'Esse horario ja esta ocupado. Escolha outro horario.';
-    }
-
-    const agendamento = await criarAgendamento(assinaturaId, telefoneNormalizado, sessao, texto);
-    await apagarSessao(assinaturaId, telefoneNormalizado);
-
-    return [
-      'Agendamento confirmado!',
-      `Nome: ${agendamento.nome_cliente}`,
-      `Servico: ${agendamento.servico}`,
-      `Valor: ${formatarPreco(agendamento.preco)}`,
-      `Data: ${new Date(`${agendamento.data}T00:00:00`).toLocaleDateString('pt-BR')}`,
-      `Horario: ${agendamento.horario}`,
-    ].join('\n');
-  }
-
-  await apagarSessao(assinaturaId, telefoneNormalizado);
-  return 'Digite "oi" ou "menu" para iniciar um novo agendamento.';
+  const a = await db.getAsync('SELECT barbearia_nome,public_slug FROM assinaturas WHERE id=$1', [assinaturaId]);
+  if (!a) throw new Error('Estabelecimento não encontrado.');
+  const base = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+  if (!/^https?:\/\//.test(base)) return 'Entre em contato com o estabelecimento para obter seu link de agendamento.';
+  await db.transaction(c => require('./services/studiofy').createStudio(c).ensure(assinaturaId));
+  return `Olá! Seja bem-vindo(a) ao ${a.barbearia_nome}!\nAgende pelo site: ${base}/agendar/${a.public_slug || 'studio-'+assinaturaId}`;
 }
 
 async function handleWhatsappWebhook({

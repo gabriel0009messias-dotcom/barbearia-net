@@ -1326,35 +1326,29 @@ function createMessageProcessor(client, options = {}) {
 }
 
 function attachBotHandlers(client, options = {}) {
-  const processarEntrada = createMessageProcessor(client, options);
-
-  client.onMessage(async (message) => {
-    if (foiEnviadaPeloBot(message)) return;
-    if (message.fromMe || String(message.from || '').includes('@g.us') || message.from === 'status@broadcast') return;
-    await processarEntrada({
-      from: message.from,
-      type: message.type,
-      fromMe: message.fromMe,
-      ...extrairSelecao(message),
-    });
-  });
-
-  if (typeof client.onPollResponse === 'function') {
-    client.onPollResponse(async (data) => {
-      const entrada = extrairOpcaoEnquete(data);
-
-      if (!entrada) {
-        return;
+  // Local adapters share the website greeting; interactive booking is retired.
+  client.onMessage(async message => {
+    if (message.fromMe || !/^\d{10,15}@(c.us|s.whatsapp.net)$/.test(message.from || '')) return;
+    const body = String(message.body || '').trim();
+    if (!/^(oi|ol[aá]|bom dia|boa tarde|boa noite|menu|agendar|agendamento)[!.,\s]*$/i.test(body)) return;
+    try {
+      let response;
+      if (options.apiBaseUrl) {
+        const result = await fetch(`${options.apiBaseUrl.replace(/\/$/, '')}/api/webhook`, {
+          method: 'POST', headers: {'Content-Type':'application/json',
+            ...(options.barberToken ? {'x-barbeiro-token':options.barberToken} : {'x-whatsapp-bridge-token':options.bridgeToken})},
+          body: JSON.stringify({telefone:message.from,mensagem:body}), signal:AbortSignal.timeout(15000),
+        });
+        if (!result.ok) return;
+        const data = await result.json();
+        if (data.delivered) return;
+        response = data.resposta;
+      } else {
+        response = await require('./whatsappWebhook').processarMensagemWhatsapp({assinaturaId:options.assinaturaId,telefone:message.from,mensagem:body});
       }
-
-      await processarEntrada({
-        from: data.chatId,
-        type: 'poll_response',
-        fromMe: false,
-        ...entrada,
-      });
-    });
-  }
+      if (response) await client.sendText(message.from,response);
+    } catch { console.error('[Studiofy] Falha ao enviar link pelo adaptador local.'); }
+  });
 }
 
 module.exports = {
