@@ -198,7 +198,7 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
         if (senha) await fazerLoginAutomatico(email, senha);
         else {
           limparCadastroPendente();
-          assinaturaFormMessage.textContent = 'Pagamento confirmado! Entre com seu email e senha na pagina inicial.';
+          assinaturaFormMessage.textContent = 'Pagamento confirmado! Entre com seu email e senha na página de Login.';
           gatewayCheckoutButton.hidden = true;
         }
       }
@@ -312,6 +312,6 @@ loadBusinessTypes();
 
 const cadastroPendente = carregarCadastroPendente();
 if (cadastroPendente?.assinaturaId) {
-  assinaturaFormMessage.textContent = 'Aguardando confirmacao do Mercado Pago. Se ainda nao pagou, entre pela pagina inicial para continuar.';
+  assinaturaFormMessage.textContent = 'Aguardando confirmacao do Mercado Pago. Se ainda nao pagou, entre pela página de Login para continuar.';
   iniciarMonitorLiberacao(cadastroPendente.assinaturaId, cadastroPendente.email);
 }

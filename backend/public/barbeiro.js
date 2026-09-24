@@ -473,13 +473,13 @@ function preencherPagamentoPendente(estado = {}) {
   paymentWhatsappButton.onclick = async event => {
     event.preventDefault();
     const id = estado.id || assinaturaAtualId;
-    if (!id) { window.location.assign('/'); return; }
+    if (!id) { window.location.assign('/login.html'); return; }
     try {
       const checkout = await buscarJson(`/api/publico/assinaturas/${id}/checkout`, { method: 'POST' });
       localStorage.setItem('barbearia_pending_signup', JSON.stringify({ assinaturaId: id }));
       window.location.assign(checkout.checkoutUrl);
     } catch (error) {
-      if (error.status === 401 || error.status === 403) window.location.assign('/');
+      if (error.status === 401 || error.status === 403) window.location.assign('/login.html');
       else paymentReminderText.textContent = error.message;
     }
   };
@@ -524,7 +524,7 @@ function atualizarLembretePagamento(assinatura) {
 function tratarErroSessao(error) {
   if (error.status === 401) {
     limparSessaoBarbeiro();
-    window.location.href = '/';
+    window.location.href='/login.html';
     return true;
   }
 
@@ -538,7 +538,7 @@ function tratarErroSessao(error) {
 
 async function carregarPainelBarbeiro() {
   if (!authToken) {
-    window.location.href = '/';
+    window.location.href='/login.html';
     return;
   }
 
@@ -1064,7 +1064,7 @@ logoutBarbeiroButton?.addEventListener('click', async () => {
     console.error(error);
   } finally {
     limparSessaoBarbeiro();
-    window.location.replace('/');
+    window.location.replace('/login.html');
     logoutBarbeiroButton.disabled = false;
     logoutBarbeiroButton.textContent = textoOriginal;
   }

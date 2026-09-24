@@ -20,7 +20,7 @@ test('Login e cadastro: visual responsivo, simulação local e contratos preserv
  const artifacts=path.resolve(__dirname,'../../.tmp/auth-preview');fs.mkdirSync(artifacts,{recursive:true});
  await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
  await t.test('desktop: formulário à esquerda e demonstração à direita',async()=>{
-  await page.setViewport({width:1440,height:1000});await page.goto(base);await page.waitForSelector('.demo-message.is-visible');
+  await page.setViewport({width:1440,height:1000});await page.goto(base+'/login.html');await page.waitForSelector('.demo-message.is-visible');
   const positions=await page.evaluate(()=>({form:document.querySelector('.auth-form-side').getBoundingClientRect().right,demo:document.querySelector('.auth-showcase').getBoundingClientRect().left}));
   assert.ok(positions.form<=positions.demo);
   assert.equal(await page.$$eval('.demo-message.is-visible',els=>els.length),5);
@@ -38,7 +38,7 @@ test('Login e cadastro: visual responsivo, simulação local e contratos preserv
   await page.screenshot({path:path.join(artifacts,'cadastro-desktop-inicio.png')});
  });
  await t.test('mobile: formulário primeiro e sem rolagem horizontal',async()=>{
-  for(const [route,name] of [['/','login'],['/cadastro.html','cadastro']]){
+  for(const [route,name] of [['/login.html','login'],['/cadastro.html','cadastro']]){
    await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true});await page.goto(base+route);await page.waitForSelector('.demo-phone');
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
    assert.ok(await page.evaluate(()=>document.querySelector('.auth-showcase').getBoundingClientRect().top>=document.querySelector('.auth-form-side').getBoundingClientRect().bottom));
@@ -47,7 +47,11 @@ test('Login e cadastro: visual responsivo, simulação local e contratos preserv
   }
  });
  await t.test('animação mostra digitação e troca segmento sem chamar a API',async()=>{
-  await page.setViewport({width:1440,height:1000,isMobile:false});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'no-preference'}]);await page.goto(base);await page.waitForNetworkIdle({idleTime:100});
+  await page.setViewport({width:1440,height:1000,isMobile:false});await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'no-preference'}]);
+  const configResponse=page.waitForResponse(r=>r.url().endsWith('/api/publico/assinatura-config'));
+  await page.goto(base+'/login.html');await configResponse;await page.bringToFront();
+  // Start the animation explicitly after navigation instead of relying on its initial timing.
+  await page.click('[data-segment="0"]');
   const before=requests.length;
   await page.waitForFunction(()=>document.querySelector('.demo-chat-state').textContent.includes('digitando'));
   await page.click('[data-demo-control]');assert.equal(await page.$eval('[data-demo-control]',el=>el.textContent),'Rever');

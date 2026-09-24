@@ -5,7 +5,7 @@ let state,section='Dashboard',agendaDate=todayLocal(),agendaMode='week';
 function todayLocal(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());}
 const iconPaths=['M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z','M4 5h16v16H4z M8 3v4 M16 3v4 M4 11h16','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M17 4a4 4 0 0 1 0 8 M22 21v-2a4 4 0 0 0-3-4','M4 5h16v15H4z M8 5V3h8v2 M4 11h16','M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M4 21v-2a6 6 0 0 1 6-5h4a6 6 0 0 1 6 5v2','M3 5h18v15H3z M3 9h18 M15 14h3','M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18 M12 7v5l3 2','M3 3h18v18H3z M3 8h18 M8 8v13','M5 17h14l-2-4V9a5 5 0 0 0-10 0v4z M10 21h4','M4 20V10 M10 20V4 M16 20v-8 M22 20H2','M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2','M3 6h18v14H3z M3 10h18'];
 const icon=i=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[i]}"/></svg>`;
-async function api(path='',method='GET',body){const r=await fetch('/api/studiofy'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''},body:body?JSON.stringify(body):undefined});const data=await r.json();if(r.status===401)location.href='/';if(!r.ok)throw Error(data.error || 'Não foi possível concluir.');return data;}
+async function api(path='',method='GET',body){const r=await fetch('/api/studiofy'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''},body:body?JSON.stringify(body):undefined});const data=await r.json();if(r.status===401)location.href='/login.html';if(!r.ok)throw Error(data.error || 'Não foi possível concluir.');return data;}
 function message(value,error=false){$('#message').textContent=value;$('#message').classList.toggle('error',error);}
 async function action(fn){try{await fn();}catch(e){message(e.message,true);}}
 async function refresh(){state=await api('/painel');$('#salonName').textContent=state.pagina.nome;$('#sidebarSalon').textContent=state.pagina.nome;$('#publicLink').href='/agendar/'+state.pagina.slug;render();}
@@ -77,7 +77,7 @@ function hoursForm(){
  $('#hours').onsubmit=e=>{e.preventDefault();const f=e.currentTarget;action(async()=>{await api('/horarios','PUT',{horarios:days.map((_,i)=>f['day'+i].value.trim()?f['day'+i].value.split(',').map(p=>p.trim().split('-').map(x=>x.trim())):[])});message('Horários salvos.');await refresh();});};
  $('#block').onsubmit=e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.currentTarget));action(async()=>{await api('/bloqueios','POST',b);await refresh();});};document.querySelectorAll('[data-remove-block]').forEach(b=>b.onclick=()=>action(async()=>{await api('/bloqueios/'+b.dataset.removeBlock,'DELETE');await refresh();}));
 }
-$('#logout').onclick=()=>action(async()=>{await fetch('/api/barbeiro/logout',{method:'POST',headers:{'x-barbeiro-token':token}});localStorage.removeItem('barbearia_auth_token');location.href='/';});
+$('#logout').onclick=()=>action(async()=>{await fetch('/api/barbeiro/logout',{method:'POST',headers:{'x-barbeiro-token':token}});localStorage.removeItem('barbearia_auth_token');location.href='/login.html';});
 action(refresh);
 // Refresh read-only screens without overwriting a form being edited.
 setInterval(()=>{if(!document.hidden && state && !$('#view form'))action(refresh);},30000);

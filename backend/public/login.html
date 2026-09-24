@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0c192d"><title>Entrar | Studiofy</title>
+<link rel="stylesheet" href="/styles.css?v=20260330f"><link rel="stylesheet" href="/studiofy-auth.css?v=1">
+</head>
+<body class="auth-page"><main class="auth-layout" id="authLanding">
+<section class="auth-form-side" aria-labelledby="loginTitle">
+<header class="auth-header"><a class="auth-brand" href="/" aria-label="Studiofy, início"><span class="auth-symbol" aria-hidden="true">s</span>Studio<span>fy</span></a><span class="auth-header-note">Sua agenda. Seu ritmo.</span></header>
+<div class="auth-login-content" id="acessar">
+<span class="auth-eyebrow">BOM TER VOCÊ POR AQUI</span>
+<h1 id="loginTitle">Bem-vindo<br>ao Studiofy<span class="auth-dot">.</span></h1>
+<p class="auth-intro">Seu próximo atendimento começa aqui.<br>Entre e cuide do que faz seu negócio crescer.</p>
+<form id="loginBarbeiroForm" class="auth-login-form">
+<label for="loginIdentificadorInput">E-mail</label>
+<input id="loginIdentificadorInput" type="email" autocomplete="username" placeholder="voce@exemplo.com" required>
+<label for="loginSenhaInput">Senha</label>
+<div class="password-field"><input id="loginSenhaInput" type="password" autocomplete="current-password" placeholder="Digite sua senha" required>
+<button class="password-toggle" type="button" data-toggle-password="loginSenhaInput" aria-label="Mostrar ou ocultar senha">Mostrar</button></div>
+<button id="abrirRecuperacaoButton" class="auth-forgot" type="button">Esqueci minha senha</button>
+<button type="submit" class="landing-login-button auth-primary">Entrar <span aria-hidden="true">↗</span></button>
+</form>
+<p id="loginBarbeiroMessage" class="form-message" role="alert"></p>
+          <div id="loginBlockedPixCard" class="support-note blocked-pix-card" hidden>
+            <strong>Pagamento pelo Mercado Pago</strong>
+            <p id="loginBlockedPixValorLabel">Valor: R$ 0,00</p>
+            <p id="loginBlockedPixFavorecidoLabel">Favorecido: --</p>
+            <div id="loginBlockedPixQrPanel" class="pix-qr-panel" hidden>
+              <img id="loginBlockedPixQrImage" alt="QR Code do pagamento Pix" hidden />
+            </div>
+            <p id="loginBlockedPixChaveLabel">Chave Pix: --</p>
+            <p id="loginBlockedPixCopiaColaLabel" class="table-subcopy">Pix copia e cola: --</p>
+            <div class="payment-actions">
+              <a id="loginBlockedWhatsappButton" class="landing-login-button" href="#" target="_blank" rel="noopener noreferrer">
+                Pagar com Mercado Pago
+              </a>
+            </div>
+          </div>
+
+
+<div class="auth-create"><span>Ainda não tem uma conta?</span><a href="/cadastro.html">Criar minha conta <span aria-hidden="true">→</span></a></div>
+<div class="auth-trust"><span aria-hidden="true">◇</span> Mais organização. Mais tempo para você.</div>
+</div>
+<footer class="auth-footer"><span>© Studiofy</span><span>Feito para o seu jeito de atender.</span></footer>
+</section><aside class="auth-showcase" data-whatsapp-demo aria-label="Conheça o atendimento com Studiofy">
+<noscript><h2>Seu atendimento começa no WhatsApp.</h2><p>Receba clientes, compartilhe seu agendamento e envie lembretes automaticamente com o Studiofy.</p></noscript>
+</aside></main>
+<script src="/landing.js?v=mp-checkout-1"></script><script src="/studiofy-auth.js?v=1"></script>
+</body></html>

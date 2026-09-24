@@ -114,7 +114,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
         if (scenario === 'existing') {
           assert.equal(page.url(), `${base}/cadastro.html`);
           assert.equal(await page.$eval('#assinaturaExistenteActions', element => element.hidden), false);
-          assert.equal(await page.$eval('#assinaturaExistenteActions a', element => element.getAttribute('href')), '/');
+          assert.equal(await page.$eval('#assinaturaExistenteActions a', element => element.getAttribute('href')), '/login.html');
           assert.equal(await page.$eval('#gatewayCheckoutButton', element => element.hidden), true);
           assert.equal(await page.evaluate(() => localStorage.getItem('barbearia_pending_signup')), null);
         }
