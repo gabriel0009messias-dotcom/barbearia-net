@@ -1,62 +1,25 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>STUDIOFY</title>
-    <link rel="stylesheet" href="./styles.css?v=20260330e" />
-  <link rel="stylesheet" href="/studiofy-landing.css?v=neutral-2"></head>
-  <body>
-    <section id="authLanding" class="auth-landing">
-      <div class="landing-overlay"></div>
-      <header class="landing-topbar">
-        <div class="landing-brand">Studio<span>fy</span></div><nav class="landing-nav"><a href="#authLanding">Início</a><a href="#studiofyBenefits">O sistema</a><a href="/cadastro.html">Começar agora</a></nav>
-        <div class="landing-topbar-actions">
-          <a class="landing-topbar-button" href="#acessar">Entrar</a>
-          <button class="landing-login-button topbar-signup" type="button" data-open-cadastro>Começar agora</button>
-        </div>
-      </header>
-
-      <div class="landing-grid">
-        <div class="landing-copy">
-          <div class="hero-content">
-          <p class="landing-kicker">SISTEMA DE AGENDAMENTO</p>
-          <h1>Seu negócio<br>de beleza, mais<br><span>organizado.</span></h1>
-          <p class="landing-subcopy">
-            Agendamentos, clientes, finanças e muito mais.<br>Tudo em um só lugar, para profissionais da beleza.
-          </p>
-          <div class="hero-actions"><button type="button" data-open-cadastro class="landing-login-button">Começar agora ↗</button><a href="#studiofyBenefits">Conheça o sistema</a></div>
-          <div class="hero-features"><span>◷ Agendamento online</span><span>♧ Gestão de clientes</span><span>▤ Controle financeiro</span><span>◉ Lembretes no WhatsApp</span></div>
-          </div>
-          <div class="hero-sign" aria-hidden="true"><strong>Studio<span>fy</span></strong><p>PROFISSIONAIS<br>QUE FAZEM<br>A DIFERENÇA</p></div>
-        </div>
-        <div class="professionals-section">
-          <div id="studiofyBenefits" class="beauty-benefits"><p class="landing-kicker">PARA TODOS OS PROFISSIONAIS</p><h3>Organize, atenda e faça seu negócio crescer.</h3><div class="beauty-tags">
-            <figure><img src="/assets/service-barber.jpg" alt="" loading="lazy"><figcaption>Barbearia</figcaption></figure>
-            <figure><img src="/assets/service-hair.jpg" alt="" loading="lazy"><figcaption>Cabelo</figcaption></figure>
-            <figure><img src="/assets/service-skin.jpg" alt="" loading="lazy"><figcaption>Estética</figcaption></figure>
-            <figure><img src="/assets/service-nails.jpg" alt="" loading="lazy"><figcaption>Unhas</figcaption></figure>
-            <figure><img src="/assets/service-massage.jpg" alt="" loading="lazy"><figcaption>Massagem</figcaption></figure>
-          </div><p class="professionals-note">Seu talento, seu espaço. Serviços livres para todos os profissionais de beleza e bem-estar.</p></div>
-          <aside class="growth-card"><h3>Mais tempo<br>para o que<br>realmente importa.</h3><p>Sua agenda organizada.<br>Seu negócio crescendo.<br>Seus clientes por perto.</p><button type="button" data-open-cadastro class="landing-login-button">Começar agora ↗</button></aside>
-        </div>
-
-        <div class="landing-panel" id="acessar">
-          <div class="login-brand">Studio<span>fy</span></div>
-          <h2>Acesse sua conta</h2>
-          <p class="landing-panel-copy">Seu negócio em boas mãos.</p>
-
-          <form id="loginBarbeiroForm" class="landing-login-form">
-            <input id="loginIdentificadorInput" type="email" placeholder="Seu e-mail" required />
-            <div class="password-field">
-              <input id="loginSenhaInput" type="password" placeholder="Senha" required />
-              <button class="password-toggle" type="button" data-toggle-password="loginSenhaInput">Mostrar</button>
-            </div>
-            <button type="submit" class="landing-login-button">Entrar</button>
-          </form>
-
-          <p id="loginBarbeiroMessage" class="form-message light-message"></p>
-
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0c192d"><title>Entrar | Studiofy</title>
+<link rel="stylesheet" href="/styles.css?v=20260330f"><link rel="stylesheet" href="/studiofy-auth.css?v=1">
+</head>
+<body class="auth-page"><main class="auth-layout" id="authLanding">
+<section class="auth-form-side" aria-labelledby="loginTitle">
+<header class="auth-header"><a class="auth-brand" href="/" aria-label="Studiofy, início"><span class="auth-symbol" aria-hidden="true">s</span>Studio<span>fy</span></a><span class="auth-header-note">Sua agenda. Seu ritmo.</span></header>
+<div class="auth-login-content" id="acessar">
+<span class="auth-eyebrow">BOM TER VOCÊ POR AQUI</span>
+<h1 id="loginTitle">Bem-vindo<br>ao Studiofy<span class="auth-dot">.</span></h1>
+<p class="auth-intro">Seu próximo atendimento começa aqui.<br>Entre e cuide do que faz seu negócio crescer.</p>
+<form id="loginBarbeiroForm" class="auth-login-form">
+<label for="loginIdentificadorInput">E-mail</label>
+<input id="loginIdentificadorInput" type="email" autocomplete="username" placeholder="voce@exemplo.com" required>
+<label for="loginSenhaInput">Senha</label>
+<div class="password-field"><input id="loginSenhaInput" type="password" autocomplete="current-password" placeholder="Digite sua senha" required>
+<button class="password-toggle" type="button" data-toggle-password="loginSenhaInput" aria-label="Mostrar ou ocultar senha">Mostrar</button></div>
+<button id="abrirRecuperacaoButton" class="auth-forgot" type="button">Esqueci minha senha</button>
+<button type="submit" class="landing-login-button auth-primary">Entrar <span aria-hidden="true">↗</span></button>
+</form>
+<p id="loginBarbeiroMessage" class="form-message" role="alert"></p>
           <div id="loginBlockedPixCard" class="support-note blocked-pix-card" hidden>
             <strong>Pagamento pelo Mercado Pago</strong>
             <p id="loginBlockedPixValorLabel">Valor: R$ 0,00</p>
@@ -73,18 +36,13 @@
             </div>
           </div>
 
-          <button id="abrirRecuperacaoButton" class="landing-secondary-button forgot-link" type="button">
-            Esqueci minha senha
-          </button>
 
-          <div class="landing-cta-row">
-            <span>Ainda nao tem acesso?</span>
-            <button class="landing-secondary-button" type="button" data-open-cadastro>Quero fazer meu cadastro</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <script src="./landing.js?v=mp-checkout-1"></script>
-  </body>
-</html>
+<div class="auth-create"><span>Ainda não tem uma conta?</span><a href="/cadastro.html">Criar minha conta <span aria-hidden="true">→</span></a></div>
+<div class="auth-trust"><span aria-hidden="true">◇</span> Mais organização. Mais tempo para você.</div>
+</div>
+<footer class="auth-footer"><span>© Studiofy</span><span>Feito para o seu jeito de atender.</span></footer>
+</section><aside class="auth-showcase" data-whatsapp-demo aria-label="Conheça o atendimento com Studiofy">
+<noscript><h2>Seu atendimento começa no WhatsApp.</h2><p>Receba clientes, compartilhe seu agendamento e envie lembretes automaticamente com o Studiofy.</p></noscript>
+</aside></main>
+<script src="/landing.js?v=mp-checkout-1"></script><script src="/studiofy-auth.js?v=1"></script>
+</body></html>

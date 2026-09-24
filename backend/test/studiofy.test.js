@@ -53,7 +53,9 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
  const body=()=>({nome_cliente:'Gabriel',telefone:'11999990000',servico_id:service,profissional_id:professional,data:future,hora:'10:00'});
  await t.test('duas reservas simultâneas; conflito parcial de duração e profissional',async()=>{
   const results=await Promise.all([request('/studiofy/public/studio-bella/agendamentos','POST',body()),request('/studiofy/public/studio-bella/agendamentos','POST',body())]);
-  assert.deepEqual(results.map(r=>r.status).sort(),[201,409]);booking=results.find(r=>r.status===201).body.id;
+  assert.deepEqual(results.map(r=>r.status).sort(),[201,409]);
+  const publicResult=results.find(r=>r.status===201).body;assert.equal(publicResult.id,undefined);
+  booking=(await db.getAsync('SELECT appointment_id FROM public_booking_access WHERE token_hash=$1',[require('node:crypto').createHash('sha256').update(publicResult.token).digest('hex')])).appointment_id;
   assert.equal((await request('/studiofy/public/studio-bella/agendamentos','POST',{...body(),hora:'10:30'})).status,409);
   assert.equal((await request('/studiofy/public/studio-bella/agendamentos','POST',{...body(),profissional_id:b.panel.profissionais[0].id})).status,409);
   const times=(await request('/studiofy/public/studio-bella/horarios?'+new URLSearchParams({data:future,servico_id:service,profissional_id:professional}))).body;

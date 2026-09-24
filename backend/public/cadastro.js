@@ -111,6 +111,26 @@ function apenasDigitos(valor = '') {
   return String(valor).replace(/\D/g, '');
 }
 
+function readSignupImage(file) {
+  return new Promise((resolve,reject)=>{
+    if(!file)return resolve(null);
+    if(file.size>2*1024*1024 || !['image/png','image/jpeg','image/webp'].includes(file.type))return reject(new Error('Use imagens PNG, JPEG ou WebP de até 2 MB.'));
+    const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error('Não foi possível ler a imagem.'));reader.readAsDataURL(file);
+  });
+}
+
+async function loadBusinessTypes() {
+  try {
+    const types=await buscarJson('/api/publico/business-types');
+    if(!Array.isArray(types) || !types.length)throw new Error('Lista indisponível.');
+    const select=document.getElementById('businessTypeInput');
+    select.replaceChildren(...types.map(type=>new Option(type.name,type.code)));
+    select.value=types.some(type=>type.code==='other')?'other':types[0].code;
+  } catch {
+    document.getElementById('businessTypeInput').title='Lista indisponível. Você pode cadastrar como Outro e ajustar depois.';
+  }
+}
+
 function limparMonitorLiberacao() {
   if (monitorLiberacao) {
     clearInterval(monitorLiberacao);
@@ -230,7 +250,14 @@ assinaturaForm.addEventListener('submit', async (event) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        barbeariaNome: document.getElementById('barbeariaNomeInput').value.trim(),
+        establishmentName: document.getElementById('barbeariaNomeInput').value.trim(),
+        businessType: document.getElementById('businessTypeInput').value,
+        city: document.getElementById('cityInput').value.trim(),
+        state: document.getElementById('stateInput').value.trim(),
+        address: document.getElementById('addressInput').value.trim(),
+        instagram: document.getElementById('instagramInput').value.trim(),
+        logo: await readSignupImage(document.getElementById('logoInput').files[0]),
+        cover: await readSignupImage(document.getElementById('coverInput').files[0]),
         responsavelNome: document.getElementById('responsavelNomeInput').value.trim(),
         telefone: document.getElementById('telefoneAssinaturaInput').value.trim(),
         email: emailCadastro,
@@ -239,7 +266,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
         metodoPagamento: 'mercado_pago',
         diaVencimento: diaVencimentoInput.value,
         whatsappNumero: document.getElementById('whatsappNumeroInput').value.trim(),
-        servicos: [{ nome: 'Corte', preco: 30 }],
+        servicos: [{ nome: document.getElementById('serviceNameInput').value.trim(), preco: Number(document.getElementById('servicePriceInput').value), duracao: Number(document.getElementById('serviceDurationInput').value), categoria: document.getElementById('serviceCategoryInput').value.trim() }],
       }),
     });
 
@@ -271,7 +298,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
   } finally {
     enviando = false;
     submitButton.disabled = false;
-    submitButton.textContent = 'Cadastrar assinatura';
+    submitButton.textContent = 'Criar minha conta';
     assinaturaForm.removeAttribute('aria-busy');
   }
 });
@@ -281,6 +308,7 @@ assinaturaForm.addEventListener('invalid', () => {
 }, true);
 
 carregarConfiguracao();
+loadBusinessTypes();
 
 const cadastroPendente = carregarCadastroPendente();
 if (cadastroPendente?.assinaturaId) {

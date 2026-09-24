@@ -1,85 +1,51 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cadastro | STUDIOFY</title>
-    <link rel="stylesheet" href="./styles.css?v=20260330f" />
-  </head>
-  <body>
-    <section class="auth-landing cadastro-landing">
-      <div class="landing-overlay"></div>
-      <header class="landing-topbar">
-        <div class="landing-brand">STUDIOFY</div>
-        <div class="landing-topbar-actions">
-          <a class="landing-topbar-button link-button" href="/">Voltar para login</a>
-        </div>
-      </header>
-
-      <div class="cadastro-grid">
-        <div class="landing-copy cadastro-copy">
-          <p class="landing-kicker">Cadastre seu estabelecimento</p>
-          <h1>Crie sua assinatura e conecte o WhatsApp da sua loja</h1>
-          <p class="landing-subcopy">
-            Cadastre seu salão, defina os serviços, escolha o vencimento e finalize o pagamento para liberar o acesso.
-          </p>
-          <div class="cadastro-copy-note">
-            <strong id="supportNumberLabel">Suporte: --</strong>
-            <p>Depois do pagamento confirmado, seu login sera liberado para usar o sistema completo.</p>
-          </div>
-        </div>
-
-        <div class="cadastro-panels">
-          <article class="landing-panel cadastro-form-panel">
-            <div class="card-header">
-              <div>
-                <p class="eyebrow">Assinatura</p>
-                <h2>Cadastre seu estabelecimento</h2>
-              </div>
-              <span id="planPriceLabel" class="badge">Consultando plano...</span>
-            </div>
-
-            <p id="cadastroConfigMessage" class="form-message light-message" role="status"></p>
-            <form id="assinaturaForm" class="form-grid">
-              <label>
-                Nome do estabelecimento
-                <input id="barbeariaNomeInput" type="text" required />
-              </label>
-
-              <label>
+<html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0c192d"><title>Criar conta | Studiofy</title>
+<link rel="stylesheet" href="/styles.css?v=20260330f"><link rel="stylesheet" href="/studiofy-auth.css?v=1">
+</head>
+<body class="auth-page auth-signup"><main class="auth-layout">
+<section class="auth-form-side" aria-labelledby="signupTitle">
+<header class="auth-header"><a class="auth-brand" href="/" aria-label="Studiofy, início"><span class="auth-symbol" aria-hidden="true">s</span>Studio<span>fy</span></a><a class="auth-back" href="/">Já tenho conta <span aria-hidden="true">↗</span></a></header>
+<div class="auth-signup-content">
+<span class="auth-eyebrow">MAIS ESPAÇO PARA O SEU TALENTO</span>
+<h1 id="signupTitle">Comece a receber<br>agendamentos<span class="auth-dot">.</span></h1>
+<p class="auth-intro">Seu negócio, sua identidade. Uma agenda que acompanha você.</p>
+<div class="auth-plan"><span>SEU PLANO STUDIOFY</span><strong id="planPriceLabel">Consultando plano...</strong></div>
+<p id="cadastroConfigMessage" class="form-message" role="status"></p>
+<form id="assinaturaForm" class="auth-signup-form">
+<fieldset class="auth-fieldset"><legend><span>01</span>Seu acesso</legend><p>Os dados para entrar e cuidar do seu negócio.</p><div class="auth-fields"><label>
                 Nome do responsavel
                 <input id="responsavelNomeInput" type="text" required />
-              </label>
-
-              <label>
-                Telefone
-                <input id="telefoneAssinaturaInput" type="text" required />
-              </label>
-
-              <label>
+              </label><label>
                 e-mail
                 <input id="emailAssinaturaInput" type="email" required />
-              </label>
-
-              <label>
-                CPF do titular
-                <input id="cpfTitularInput" type="text" inputmode="numeric" required />
-              </label>
-
-              <label>
+              </label><label>
                 Crie sua senha
                 <div class="password-field">
                   <input id="senhaAssinaturaInput" type="password" minlength="4" required />
                   <button class="password-toggle" type="button" data-toggle-password="senhaAssinaturaInput" aria-controls="senhaAssinaturaInput" aria-pressed="false">Mostrar</button>
                 </div>
-              </label>
-
-              <label>
+              </label><label>
+                Telefone
+                <input id="telefoneAssinaturaInput" type="text" required />
+              </label><label>
+                CPF do titular
+                <input id="cpfTitularInput" type="text" inputmode="numeric" required />
+              </label></div></fieldset><fieldset class="auth-fieldset"><legend><span>02</span>Seu estabelecimento</legend><p>Um espaço com a sua identidade, em qualquer segmento.</p><div class="auth-fields"><label>
+                Nome do estabelecimento
+                <input id="barbeariaNomeInput" type="text" required />
+              </label><label>Tipo de negócio
+                <select id="businessTypeInput" required><option value="other">Outro</option></select>
+              </label><label>
+                WhatsApp do estabelecimento
+                <input id="whatsappNumeroInput" type="text" required />
+              </label><label>Cidade<input id="cityInput" maxlength="100" required /></label><label>Estado (UF)<input id="stateInput" maxlength="2" pattern="[A-Za-z]{2}" required placeholder="SP" /></label><label>Endereço (opcional)<input id="addressInput" maxlength="250" autocomplete="street-address" /></label><label>Instagram (opcional)<input id="instagramInput" maxlength="30" placeholder="@seuestabelecimento" /></label></div></fieldset><fieldset class="auth-fieldset"><legend><span>03</span>Seu primeiro serviço</legend><p>Comece com um serviço. Você pode adicionar outros no painel.</p><div class="auth-fields"><label>Primeiro serviço<input id="serviceNameInput" required maxlength="100" placeholder="Ex.: Manicure, massagem, corte" /></label><label>Categoria (opcional)<input id="serviceCategoryInput" maxlength="100" placeholder="Ex.: Unhas, cabelo, bem-estar" /></label><label>Preço (R$)<input id="servicePriceInput" type="number" required min="0" max="100000" step="0.01" /></label><label>Duração (minutos)<input id="serviceDurationInput" type="number" required min="5" max="720" step="1" value="30" /></label></div></fieldset><fieldset class="auth-fieldset"><legend><span>04</span>Sua identidade visual</legend><p>Logo e capa são opcionais. Você também pode adicionar depois.</p><div class="auth-fields"><label>Logo (opcional, até 2 MB)<input id="logoInput" type="file" accept="image/png,image/jpeg,image/webp" /></label><label>Capa (opcional, até 2 MB)<input id="coverInput" type="file" accept="image/png,image/jpeg,image/webp" /></label></div></fieldset><fieldset class="auth-fieldset"><legend><span>05</span>Sua assinatura</legend><p>Finalize pelo Mercado Pago para liberar seu acesso.</p><div class="auth-fields"><label>
                 Forma de pagamento
                 <select id="metodoPagamentoInput" required><option value="mercado_pago">Mercado Pago</option></select>
-              </label>
-
-              <div id="gatewayInfoCard" class="support-note" hidden>
+              </label><label>
+                Dia do vencimento
+                <select id="diaVencimentoInput" required><option value="5">Dia 5</option><option value="12">Dia 12</option><option value="24">Dia 24</option></select>
+              </label></div></fieldset><div id="gatewayInfoCard" class="support-note" hidden>
                 <strong>Pagamento seguro com Mercado Pago</strong>
                 <p id="gatewayMethodLabel">Metodo selecionado: --</p>
                 <p id="gatewayHelpLabel">Finalize pelo Mercado Pago para liberar sua assinatura.</p>
@@ -90,31 +56,23 @@
                 </div>
               </div>
 
-              <label>
-                Dia do vencimento
-                <select id="diaVencimentoInput" required><option value="5">Dia 5</option><option value="12">Dia 12</option><option value="24">Dia 24</option></select>
-              </label>
 
-              <label>
-                WhatsApp do salão
-                <input id="whatsappNumeroInput" type="text" required />
-              </label>
-
-              <button type="submit" class="landing-login-button">Cadastrar assinatura</button>
-            </form>
-
-            <p id="assinaturaFormMessage" class="form-message light-message" role="alert" aria-live="assertive" tabindex="-1"></p>
+<button type="submit" class="landing-login-button auth-primary">Criar minha conta <span aria-hidden="true">↗</span></button>
+<p class="auth-payment-note">Você será direcionado ao pagamento seguro do Mercado Pago.</p>
+</form>
+<p id="assinaturaFormMessage" class="form-message" role="alert" aria-live="assertive" tabindex="-1"></p>
             <div id="assinaturaExistenteActions" hidden>
               <p>Se voce e o titular, entre para consultar o valor do contrato existente e escolher se deseja continuar o pagamento.</p>
               <a href="/">Entrar e continuar assinatura existente</a>
               <a href="/recuperar-senha.html">Recuperar senha</a>
             </div>
-          </article>
 
-        </div>
-      </div>
-    </section>
-
-    <script src="./cadastro.js?v=password-toggle-1"></script>
-  </body>
-</html>
+<div class="auth-create"><span>Já faz parte do Studiofy?</span><a href="/">Entrar na minha conta →</a></div>
+<p id="supportNumberLabel" class="auth-support">Suporte: --</p>
+</div>
+<footer class="auth-footer"><span>© Studiofy</span><span>Feito para o seu jeito de atender.</span></footer>
+</section><aside class="auth-showcase" data-whatsapp-demo aria-label="Conheça o atendimento com Studiofy">
+<noscript><h2>Seu atendimento começa no WhatsApp.</h2><p>Receba clientes, compartilhe seu agendamento e envie lembretes automaticamente com o Studiofy.</p></noscript>
+</aside></main>
+<script src="/cadastro.js?v=auth-visual-1"></script><script src="/studiofy-auth.js?v=1"></script>
+</body></html>

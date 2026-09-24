@@ -2284,9 +2284,15 @@ router.post('/barbeiro/logout', requireBarbeiro, (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/publico/business-types', async (_req,res) => {
+  try { res.json(await db.allAsync('SELECT code,name FROM business_types WHERE active=true ORDER BY sort_order,name')); }
+  catch { res.status(500).json({error:'Não foi possível carregar os tipos de negócio.'}); }
+});
+
 router.post('/publico/assinaturas', async (req, res) => {
   const {
-    barbeariaNome,
+    establishmentName,
+    barbeariaNome: legacyName,
     responsavelNome,
     telefone,
     email,
@@ -2301,6 +2307,7 @@ router.post('/publico/assinaturas', async (req, res) => {
     horarioFechamento,
     servicos,
   } = req.body;
+  const barbeariaNome = establishmentName ?? legacyName;
 
   if (!barbeariaNome || !responsavelNome || !telefone || !senha || !metodoPagamento || !diaVencimento) {
     res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
@@ -2322,18 +2329,6 @@ router.post('/publico/assinaturas', async (req, res) => {
     return;
   }
 
-  const servicosValidos = servicos
-    .map((item) => ({
-      nome: String(item.nome || '').trim(),
-      preco: Number(item.preco),
-    }))
-    .filter((item) => item.nome && Number.isFinite(item.preco) && item.preco > 0);
-
-  if (!servicosValidos.length) {
-    res.status(400).json({ error: 'Os servicos informados nao sao validos.' });
-    return;
-  }
-
   const dia = Number.parseInt(diaVencimento, 10);
 
   if (!DIAS_VENCIMENTO.includes(dia)) {
@@ -2347,6 +2342,18 @@ router.post('/publico/assinaturas', async (req, res) => {
   }
 
   try {
+    const {profileInput,saveProfile}=require('./services/establishment');
+    const {serviceInput,image,text,fail}=require('./services/studiofy');
+    if(!text(barbeariaNome) || !text(responsavelNome))fail('Informe estabelecimento e responsável.');
+    const profile=await profileInput(db,req.body);
+    if(establishmentName!==undefined && (!profile.businessType || !profile.city || !profile.state))fail('Informe tipo de negócio, cidade e estado.');
+    const logo=await image(req.body.logo),cover=await image(req.body.cover);
+    if(servicos.length>100)fail('Cadastre até 100 serviços por solicitação.');
+    const servicosValidos=[];
+    for(const item of servicos){
+      if(!item || typeof item!=='object')fail('Serviço inválido.');
+      servicosValidos.push(await serviceInput({...item,duracao:item.duracao??30}));
+    }
     const assinaturaExistente = await getAsync(
       `SELECT *
        FROM assinaturas
@@ -2370,68 +2377,74 @@ router.post('/publico/assinaturas', async (req, res) => {
     const diasSerializados = serializarDiasFuncionamento(diasFuncionamento);
     const credenciais = criarCredenciaisSenha(senha);
 
-    const result = await runAsync(
-      `INSERT INTO assinaturas (
-        barbearia_nome,
-        responsavel_nome,
-        telefone,
-        email,
-        metodo_pagamento,
-        dia_vencimento,
-        valor_mensal,
-        status,
-        suporte_numero,
-        proximo_vencimento,
-        whatsapp_numero,
-        whatsapp_status,
-        whatsapp_session,
-        trial_usado,
-        trial_started_at,
-        trial_expires_at,
-        dias_funcionamento,
-        horario_abertura,
-        horario_almoco_inicio,
-        horario_almoco_fim,
-        horario_fechamento,
-        senha_hash,
-        senha_salt,
-        valor_plano,
-        plano
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $7, $24)`,
-      [
-        barbeariaNome,
-        responsavelNome,
-        telefone,
-        email || '',
-        metodoPagamento,
-        dia,
-        VALOR_MENSAL_PADRAO,
-        'pendente',
-        suporteNumero,
-        proximoVencimento,
-        whatsappNumero || telefone,
-        'nao_configurado',
-        null,
-        0,
-        null,
-        null,
-        diasSerializados,
-        horarioAbertura || '08:00',
-        horarioAlmocoInicio || '12:00',
-        horarioAlmocoFim || '13:00',
-        horarioFechamento || '18:00',
-        credenciais.hash,
-        credenciais.salt,
-        NOME_PLANO_PADRAO,
-      ]
-    );
-
-    for (const servico of servicosValidos) {
-      await runAsync(
-        "INSERT INTO servicos_assinatura (assinatura_id, nome, preco) VALUES ($1, $2, $3)",
-        [result.lastID, servico.nome, servico.preco]
+    const result = await db.transaction(async connection => {
+      const result = await connection.runAsync(
+        `INSERT INTO assinaturas (
+          barbearia_nome,
+          responsavel_nome,
+          telefone,
+          email,
+          metodo_pagamento,
+          dia_vencimento,
+          valor_mensal,
+          status,
+          suporte_numero,
+          proximo_vencimento,
+          whatsapp_numero,
+          whatsapp_status,
+          whatsapp_session,
+          trial_usado,
+          trial_started_at,
+          trial_expires_at,
+          dias_funcionamento,
+          horario_abertura,
+          horario_almoco_inicio,
+          horario_almoco_fim,
+          horario_fechamento,
+          senha_hash,
+          senha_salt,
+          valor_plano,
+          plano
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $7, $24)`,
+        [
+          barbeariaNome,
+          responsavelNome,
+          telefone,
+          email || '',
+          metodoPagamento,
+          dia,
+          VALOR_MENSAL_PADRAO,
+          'pendente',
+          suporteNumero,
+          proximoVencimento,
+          whatsappNumero || telefone,
+          'nao_configurado',
+          null,
+          0,
+          null,
+          null,
+          diasSerializados,
+          horarioAbertura || '08:00',
+          horarioAlmocoInicio || '12:00',
+          horarioAlmocoFim || '13:00',
+          horarioFechamento || '18:00',
+          credenciais.hash,
+          credenciais.salt,
+          NOME_PLANO_PADRAO,
+        ]
       );
-    }
+
+      for (const servico of servicosValidos) {
+        await connection.runAsync(
+          "INSERT INTO servicos_assinatura (assinatura_id,nome,preco,descricao,duracao,foto,ativo,categoria) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+          [result.lastID,servico.nome,servico.preco,servico.descricao,servico.duracao,servico.foto,servico.ativo,servico.categoria??'']
+        );
+      }
+
+      await saveProfile(connection,result.lastID,profile);
+      await connection.runAsync('UPDATE assinaturas SET logo_image=$2,cover_image=$3 WHERE id=$1',[result.lastID,logo,cover]);
+      return result;
+    });
 
     await persistirSessaoWhatsapp(result.lastID, {
       whatsappSession: gerarNomeInstancia(result.lastID),
@@ -2449,7 +2462,7 @@ router.post('/publico/assinaturas', async (req, res) => {
       assinatura: assinaturaCriada,
     });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.publicMessage || 'Nao foi possivel salvar o cadastro. Tente novamente.' });
+    res.status(error.statusCode || 500).json({ error: error.publicMessage || (error.statusCode===400 ? error.message : 'Nao foi possivel salvar o cadastro. Tente novamente.') });
   }
 });
 

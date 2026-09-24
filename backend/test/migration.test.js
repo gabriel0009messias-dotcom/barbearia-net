@@ -27,6 +27,16 @@ test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anterio
   const s=(await c.query('SELECT * FROM servicos_assinatura WHERE id=78')).rows[0];assert.equal(s.preco,90);assert.equal(s.duracao,30);assert.equal(s.ativo,true);
   const booking=(await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0];assert.equal(booking.nome_cliente,'Cliente');assert.equal(booking.status,'confirmado');assert.ok(booking.profissional_id);
   const reminder=(await c.query('SELECT * FROM appointment_reminders WHERE appointment_id=94')).rows[0];assert.equal(new Date(reminder.due_at).toISOString(),new Date(`${date}T13:40:00-03:00`).toISOString());
+  await c.query('BEGIN');await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/006_public_cancellation.sql'),'utf8'));await c.query('COMMIT');
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0],booking);
+  assert.deepEqual((await c.query('SELECT * FROM appointment_reminders WHERE appointment_id=94')).rows[0],reminder);
+  assert.equal((await c.query('SELECT cancellation_notice_minutes FROM assinaturas WHERE id=42')).rows[0].cancellation_notice_minutes,0);
+  assert.equal((await c.query('SELECT count(*) AS n FROM public_booking_access')).rows[0].n,0);
+  await c.query('BEGIN');await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/007_multisegment.sql'),'utf8'));await c.query('COMMIT');
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0],booking);
+  assert.deepEqual((await c.query('SELECT * FROM appointment_reminders WHERE appointment_id=94')).rows[0],reminder);
+  assert.equal((await c.query('SELECT business_type_code FROM assinaturas WHERE id=42')).rows[0].business_type_code,'other');
+  assert.equal((await c.query('SELECT categoria FROM servicos_assinatura WHERE id=78')).rows[0].categoria,'');
  }finally{c.release();}
 });
 
@@ -60,7 +70,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql', '005_studiofy.sql',
+      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);

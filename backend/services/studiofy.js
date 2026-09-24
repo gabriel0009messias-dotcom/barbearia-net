@@ -25,7 +25,7 @@ async function serviceInput(body) {
  const nome=text(body.nome), descricao=text(body.descricao || '',1000), preco=Number(body.preco), duracao=Number(body.duracao);
  if (!nome || !Number.isFinite(preco) || preco<0 || preco>100000 || Math.abs(preco*100-Math.round(preco*100))>0.00001 || !Number.isInteger(duracao) || duracao<5 || duracao>720) fail('Informe nome, preço válido e duração entre 5 e 720 minutos.');
  if (body.ativo !== undefined && typeof body.ativo !== 'boolean') fail('Status inválido.');
- return { nome,descricao,preco,duracao,foto:await image(body.foto),ativo:body.ativo!==false };
+ return { categoria:body.categoria===undefined?undefined:text(body.categoria,100),nome,descricao,preco,duracao,foto:await image(body.foto),ativo:body.ativo!==false };
 }
 function validateHours(hours) {
  if (!Array.isArray(hours) || hours.length!==7) fail('Configure os sete dias da semana.');

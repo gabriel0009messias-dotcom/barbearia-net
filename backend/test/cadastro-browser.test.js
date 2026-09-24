@@ -20,8 +20,15 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     if (failure === 'config') return res.status(503).json({ error: 'Configuracao indisponivel.' });
     res.json({ diasVencimento: [5, 12, 24], gateway: { enabled: gatewayEnabled }, plan });
   });
+  app.get('/api/publico/business-types',(_req,res)=>res.json([{code:'other',name:'Outro'},{code:'nails',name:'Unhas/Manicure'}]));
   app.post('/api/publico/assinaturas', (req, res) => {
     signupCalls++;
+    assert.equal(req.body.establishmentName,'Salao teste');
+    assert.equal(req.body.city,'Salvador');
+    assert.equal(req.body.state,'BA');
+    assert.equal(req.body.servicos[0].nome,'Manicure');
+    assert.equal(req.body.servicos[0].duracao,45);
+    assert.equal(req.body.servicos[0].categoria,'Unhas');
     if (failure === 'existing') return res.status(409).json({ code: 'ASSINATURA_EXISTENTE', error: 'Os dados informados pertencem a uma assinatura existente.', assinatura: { id: 17 } });
     if (failure === 'signup') return res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
     if (failure === 'missing') return res.status(404).json({ error: 'Rota nao encontrada.' });
@@ -66,7 +73,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     await page.waitForNetworkIdle({ idleTime: 100 });
     await page.waitForFunction(() => document.querySelector('#diaVencimentoInput').options.length > 0);
     await page.evaluate(() => {
-      const values = { barbeariaNomeInput: 'Salao teste', responsavelNomeInput: 'Teste', telefoneAssinaturaInput: '11999998888', emailAssinaturaInput: 'buyer@example.test', cpfTitularInput: '12345678909', senhaAssinaturaInput: 'test-password', whatsappNumeroInput: '11999998888' };
+      const values = { cityInput:'Salvador',stateInput:'BA',serviceNameInput:'Manicure',servicePriceInput:'40',serviceDurationInput:'45',serviceCategoryInput:'Unhas',barbeariaNomeInput: 'Salao teste', responsavelNomeInput: 'Teste', telefoneAssinaturaInput: '11999998888', emailAssinaturaInput: 'buyer@example.test', cpfTitularInput: '12345678909', senhaAssinaturaInput: 'test-password', whatsappNumeroInput: '11999998888' };
       for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
     });
     return page;
