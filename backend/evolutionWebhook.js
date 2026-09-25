@@ -45,11 +45,18 @@ async function drain(send = enviarTextoInstancia) {
         AND NOT EXISTS (SELECT 1 FROM whatsapp_messages older WHERE older.instance = m.instance
           AND older.phone = m.phone AND older.status = 'pending' AND older.id < m.id)
         ORDER BY m.id LIMIT 1`, [Date.now()]);
-      if (pending) await db.runAsync("UPDATE whatsapp_messages SET lease_until = $1, attempts = attempts + 1 WHERE id = $2", [Date.now() + 120000, pending.id]);
+      if (pending) await db.runAsync("UPDATE whatsapp_messages SET lease_until = $1 WHERE id = $2", [Date.now() + 120000, pending.id]);
       return pending;
     });
     if (!row) return;
     try {
+      const account = await transaction(db => db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [row.assinatura_id]));
+      if (!require('./services/access').avaliarAcessoAssinatura(account).liberado) {
+        // Access deferral is not a provider attempt and must not grow transport backoff.
+        await transaction(db => db.runAsync('UPDATE whatsapp_messages SET lease_until=$1 WHERE id=$2', [Date.now() + 300000, row.id]));
+        continue;
+      }
+      await transaction(db => db.runAsync('UPDATE whatsapp_messages SET attempts=attempts+1 WHERE id=$1', [row.id]));
       await send(row.instance, row.phone, row.response);
       await transaction(db => db.runAsync("UPDATE whatsapp_messages SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = $1", [row.id]));
       log('resposta enviada', { tenant: row.assinatura_id, phone: `***${row.phone.slice(-4)}` });
@@ -67,8 +74,9 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
   const envelope = extract(payload);
   if (!envelope) return { ok: true, ignored: true };
   const result = await transaction(async db => {
-    const tenants = await db.allAsync("SELECT id,barbearia_nome,public_slug FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
+    const tenants = await db.allAsync("SELECT * FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
     if (tenants.length !== 1) return { ok: true, ignored: true };
+    if (!require('./services/access').avaliarAcessoAssinatura(tenants[0]).liberado) return { ok: true, ignored: true, reason: 'payment_required' };
     const tenant = tenants[0].id;
     if (await db.getAsync("SELECT id FROM whatsapp_messages WHERE instance = $1 AND message_id = $2", [envelope.instance, envelope.messageId])) return { ok: true, duplicate: true };
     const stored = await db.getAsync("SELECT data_json FROM sessoes WHERE assinatura_id = $1 AND telefone = $2", [tenant, envelope.phone]);

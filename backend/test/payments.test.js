@@ -147,7 +147,7 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     const count = preferenceCalls;
     assert.equal((await post(`/api/publico/assinaturas/${id}/checkout`, { senha: signup.senha })).status, 200);
     assert.equal(preferenceCalls, count);
-    assert.equal((await post('/api/barbeiro/login', { identificador: signup.email, senha: signup.senha })).status, 403);
+    assert.equal((await post('/api/barbeiro/login', { identificador: signup.email, senha: signup.senha })).status, 200);
   });
   await t.test('link existente tambem e bloqueado quando o vendedor passa a coincidir', async () => {
     const before = await db.allAsync('SELECT * FROM mercado_pago_orders ORDER BY reference');
@@ -232,12 +232,17 @@ test('Mercado Pago: cadastro, checkout e confirmacao pelo backend', async t => {
     remotePayment = { ...approved(), external_reference: 'unknown-reference' };
     assert.equal((await (await notify()).json()).ignored, true);
   });
-  await t.test('aprovado ativa e notificacoes duplicadas concorrentes nao estendem acesso', async () => {
+  await t.test('aprovado libera trial expirado e notificacoes duplicadas nao estendem acesso', async () => {
+    await db.runAsync("UPDATE assinaturas SET trial_started_at='2000-01-01T00:00:00.000Z',trial_ends_at='2000-01-08T00:00:00.000Z' WHERE id=$1",[id]);
+    const expiredLogin = await (await post('/api/barbeiro/login', {identificador:signup.email,senha:signup.senha})).json();
+    assert.equal(expiredLogin.assinatura.acesso.status,'trial_expired');
+    assert.equal((await nativeFetch(base+'/api/studiofy/painel',{headers:{'x-barbeiro-token':expiredLogin.token}})).status,403);
     remotePayment = approved();
     const responses = await Promise.all([notify(), notify(), notify()]);
     assert.deepEqual(responses.map(r => r.status), [200, 200, 200]);
     const subscription = await db.getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
     assert.equal(subscription.status, 'ativo');
+    assert.equal((await nativeFetch(base+'/api/studiofy/painel',{headers:{'x-barbeiro-token':expiredLogin.token}})).status,200);
     assert.equal(subscription.status_assinatura, 'ATIVA');
     assert.equal(subscription.bloqueado, 0);
     assert.equal(subscription.payment_id, '12345');

@@ -7,7 +7,7 @@ const puppeteer = require('puppeteer');
 
 const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(candidate => candidate && fs.existsSync(candidate));
 
-test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !executablePath }, async t => {
+test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !executablePath }, async t => {
   const app = express();
   app.use(express.json());
   let failure = null;
@@ -43,6 +43,8 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     if (failure === 'same-seller') return res.status(409).json({ error: 'Vendedor e comprador precisam ser diferentes. Este cadastro usa o e-mail da conta vendedora do Mercado Pago. Para testar uma compra, use um cadastro de cliente com outro e-mail e uma conta compradora diferente.' });
     res.json({ checkoutUrl: failure === 'url' ? null : paymentUrl, plan });
   });
+  app.post('/api/barbeiro/login',(_req,res)=>failure==='login'?res.status(503).json({error:'Login indisponivel'}):res.json({token:'trial-token'}));
+  app.get('/studiofy.html',(_req,res)=>res.send('<h1>Studiofy</h1>'));
   app.get('/api/publico/assinaturas/17/status', (req, res) => res.json({ liberado: false }));
   app.use(express.static(path.resolve(__dirname, '../public')));
   const server = app.listen(0, '127.0.0.1');
@@ -78,23 +80,22 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     });
     return page;
   }
-  await t.test('campos visiveis preenchidos permitem submit e redirecionam ao checkout', async () => {
+  await t.test('campos visiveis preenchidos permitem submit e entram no Studiofy sem pagamento', async () => {
     const page = await openForm();
     try {
       const invalid = await page.$$eval('input:invalid, select:invalid', fields => fields.map(field => field.id));
       assert.deepEqual(invalid, [], 'Campos de cartao ocultos nao podem bloquear o submit');
       await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
-      assert.equal(page.url(), paymentUrl);
+      assert.equal(page.url(), `${base}/studiofy.html`);
       assert.equal(signupCalls, 1);
-      assert.equal(checkoutCalls, 1);
+      assert.equal(checkoutCalls, 0);
     } finally { await page.close(); }
   });
   for (const [scenario, expected] of [
     ['existing', 'HTTP 409'],
     ['signup', 'HTTP 400'], ['missing', 'HTTP 404'], ['server', 'HTTP 500'],
     ['html', 'HTTP 502'], ['json', 'resposta invalida'],
-    ['checkout', 'Cadastro salvo, mas'], ['url', 'URL de pagamento valida'],
-    ['same-seller', 'Vendedor e comprador precisam ser diferentes'],
+    ['login', 'Cadastro salvo.'],
     ['network', 'Verifique sua conexao'], ['timeout', 'demorou para responder'],
   ]) {
     await t.test(`falha ${scenario} aparece no formulario e permite tentar novamente`, async () => {
@@ -126,7 +127,7 @@ test('cadastro no navegador: submit, checkout e erros visiveis', { skip: !execut
     const page = await openForm({ storageBlocked: true });
     try {
       await Promise.all([page.waitForNavigation(), page.click('button[type=submit]')]);
-      assert.equal(page.url(), paymentUrl);
+      assert.equal(page.url(), `${base}/studiofy.html`);
     } finally { await page.close(); }
   });
   await t.test('credenciais ausentes sao informadas antes do submit', async () => {

@@ -181,7 +181,7 @@ async function fazerLoginAutomatico(email, senha) {
   authToken = payload.token;
   limparCadastroPendente();
   gravarStorage(TOKEN_STORAGE_KEY, payload.token);
-  window.location.href = '/barbeiro.html';
+  window.location.href = '/studiofy.html';
 }
 
 function iniciarMonitorLiberacao(assinaturaId, email, senha) {
@@ -277,24 +277,14 @@ assinaturaForm.addEventListener('submit', async (event) => {
     authToken = null;
     gravarStorage(TOKEN_STORAGE_KEY, null);
     salvarCadastroPendente({ assinaturaId: resposta.assinatura.id, email: emailCadastro });
-    mostrarMensagem('Cadastro salvo. Abrindo o pagamento no Mercado Pago...');
-    const checkout = await buscarJson(`/api/publico/assinaturas/${resposta.assinatura.id}/checkout`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ senha: senhaCadastro }),
-    });
-    if (typeof checkout.checkoutUrl !== 'string' || !/^https:\/\/([a-z0-9-]+\.)*mercadopago\.(com|com\.br)\//i.test(checkout.checkoutUrl)) {
-      throw new Error('O Mercado Pago nao retornou uma URL de pagamento valida. Tente novamente.');
-    }
-    exibirPlano(checkout.plan);
-    renderizarCheckout(checkout.checkoutUrl);
-    iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
-    mostrarMensagem('Redirecionando ao Mercado Pago. Se nao abrir, clique em Pagar com Mercado Pago.', true);
-    window.location.assign(checkout.checkoutUrl);
+    mostrarMensagem('Seu teste grátis de 7 dias começou. Entrando no Studiofy...');
+    await fazerLoginAutomatico(emailCadastro, senhaCadastro);
   } catch (error) {
     if (!cadastroSalvo && error.status === 409) {
       gravarStorage(PENDING_SIGNUP_STORAGE_KEY, null);
       assinaturaExistenteActions.hidden = false;
     }
-    mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo, mas nao foi possivel abrir o pagamento. ' : ''}${error.message}`, true);
+    mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo. Entre pela página de Login. ' : ''}${error.message}`, true);
   } finally {
     enviando = false;
     submitButton.disabled = false;

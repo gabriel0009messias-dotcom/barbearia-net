@@ -28,17 +28,18 @@ test('liberacao manual: autorizacao, prazo, pagamento preservado e revogacao', a
   const ids = [];
   for (const n of [1, 2]) {
     const response = await request('/publico/assinaturas', 'POST', {
-      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `teste${n}`, email: `owner${n}@example.test`,
+      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `1199999000${n}`, email: `owner${n}@example.test`,
       senha: 'test-password', metodoPagamento: 'mercado_pago', diaVencimento: 5, servicos: [{ nome: 'Corte', preco: 30 }],
     });
     assert.equal(response.status, 201);
     ids.push((await response.json()).assinatura.id);
   }
+  await db.runAsync("UPDATE assinaturas SET trial_status=NULL, trial_started_at=NULL, trial_ends_at=NULL");
   const endpoint = `/admin/assinaturas/${ids[0]}/liberar-dias`;
   const stored = id => db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [id]);
   const other = await stored(ids[1]);
   const customerLogin = () => request('/barbeiro/login', 'POST', { identificador: 'owner1@example.test', senha: 'test-password' });
-  assert.equal((await customerLogin()).status, 403);
+  assert.equal((await customerLogin()).status, 200);
   for (const headers of [{}, { 'x-admin-token': 'forged' }]) {
     assert.equal((await request(endpoint, 'POST', { dias: 1 }, headers)).status, 401);
   }
@@ -67,15 +68,15 @@ test('liberacao manual: autorizacao, prazo, pagamento preservado e revogacao', a
   await request(endpoint, 'POST', { dias: 1 }, admin);
   assert.equal(Date.parse((await stored(ids[0])).acesso_manual_ate), until, 'nao encurta prazo existente');
   await db.runAsync("UPDATE assinaturas SET acesso_manual_ate='2000-01-01T00:00:00.000Z' WHERE id=$1", [ids[0]]);
-  assert.equal((await request('/barbeiro/me', 'GET', undefined, { 'x-barbeiro-token': token })).status, 403);
-  assert.equal((await customerLogin()).status, 403);
+  assert.equal((await request('/agendamentos', 'GET', undefined, { 'x-barbeiro-token': token })).status, 403);
+  assert.equal((await customerLogin()).status, 200);
   await request(endpoint, 'POST', { dias: 1 }, admin);
   assert.equal((await customerLogin()).status, 200);
   assert.equal((await request(`/admin/assinaturas/${ids[0]}`, 'PATCH', { status: 'bloqueado' }, admin)).status, 200);
   assert.equal((await stored(ids[0])).acesso_manual_ate, null);
-  assert.equal((await customerLogin()).status, 403);
+  assert.equal((await customerLogin()).status, 200);
   await request(endpoint, 'POST', { dias: 1 }, admin);
   assert.equal((await customerLogin()).status, 200);
   await request(`/admin/assinaturas/${ids[0]}/bloquear`, 'POST', {}, admin);
-  assert.equal((await customerLogin()).status, 403);
+  assert.equal((await customerLogin()).status, 200);
 });

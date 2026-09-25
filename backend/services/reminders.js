@@ -27,6 +27,11 @@ function createReminderWorker(db,send,clock=()=>new Date()) {
     if(!current || current.status!=='sending' || current.appointment_status!=='confirmado' || +new Date(current.due_at)!==+new Date(row.due_at))return;
     if(clock().getTime()>=new Date(current.due_at).getTime()+1200000){await c.runAsync("UPDATE appointment_reminders SET status='expired' WHERE id=$1",[row.id]);return;}
     Object.assign(row,current);
+    const account = await c.getAsync('SELECT * FROM assinaturas WHERE id=$1', [row.assinatura_id]);
+    if (!require('./access').avaliarAcessoAssinatura(account).liberado) {
+     await c.runAsync("UPDATE appointment_reminders SET status='cancelled',last_error='Acesso operacional indisponivel.' WHERE id=$1",[row.id]);
+     return;
+    }
     try {
      await send(row.whatsapp_session,row.telefone,`Olá, ${row.nome_cliente}! 👋\n\nSeu horário está chegando.\nServiço: ${row.servico_nome}\nProfissional: ${row.profissional || row.barbearia_nome}\nHorário: ${row.hora}\n\n${clock().getTime()-new Date(row.due_at).getTime()<60000?'Faltam 20 minutos para seu atendimento.':'Lembrete do seu atendimento de hoje.'}\n\n${row.barbearia_nome}`);
      await c.runAsync("UPDATE appointment_reminders SET status='sent',sent_at=$1,last_error=NULL WHERE id=$2",[clock(),row.id]);

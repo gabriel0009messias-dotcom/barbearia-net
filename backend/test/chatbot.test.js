@@ -23,4 +23,28 @@ test('WhatsApp fornece link individual; nao conduz agendamento; webhook autentic
  const pending=payload('Ola');await webhook.processarWebhookEvolution(pending,headers,{send:async()=>{throw Error('offline');}});
  const row=await db.getAsync('SELECT * FROM whatsapp_messages WHERE message_id=$1',[pending.data.key.id]);assert.equal(row.status,'pending');
  await db.runAsync('UPDATE whatsapp_messages SET lease_until=0 WHERE id=$1',[row.id]);await webhook.drain(send);assert.equal(sent.length,3);
+ await t.test('trial governa respostas e fila sem alterar mensagem ou backoff de transporte',async()=>{
+  const started=new Date(),ends=new Date(started.getTime()+168*3600000);
+  await db.runAsync("UPDATE assinaturas SET status='pendente',trial_status='active',trial_started_at=$1,trial_ends_at=$2 WHERE id=1",[started.toISOString(),ends]);
+  await webhook.processarWebhookEvolution(payload('oi'),headers,{send});assert.equal(sent.length,4);
+  const queued=payload('oi');
+  const attemptStart=Date.now();
+  await webhook.processarWebhookEvolution(queued,headers,{send:async()=>{throw Object.assign(Error('provider 429'),{statusCode:429});}});
+  const pending=await db.getAsync('SELECT * FROM whatsapp_messages WHERE message_id=$1',[queued.data.key.id]);
+  assert.equal(pending.attempts,1);
+  assert.ok(pending.lease_until>=attemptStart+10000 && pending.lease_until<=Date.now()+10000);
+  await db.runAsync("UPDATE assinaturas SET trial_started_at='2000-01-01T00:00:00.000Z',trial_ends_at='2000-01-08T00:00:00.000Z' WHERE id=1");
+  const ignored=payload('oi');assert.equal((await webhook.processarWebhookEvolution(ignored,headers,{send})).reason,'payment_required');
+  assert.equal(await db.getAsync('SELECT id FROM whatsapp_messages WHERE message_id=$1',[ignored.data.key.id]),undefined);
+  await db.runAsync('UPDATE whatsapp_messages SET lease_until=0 WHERE id=$1',[pending.id]);
+  const deferStart=Date.now();await webhook.drain(send);
+  const deferred=await db.getAsync('SELECT * FROM whatsapp_messages WHERE id=$1',[pending.id]);
+  assert.equal(sent.length,4);assert.equal(deferred.attempts,1);
+  assert.equal(deferred.status,'pending');assert.equal(deferred.response,pending.response);
+  assert.ok(deferred.lease_until>=deferStart+300000);
+  await db.runAsync("UPDATE assinaturas SET status='ativo',payment_id='approved-test',ultimo_pagamento='2026-09-24',proximo_vencimento='2099-01-01' WHERE id=1");
+  await db.runAsync('UPDATE whatsapp_messages SET lease_until=0 WHERE id=$1',[pending.id]);await webhook.drain(send);
+  assert.equal(sent.length,5);assert.equal(sent[4].text,pending.response);
+  assert.equal((await db.getAsync('SELECT status FROM whatsapp_messages WHERE id=$1',[pending.id])).status,'sent');
+ });
 });

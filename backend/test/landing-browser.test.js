@@ -15,6 +15,7 @@ test('Landing 2A: tour isolado, preço real, navegação e responsividade',{skip
   res.json({plan:{name:'Plano de verificação',amountCents:7990,durationDays:30,currency:'BRL'}});
  });
  app.post('/api/barbeiro/login',(req,res)=>{loginBody=req.body;res.json({token:'local-test-token'});});
+ app.get('/api/barbeiro/me',(_req,res)=>res.status(401).json({error:'Sessao expirada'}));
  app.get('/api/studiofy/painel',(_req,res)=>res.status(401).json({error:'Sessão expirada'}));
  app.use(express.static(path.resolve(__dirname,'../public')));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
@@ -70,10 +71,11 @@ test('Landing 2A: tour isolado, preço real, navegação e responsividade',{skip
   assert.match(await page.$eval('.conversation-demo',el=>el.textContent),/consultar os horários disponíveis/);
   assert.match(await page.$eval('.top-services',el=>el.textContent),/Serviços mais realizados/);
  });
- await t.test('CTA de teste revela indisponibilidade sem iniciar cadastro ou cobrança',async()=>{
+ await t.test('CTA apresenta trial real e acesso ao cadastro',async()=>{
   const before=requests.length;await page.click('.hero a[href="#teste-gratis"]');
   assert.equal(new URL(page.url()).hash,'#teste-gratis');
-  assert.match(await page.$eval('#teste-gratis',el=>el.textContent),/ainda não pode ser iniciado/);
+  assert.match(await page.$eval('#teste-gratis',el=>el.textContent),/Sem cartão para começar/);
+  assert.equal(await page.$eval('#teste-gratis a.button',el=>el.getAttribute('href')),'/cadastro.html');
   assert.equal(requests.length,before);
  });
  await t.test('celular e tablet: sem overflow, smartphone e menu por teclado',async()=>{
@@ -97,7 +99,7 @@ test('Landing 2A: tour isolado, preço real, navegação e responsividade',{skip
   await page.setViewport({width:1440,height:1000});await page.goto(base,{waitUntil:'networkidle0'});
   await Promise.all([page.waitForNavigation(),page.click('#site-nav a[href="/login.html"]')]);
   await page.type('#loginIdentificadorInput','owner@example.test');await page.type('#loginSenhaInput','test-password');
-  const expired=page.waitForResponse(r=>r.url().endsWith('/api/studiofy/painel')&&r.status()===401);
+  const expired=page.waitForResponse(r=>r.url().endsWith('/api/barbeiro/me')&&r.status()===401);
   await page.click('#loginBarbeiroForm [type=submit]');await expired;
   await page.waitForFunction(()=>location.pathname==='/login.html'&&document.querySelector('#loginBarbeiroForm')&&localStorage.getItem('barbearia_auth_token')==='local-test-token');
   assert.deepEqual(loginBody,{identificador:'owner@example.test',senha:'test-password'});
@@ -107,7 +109,7 @@ test('Landing 2A: tour isolado, preço real, navegação e responsividade',{skip
  });
  await t.test('sem JavaScript: navegação, apresentação e avisos continuam acessíveis',async()=>{
   const plain=await browser.newPage();await plain.setJavaScriptEnabled(false);await plain.setViewport({width:390,height:844});await plain.goto(base,{waitUntil:'networkidle0'});
-  assert.ok(await plain.$eval('#site-nav',el=>el.getBoundingClientRect().height>0));assert.match(await plain.$eval('#teste-gratis',el=>el.textContent),/em preparação/);
+  assert.ok(await plain.$eval('#site-nav',el=>el.getBoundingClientRect().height>0));assert.match(await plain.$eval('#teste-gratis',el=>el.textContent),/7 dias grátis/);
   assert.ok(await plain.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await plain.close();
  });
  assert.deepEqual(errors,[]);

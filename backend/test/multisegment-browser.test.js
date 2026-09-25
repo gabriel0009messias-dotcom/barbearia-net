@@ -12,6 +12,7 @@ test('página pública móvel mostra identidade e serviços de quatro segmentos'
  app.use(express.json());
  let savedProfile,savedService;
  const panel={pagina:{nome:'Studio Bella',slug:'bella',cor:'#2878ff',businessType:'nails',city:'Salvador',state:'BA',address:'Rua A',instagram:'studio.bella'},businessTypes:[{code:'nails',name:'Unhas/Manicure'},{code:'massage',name:'Massagem'}],servicos:[{id:1,nome:'Manicure',categoria:'Unhas',preco:40,duracao:45,ativo:true}],profissionais:[],agendamentos:[],bloqueios:[],lembretes:[]};
+ app.get('/api/barbeiro/me',(_req,res)=>res.json({id:1,barbearia_nome:'Studio',acesso:{liberado:true,status:'subscription_active'}}));
  app.get('/api/studiofy/painel',(_req,res)=>res.json(panel));
  app.put('/api/studiofy/pagina',(req,res)=>{savedProfile=req.body;Object.assign(panel.pagina,req.body);res.json({ok:true});});
  app.put('/api/studiofy/servicos/1',(req,res)=>{savedService=req.body;Object.assign(panel.servicos[0],req.body);res.json({ok:true});});

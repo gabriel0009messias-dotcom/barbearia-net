@@ -1,5 +1,7 @@
 # Studiofy — plano 2A, 2B e 2C
 
+Atualização: a implementação local da 2B está em [STUDIOFY-ETAPA2B.md](STUDIOFY-ETAPA2B.md) e a validação final com PostgreSQL isolado está em [STUDIOFY-ETAPA2B-VALIDACAO.md](STUDIOFY-ETAPA2B-VALIDACAO.md): 231 aprovados, zero falhas e zero ignorados. As descrições abaixo registram o planejamento e a entrega histórica da 2A. Publicação somente da 2B autorizada pelo usuário em 25/09/2026, condicionada às verificações de backup e segurança.
+
 ## Escopo autorizado
 
 Análise do pedido de 24/09/2026 e implementação somente da etapa 2A. Sem commit, push ou deploy nesta etapa. Base publicada: `99e0198`. Referência visual recebida nesta sessão: descrição textual; nenhum arquivo de imagem acompanhou o anexo. A apresentação usa a identidade azul/marinho e a demonstração de smartphone do próprio Studiofy.

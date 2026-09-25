@@ -8,6 +8,13 @@ const { connectionConfig } = require('../database/config');
 const { migrate } = require('../database/migrate');
 
 const identifier = value => '"' + String(value).replaceAll('"', '""') + '"';
+// Exact catalog seeded by migration 007; customized catalogs are not empty targets.
+const seedBusinessTypes = [
+  ['barbershop', 'Barbearia'], ['beauty_salon', 'Salão de beleza'],
+  ['nails', 'Unhas/Manicure'], ['eyebrows', 'Sobrancelhas'], ['aesthetics', 'Estética'],
+  ['massage', 'Massagem'], ['makeup', 'Maquiagem'], ['waxing', 'Depilação'],
+  ['lashes', 'Lash designer'], ['spa', 'Spa'], ['other', 'Outro'],
+];
 
 async function readSnapshot(filename) {
   if (!fs.existsSync(filename)) throw new Error('Arquivo SQLite nao encontrado.');
@@ -49,7 +56,9 @@ async function importSqlite(filename, options = {}) {
         const rows = (await client.query(`SELECT * FROM ${identifier(name)}`)).rows;
         const onlySeeds = name === 'configuracoes'
           ? rows.every(row => ({ suporte_numero: '+55 75 8317-9933', admin_pin: '5090' })[row.chave] === row.valor)
-          : name === 'servicos' && rows.every(row => seedServices.some(seed => seed.id === row.id && seed.nome === row.nome && seed.preco === row.preco));
+          : name === 'business_types'
+            ? rows.every(row => seedBusinessTypes.some(([code, label], index) => row.code === code && row.name === label && row.active === true && row.sort_order === index + 1))
+            : name === 'servicos' && rows.every(row => seedServices.some(seed => seed.id === row.id && seed.nome === row.nome && seed.preco === row.preco));
         if (rows.length && !onlySeeds) throw new Error(`Destino possui dados em ${name}. Use um banco/schema novo para a importacao.`);
       }
       for (const table of tables) {

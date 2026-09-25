@@ -67,7 +67,7 @@ test('cadastro novo nao assume contratos existentes', async t => {
   }
   await t.test('titular pode entrar e escolher explicitamente continuar checkout contratado de 50', async () => {
     const login = await post('/barbeiro/login', { identificador: old.email, senha: old.senha });
-    assert.equal(login.status, 403);
+    assert.equal(login.status, 200);
     const before = await snapshot();
     const checkout = await post(`/publico/assinaturas/${id}/checkout`, { senha: old.senha });
     assert.equal(checkout.status, 200);

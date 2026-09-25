@@ -213,8 +213,10 @@ async function processarMensagemWhatsapp({
     throw new Error('Mensagem invalida.');
   }
 
-  const a = await db.getAsync('SELECT barbearia_nome,public_slug FROM assinaturas WHERE id=$1', [assinaturaId]);
+  const a = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [assinaturaId]);
   if (!a) throw new Error('Estabelecimento não encontrado.');
+  const access = require('./services/access').avaliarAcessoAssinatura(a);
+  if (!access.liberado) throw Object.assign(new Error(access.mensagem), { statusCode: 403 });
   const base = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
   if (!/^https?:\/\//.test(base)) return 'Entre em contato com o estabelecimento para obter seu link de agendamento.';
   await db.transaction(c => require('./services/studiofy').createStudio(c).ensure(assinaturaId));

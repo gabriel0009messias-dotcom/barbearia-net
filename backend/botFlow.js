@@ -306,7 +306,7 @@ async function carregarAcessoAssinatura(assinaturaId, sessionKey) {
   }
 
   const assinatura = await getAsync(
-    `SELECT id, status, trial_expires_at
+    `SELECT *
      FROM assinaturas
      WHERE id = $1`,
     [assinaturaId]
@@ -319,17 +319,7 @@ async function carregarAcessoAssinatura(assinaturaId, sessionKey) {
     };
   }
 
-  if (assinatura.status === 'ativo') {
-    return {
-      liberado: true,
-      mensagem: '',
-    };
-  }
-
-  return {
-    liberado: false,
-    mensagem: 'Atendimento temporariamente bloqueado. Regularize o Pix da barbearia para voltar a agendar.',
-  };
+  return require('./services/access').avaliarAcessoAssinatura(assinatura);
 }
 
 function formatarData(data) {

@@ -29,7 +29,7 @@ test('exclusao administrativa isolada e atomica', async t => {
   const ids = [];
   for (const n of [1, 2]) {
     const response = await request('/publico/assinaturas', 'POST', {
-      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `teste${n}`, email: `owner${n}@example.test`,
+      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `1199999000${n}`, email: `owner${n}@example.test`,
       senha: 'test-password', metodoPagamento: 'mercado_pago', diaVencimento: 5, servicos: [{ nome: 'Corte', preco: 30 }],
     });
     assert.equal(response.status, 201);

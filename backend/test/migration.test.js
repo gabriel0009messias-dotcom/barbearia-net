@@ -37,6 +37,12 @@ test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anterio
   assert.deepEqual((await c.query('SELECT * FROM appointment_reminders WHERE appointment_id=94')).rows[0],reminder);
   assert.equal((await c.query('SELECT business_type_code FROM assinaturas WHERE id=42')).rows[0].business_type_code,'other');
   assert.equal((await c.query('SELECT categoria FROM servicos_assinatura WHERE id=78')).rows[0].categoria,'');
+  const beforeTrial=(await c.query('SELECT * FROM assinaturas WHERE id=42')).rows[0];
+  await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/008_seven_day_trial.sql'),'utf8'));
+  const afterTrial=(await c.query('SELECT * FROM assinaturas WHERE id=42')).rows[0];
+  for(const [key,value] of Object.entries(beforeTrial))assert.deepEqual(afterTrial[key],value,key);
+  assert.equal(afterTrial.trial_status,null);assert.equal(afterTrial.trial_ends_at,null);
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0],booking);
  }finally{c.release();}
 });
 
@@ -70,7 +76,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql',
+      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);
@@ -82,6 +88,13 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     assert.equal(result.counts.clientes, 2);
     assert.equal((await pool.query('SELECT count(*) FROM assinaturas')).rows[0].count, 0);
     assert.equal(hash(), originalHash);
+  });
+  await t.test('catalogo personalizado nao e confundido com destino vazio', async () => {
+    await pool.query("UPDATE business_types SET name='Personalizado' WHERE code='other'");
+    try {
+      await assert.rejects(importSqlite(filename, { checkOnly: true }), /Destino possui dados em business_types/);
+      assert.equal((await pool.query("SELECT name FROM business_types WHERE code='other'")).rows[0].name, 'Personalizado');
+    } finally { await pool.query("UPDATE business_types SET name='Outro' WHERE code='other'"); }
   });
   await t.test('importa campos de pagamento e duplicados historicos sem alterar IDs', async () => {
     await importSqlite(filename);

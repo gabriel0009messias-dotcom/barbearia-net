@@ -66,7 +66,7 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
   const ids = [];
   for (const n of [1, 2, 3, 4]) {
     const response = await request('/publico/assinaturas', 'POST', {
-      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `list${n}`, email: `list${n}@example.test`,
+      barbeariaNome: `Salao ${n}`, responsavelNome: 'Teste', telefone: `1199999000${n}`, email: `list${n}@example.test`,
       senha: 'test-password', metodoPagamento: 'mercado_pago', diaVencimento: 5, servicos: [{ nome: 'Corte', preco: 30 }],
     });
     assert.equal(response.status, 201);
@@ -120,7 +120,7 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
       assert.ok((await groups()).pendentes.some(row => row.id === ids[0]), status);
       assert.deepEqual(await snapshot(), before);
       const login = await request('/barbeiro/login', 'POST', { identificador: 'list1@example.test', senha: 'test-password' });
-      assert.equal(login.status, 403, status);
+      assert.equal(login.status, 200, status);
     }
   });
   await t.test('webhook approved libera 30 dias e inclui automaticamente sem duplicar', async () => {
@@ -154,7 +154,7 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     await db.runAsync("UPDATE assinaturas SET acesso_manual_ate='2000-01-01T00:00:00Z' WHERE id=$1", [ids[1]]);
     assert.ok(!(await list()).some(row => row.id === ids[1]));
     assert.ok((await groups()).pendentes.some(row => row.id === ids[1]));
-    assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list2@example.test', senha: 'test-password' })).status, 403);
+    assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list2@example.test', senha: 'test-password' })).status, 200);
   });
   await t.test('cliente pago ativo legado continua visivel sem depender so do status', async () => {
     await db.runAsync(`UPDATE assinaturas SET status='ativa', status_assinatura='ATIVA', gateway_status='approved',
