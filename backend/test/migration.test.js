@@ -43,6 +43,13 @@ test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anterio
   for(const [key,value] of Object.entries(beforeTrial))assert.deepEqual(afterTrial[key],value,key);
   assert.equal(afterTrial.trial_status,null);assert.equal(afterTrial.trial_ends_at,null);
   assert.deepEqual((await c.query('SELECT * FROM agendamentos WHERE id=94')).rows[0],booking);
+  const tables=(await c.query('SELECT tablename FROM pg_tables WHERE schemaname=$1 ORDER BY tablename',[environment.schema])).rows.map(r=>r.tablename);
+  const beforeChat={};
+  for(const table of tables)beforeChat[table]=(await c.query(`SELECT * FROM "${table}" ORDER BY 1`)).rows;
+  await c.query('BEGIN');await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/009_studiofy_chat.sql'),'utf8'));await c.query('COMMIT');
+  for(const table of tables)assert.deepEqual((await c.query(`SELECT * FROM "${table}" ORDER BY 1`)).rows,beforeChat[table],`Chat preserva ${table}`);
+  assert.equal((await c.query('SELECT count(*)::int AS n FROM chat_conversations')).rows[0].n,0);
+  assert.equal((await c.query('SELECT count(*)::int AS n FROM chat_messages')).rows[0].n,0);
  }finally{c.release();}
 });
 
@@ -76,7 +83,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql',
+      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql', '009_studiofy_chat.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);

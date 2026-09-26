@@ -59,10 +59,10 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  assert.equal((await db.getAsync('SELECT cancellation_notice_minutes FROM assinaturas WHERE id=$1',[signup.assinatura.id])).cancellation_notice_minutes,60);
  await mobile.bringToFront();await mobile.reload();await mobile.waitForSelector('#openMyBookings');await mobile.click('#openMyBookings');await mobile.waitForSelector('[data-cancel-reservation]');
  assert.match(await mobile.$eval('#savedBookings',el=>el.textContent),/Manicure/);
- await mobile.click('[data-cancel-reservation]');await mobile.waitForSelector('dialog[open]');assert.match(await mobile.$eval('dialog',el=>el.textContent),/Deseja realmente cancelar este agendamento\?/);
+ await mobile.click('[data-cancel-reservation]');await mobile.waitForSelector('.cancel-dialog[open]');assert.match(await mobile.$eval('.cancel-dialog[open]',el=>el.textContent),/Deseja realmente cancelar este agendamento\?/);
  assert.equal((await db.getAsync('SELECT status FROM agendamentos')).status,'confirmado');
  await mobile.screenshot({path:path.join(artifacts,'cancelamento-confirmacao-mobile.png'),fullPage:true});
- await mobile.click('#cancelBack');await mobile.waitForSelector('dialog',{hidden:true});assert.equal((await db.getAsync('SELECT status FROM agendamentos')).status,'confirmado');
+ await mobile.click('#cancelBack');await mobile.waitForSelector('.cancel-dialog',{hidden:true});assert.equal((await db.getAsync('SELECT status FROM agendamentos')).status,'confirmado');
  await mobile.click('[data-cancel-reservation]');await mobile.click('#confirmCancellation');await mobile.waitForFunction(()=>document.querySelector('#booking').textContent.includes('Agendamento cancelado com sucesso.'));
  assert.equal((await db.getAsync('SELECT status FROM agendamentos')).status,'cancelado');assert.equal((await db.getAsync('SELECT status FROM appointment_reminders')).status,'cancelled');
  await mobile.screenshot({path:path.join(artifacts,'cancelamento-sucesso-mobile.png'),fullPage:true});

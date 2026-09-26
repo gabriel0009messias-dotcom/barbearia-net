@@ -1505,6 +1505,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
   });
 }
 
+router.use('/chat', require('./chatRoutes')(db, requireBarbeiro));
 router.use('/studiofy', require('./studiofyRoutes')(db, requireBarbeiro, async assinatura => avaliarAcessoAssinatura(await sincronizarStatusPorVencimento(assinatura))));
 
 router.get('/agendamentos', requirePainelOuBridge, (req, res) => {
