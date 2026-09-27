@@ -1378,6 +1378,17 @@ async function garantirInstanciaWhatsapp(assinatura, phoneNumber = '', options =
   return { instanceName, estado };
 }
 
+function numeroWhatsappConectado(estado) {
+  // Use only identity returned by the provider for this instance, never the signup phone.
+  const candidates = [estado?.instance?.ownerJid, estado?.ownerJid, estado?.instance?.number, estado?.number];
+  for (const value of candidates) {
+    if (typeof value !== 'string') continue;
+    const number = value.split('@')[0].split(':')[0].replace(/^\+/, '');
+    if (/^\d{10,15}$/.test(number)) return number;
+  }
+  return null;
+}
+
 async function consultarStatusWhatsappEvolution(assinatura, options = {}, estadoConfirmado = null) {
   const instanceName = String(assinatura?.whatsapp_session || '').trim();
 
@@ -1408,18 +1419,19 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
     });
 
     if (statusMapeado === 'conectado') {
-      return respostaStatusWhatsapp({
+      return { connectedNumber: numeroWhatsappConectado(estado), ...respostaStatusWhatsapp({
         status: statusMapeado,
         instancia: instanceName,
         conectado: true,
         precisaQr: false,
         mensagem: 'WhatsApp conectado com sucesso.',
-      });
+      }) };
     }
 
     if (statusMapeado === 'iniciando') {
       return { connectionAttemptActive: true, ...respostaStatusWhatsapp({
         status: statusMapeado,
+        qrCode: construirQrCodeUrl(extrairConteudoQr(estado) || extrairConteudoQr(estado?.instance)),
         instancia: instanceName,
         conectado: false,
         precisaQr: false,
@@ -1487,7 +1499,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
       if (estado.connectionAttemptActive) return respostaTentativaWhatsapp(instanceName);
       const conexao = await conectarInstancia(instanceName, '', options);
       if (['open', 'connected'].includes(conexao?.instance?.state || conexao?.state)) {
-        return respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado.' });
+        return { connectedNumber: numeroWhatsappConectado(conexao), ...respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado.' }) };
       }
       const qrCode = construirQrCodeUrl(extrairConteudoQr(conexao));
       if (qrCode) {
@@ -2304,7 +2316,7 @@ router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, a
 });
 
 router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async (req, res) => {
-  const { id } = req.params;
+  const id = req.assinatura.id;
 
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) {
@@ -2603,7 +2615,7 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
 });
 
 router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (req, res) => {
-  const { id } = req.params;
+  const id = req.assinatura.id;
   console.info('[WHATSAPP] Buscando status da assinatura:', id);
   res.set('Cache-Control', 'no-store');
   try {
@@ -2624,7 +2636,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
 });
 
 router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async (req, res) => {
-  const { id } = req.params;
+  const id = req.assinatura.id;
 
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) {

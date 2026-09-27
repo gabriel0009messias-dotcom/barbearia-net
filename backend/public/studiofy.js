@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=v=>Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),token=localStorage.getItem('barbearia_auth_token');
-const sections=['Dashboard','Agendamentos','Conversas','Clientes','Meus serviços','Profissionais','Financeiro','Horários','Minha página','Notificações','Relatórios','Configurações','Assinatura'];
+const sections=['Dashboard','Agendamentos','WhatsApp','Conversas','Clientes','Meus serviços','Profissionais','Financeiro','Horários','Minha página','Notificações','Relatórios','Configurações','Assinatura'];
 let account;
 let state,section='Dashboard',agendaDate=todayLocal(),agendaMode='week';
 function todayLocal(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());}
@@ -28,6 +28,7 @@ async function refresh(){
  banner.hidden=access?.status==='subscription_active';
  banner.textContent=access?.status==='trial_active'?`7 dias grátis: termina em ${new Date(access.trial.endsAt).toLocaleString('pt-BR')} (${access.trial.daysRemaining} dia(s) restantes).`:access?.mensagem || '';
  if(access && !access.liberado){
+  window.StudiofyWhatsapp?.unmount();
   window.StudiofyInbox?.pause();
   state=null;$('#title').textContent='Assinatura';$('#navigation').innerHTML='<button id="plans">Ver planos</button>';
   $('#plans').onclick=()=>action(subscriptionView);await subscriptionView();return;
@@ -38,11 +39,13 @@ const table=(headers,rows)=>`<div class="card table-wrap"><table><thead><tr>${he
 const field=(label,name,type='text',value='',extra='')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());
 function render(){
+ window.StudiofyWhatsapp?.unmount();
  window.StudiofyInbox?.unmount();
- $('#title').textContent=section;$('#navigation').innerHTML=sections.map((s,i)=>`<button ${s===section?'class="active"':''} data-section="${s}">${s==='Conversas'?'<span aria-hidden="true">💬</span>':icon(i>2?i-1:i)}<span>${s}</span>${s==='Conversas'?'<span id="inboxBadge" hidden></span><small id="inboxBadgeConnection" hidden role="status">Tentando atualizar…</small>':''}</button>`).join('');
+ $('#title').textContent=section==='WhatsApp'?'Conectar WhatsApp':section;$('#navigation').innerHTML=sections.map((s,i)=>`<button ${s===section?'class="active"':''} data-section="${s}">${s==='Conversas'?'<span aria-hidden="true">💬</span>':s==='WhatsApp'?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M21 11a9 9 0 0 1-9 9H4l-3 2 2-6a9 9 0 1 1 18-5Z"/><path d="M7 8h10M7 12h7"/></svg>':icon(i>3?i-2:i)}<span>${s}</span>${s==='Conversas'?'<span id="inboxBadge" hidden></span><small id="inboxBadgeConnection" hidden role="status">Tentando atualizar…</small>':''}</button>`).join('');
  window.StudiofyInbox?.paintBadge();
  document.querySelectorAll('[data-section]').forEach(b=>b.onclick=()=>{section=b.dataset.section;message('');render();});
  if(section==='Assinatura'){action(subscriptionView);return;}
+ if(section==='WhatsApp'){window.StudiofyWhatsapp.mount($('#view'),token,account.id,()=>action(refresh));return;}
  if(section==='Conversas'){window.StudiofyInbox.mount($('#view'),token,()=>action(refresh));return;}
  const view=$('#view'),appointments=state.agendamentos;
  if(section==='Dashboard'){
@@ -106,10 +109,10 @@ function hoursForm(){
  $('#hours').onsubmit=e=>{e.preventDefault();const f=e.currentTarget;action(async()=>{await api('/horarios','PUT',{horarios:days.map((_,i)=>f['day'+i].value.trim()?f['day'+i].value.split(',').map(p=>p.trim().split('-').map(x=>x.trim())):[])});message('Horários salvos.');await refresh();});};
  $('#block').onsubmit=e=>{e.preventDefault();const b=Object.fromEntries(new FormData(e.currentTarget));action(async()=>{await api('/bloqueios','POST',b);await refresh();});};document.querySelectorAll('[data-remove-block]').forEach(b=>b.onclick=()=>action(async()=>{await api('/bloqueios/'+b.dataset.removeBlock,'DELETE');await refresh();}));
 }
-$('#logout').onclick=()=>action(async()=>{await fetch('/api/barbeiro/logout',{method:'POST',headers:{'x-barbeiro-token':token}});localStorage.removeItem('barbearia_auth_token');location.href='/login.html';});
+$('#logout').onclick=()=>action(async()=>{window.StudiofyWhatsapp?.unmount();await fetch('/api/barbeiro/logout',{method:'POST',headers:{'x-barbeiro-token':token}});localStorage.removeItem('barbearia_auth_token');location.href='/login.html';});
 action(async()=>{await refresh();if(account?.acesso?.liberado)window.StudiofyInbox?.refreshBadge(token);});
 // Refresh read-only screens without overwriting a form being edited.
-setInterval(()=>{if(section!=='Conversas' && !document.hidden && account && !$('#view form'))action(refresh);},30000);
+setInterval(()=>{if(!['Conversas','WhatsApp'].includes(section) && !document.hidden && account && !$('#view form'))action(refresh);},30000);
 
 function shiftDate(date,n){const d=new Date(date+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
 function renderAgenda(view,appointments){
