@@ -2,6 +2,12 @@ const { randomUUID } = require('node:crypto');
 const { logEvolution, sanitize, sanitizeUpstreamBody } = require('./evolutionLog');
 const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
+const statusCache = new Map();
+const requestContext = require('./evolutionContext');
+function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
+function traceStatus(event, data) {
+  if (process.env.EVOLUTION_STATUS_TRACE === 'true') logEvolution(event, data);
+}
 const existence = require('./evolutionExistenceCache');
 function connectionKey(instance) { return `${getEvolutionConfig().baseUrl}|${instance}`; }
 function tentativaConexaoAtiva(instance) { return guard.hasConnection(connectionKey(instance)); }
@@ -126,7 +132,10 @@ function classifyFailure(status, payload, path) {
   if (status === 429) return ['Evolution API recebeu muitas solicitacoes. Aguarde e tente novamente.', 429, 'EVOLUTION_RATE_LIMIT'];
   if (status === 400 && path.startsWith('/instance/logout/') && /instance.*is not connected/i.test(technical)) return ['WhatsApp ja esta desconectado.', 400, 'EVOLUTION_ALREADY_DISCONNECTED'];
   const messages = [payload?.message, payload?.response?.message, payload?.error, typeof payload === 'string' ? payload : null].flat();
-  const missingInstance = messages.some(message => typeof message === 'string' && /^\s*(?:the\s+)?instance\b.*\b(?:not\s+found|does\s+not\s+exist)\b/i.test(message));
+  const missingInstance = messages.some(message => typeof message === 'string' && (
+    /^\s*(?:the\s+)?instance\b.*\b(?:not\s+found|does\s+not\s+exist)\b/i.test(message) ||
+    /^\s*The "[^"\r\n]+" instance does not exist\.?\s*$/i.test(message)
+  ));
   if (status === 404 && missingInstance) return ['A instancia do WhatsApp nao foi encontrada na Evolution API.', 404, 'EVOLUTION_INSTANCE_NOT_FOUND'];
   if (path === '/instance/create' && (status === 409 || /already|duplicate|already in use/i.test(technical))) return ['A instancia ja existe na Evolution API.', 409, 'EVOLUTION_INSTANCE_EXISTS'];
   if (status === 404) return ['Endpoint da Evolution API nao encontrado. Verifique a URL e a versao do servico.', 502, 'EVOLUTION_ENDPOINT_NOT_FOUND'];
@@ -148,7 +157,7 @@ async function evolutionRequest(path, options = {}) {
 async function requestTransport(path, options = {}) {
   const config = ensureEvolutionConfigured();
   const { retryAttempts = config.retryAttempts, retryDelayMs = config.retryDelayMs,
-    timeoutMs = config.timeoutMs, deadline, requestId = randomUUID(), instanceName,
+    timeoutMs = config.timeoutMs, deadline, requestId = requestContext.current().requestId || randomUUID(), instanceName,
     ...fetchOptions } = options;
   // Criacao e outras mutacoes nao podem ser repetidas cegamente apos timeout.
   const attempts = path.startsWith('/instance/') ? 1 : (fetchOptions.method || 'GET') === 'GET' ? Math.max(1, retryAttempts) : 1;
@@ -162,18 +171,22 @@ async function requestTransport(path, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
     let httpStatus = null;
-    const context = { requestId, endpoint, instance, method: fetchOptions.method || 'GET', attempt,
+    const context = { ...requestContext.current(), requestId, endpoint, instance, instanceName: instance, method: fetchOptions.method || 'GET', attempt,
       origin: new URL(config.baseUrl).origin, timeoutMs: budget };
     logEvolution('request_start', context);
     try {
+      if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_CALLING_EVOLUTION', { requestId });
       const response = await fetch(`${config.baseUrl}${path}`, {
         ...fetchOptions, redirect: 'manual', signal: controller.signal,
         headers: { apikey: config.apiKey, ...(fetchOptions.body ? { 'Content-Type': 'application/json' } : {}), ...(fetchOptions.headers || {}) },
       });
       httpStatus = response.status;
+      if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_EVOLUTION_RESPONSE', { requestId, httpStatus });
       if (httpStatus === 429) {
         const upstreamRetryAfter = response.headers.get('retry-after');
-        const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter);
+        const diagnostic = { requestId, endpoint, instanceName: instance, method: context.method,
+          httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
+        const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter, diagnostic);
         const metadata = {};
         for (const name of ['content-type', 'server', 'via', 'cf-ray', 'x-ratelimit-limit',
           'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining',
@@ -216,11 +229,14 @@ async function requestTransport(path, options = {}) {
           code === 'ENOTFOUND' ? 'EVOLUTION_DNS_ERROR' : 'EVOLUTION_OFFLINE');
       }
       if (error !== original) error.cause = original;
+      error.diagnostic ||= { requestId, endpoint, instanceName: instance, method: context.method,
+        httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
       logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started, error }, 'error');
       const retryable = ['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE'].includes(error.code);
       if (attempt >= attempts || !retryable || (deadline && deadline - Date.now() <= retryDelayMs)) throw error;
     } finally {
       clearTimeout(timer);
+      if (/^\/instance\/(?:connect|create|logout|delete)(?:\/|$)/.test(endpoint) && instance) invalidateStatus(instance);
     }
     await sleep(retryDelayMs);
   }
@@ -330,6 +346,7 @@ async function buscarInstancia(instanceName, options = {}) {
 }
 
 function invalidarExistenciaInstancia(instanceName) {
+  invalidateStatus(instanceName);
   existence.invalidate(connectionKey(instanceName));
   guard.invalidateConnection(connectionKey(instanceName));
 }
@@ -374,6 +391,7 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
 }
 
 async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
+  invalidateStatus(instanceName);
   const numero = String(phoneNumber || '').trim();
   const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
   return guard.connectOnce(connectionKey(instanceName), numero || 'qr', () => evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
@@ -398,12 +416,36 @@ function extrairPairingCode(payload = null) {
 
 async function obterEstadoConexao(instanceName, options = {}) {
   const key = connectionKey(instanceName);
-  guard.checkCooldown(key);
+  const { cacheMs = 0, ...requestOptions } = options;
+  traceStatus('STATUS_REQUEST_RECEIVED', { requestId: options.requestId });
+  try {
+    guard.checkCooldown(key);
+    guard.checkCooldown(connectionKey('global'));
+  } catch (error) {
+    if (error.code === 'EVOLUTION_RATE_LIMIT') traceStatus('STATUS_BLOCKED_BY_LOCAL_COOLDOWN', { retryAfterSeconds: error.retryAfterSeconds });
+    throw error;
+  }
   if (statusRequests.has(key)) return statusRequests.get(key);
+  const cached = statusCache.get(key);
+  if (cacheMs > 0 && cached?.until > Date.now()) {
+    logEvolution('status_cache_hit', { instanceName, ageMs: Date.now() - cached.at });
+    return cached.result;
+  }
+  const cacheEntry = { until: 0 };
+  for (const [name, entry] of statusCache) if (entry.until <= Date.now()) statusCache.delete(name);
+  if (statusCache.size >= 1000) statusCache.delete(statusCache.keys().next().value);
+  if (cacheMs > 0) statusCache.set(key, cacheEntry);
+  else statusCache.delete(key);
   const job = evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
-    ...options, instanceName, method: 'GET', retryAttempts: 1,
+    ...requestOptions, instanceName, method: 'GET', retryAttempts: 1,
   }).then(result => {
-    if (extrairEstadoInstancia(result)) existence.remember(key);
+    if (extrairEstadoInstancia(result)) {
+      existence.remember(key);
+      guard.clearRateLimit(key);
+      if (cacheMs > 0 && statusCache.get(key) === cacheEntry) {
+        Object.assign(cacheEntry, { at: Date.now(), until: Date.now() + Math.min(cacheMs, 10000), result });
+      }
+    }
     if (['open', 'connected'].includes(String(result?.instance?.state || result?.state || '').toLowerCase())) guard.invalidateConnection(key, true);
     return result;
   }).finally(() => statusRequests.delete(key));
@@ -412,6 +454,7 @@ async function obterEstadoConexao(instanceName, options = {}) {
 }
 
 async function desconectarInstancia(instanceName) {
+  invalidateStatus(instanceName);
   try {
     const result = await evolutionRequest(`/instance/logout/${encodeURIComponent(instanceName)}`, {
       instanceName, timeoutMs: 15000, method: 'DELETE', retryAttempts: 1,

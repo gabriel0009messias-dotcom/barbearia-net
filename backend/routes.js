@@ -35,6 +35,7 @@ const { processarWebhookEvolution } = require('./evolutionWebhook');
 const { logEvolution } = require('./evolutionLog');
 
 const router = express.Router();
+router.use(require('./evolutionContext').whatsappRequestContext);
 const DIAS_VENCIMENTO = [5, 12, 24];
 const METODOS_PAGAMENTO = ['mercado_pago'];
 // O painel legado usa "ativo"; mantemos "ativa" para registros antigos.
@@ -1469,7 +1470,7 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
       whatsappUltimoCheckEm: agoraIso(),
     });
 
-    return { rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt, httpStatus: [401, 403].includes(error.statusCode) ? 502 : (error.statusCode || 500), errorCode: error.code, ...respostaStatusWhatsapp({
+    return { diagnostic: error.diagnostic, rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt, httpStatus: [401, 403].includes(error.statusCode) ? 502 : (error.statusCode || 500), errorCode: error.code, ...respostaStatusWhatsapp({
       status: 'erro',
       ultimoErro: error.message,
       instancia: instanceName,
@@ -1489,12 +1490,12 @@ function respostaTentativaWhatsapp(instanceName) {
 
 async function gerarQrWhatsappEvolution(assinatura) {
   return compartilharGeracaoQr(assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id), async () => {
-    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
+    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'qr', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     try {
       const { instanceName, estado: estadoConfirmado } = await garantirInstanciaWhatsapp(assinatura, '', options);
       const estado = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options, estadoConfirmado);
-      if (!estado.success) throw Object.assign(createEvolutionError(estado.message, estado.httpStatus, estado.errorCode), { rateLimitSource: estado.rateLimitSource, upstreamStatus: estado.upstreamStatus, retryAfterSeconds: estado.retryAfterSeconds, retryAt: estado.retryAt });
+      if (!estado.success) throw Object.assign(createEvolutionError(estado.message, estado.httpStatus, estado.errorCode), { diagnostic: estado.diagnostic, rateLimitSource: estado.rateLimitSource, upstreamStatus: estado.upstreamStatus, retryAfterSeconds: estado.retryAfterSeconds, retryAt: estado.retryAt });
       if (estado.conectado) return { ...estado, qrCode: null, qr: null };
       if (estado.connectionAttemptActive) return respostaTentativaWhatsapp(instanceName);
       const conexao = await conectarInstancia(instanceName, '', options);
@@ -2256,11 +2257,11 @@ router.post('/publico/assinaturas', async (req, res) => {
 
 async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id), async () => {
-    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: crypto.randomUUID() };
+    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'pairing', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     const { instanceName, estado } = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
     const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options, estado);
-    if (!estadoAtual.success) throw Object.assign(createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode), { rateLimitSource: estadoAtual.rateLimitSource, upstreamStatus: estadoAtual.upstreamStatus, retryAfterSeconds: estadoAtual.retryAfterSeconds, retryAt: estadoAtual.retryAt });
+    if (!estadoAtual.success) throw Object.assign(createEvolutionError(estadoAtual.message, estadoAtual.httpStatus, estadoAtual.errorCode), { diagnostic: estadoAtual.diagnostic, rateLimitSource: estadoAtual.rateLimitSource, upstreamStatus: estadoAtual.upstreamStatus, retryAfterSeconds: estadoAtual.retryAfterSeconds, retryAt: estadoAtual.retryAt });
     if (estadoAtual.conectado) return { ...estadoAtual, status: 'connected', code: null, pairingCode: null };
     if (estadoAtual.status === 'iniciando' && assinatura.whatsapp_numero && assinatura.whatsapp_numero !== numeroWhatsapp) {
       throw createEvolutionError('Existe uma conexao em andamento com outro numero. Desconecte antes de trocar o numero.', 409, 'WHATSAPP_BUSY');
@@ -2295,7 +2296,7 @@ function responderErroWhatsapp(res, error) {
     ? 502 : (error.statusCode || 500);
   const message = statusCode === 500 ? 'Erro interno no servico do WhatsApp. Consulte os logs do servidor.' : error.message;
   if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds));
-  return res.status(statusCode).json({ success: false, status: 'error', connected: false, conectado: false, error: message, message, errorCode: error.code || 'WHATSAPP_INTERNAL_ERROR', rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
+  return res.status(statusCode).json({ success: false, status: 'error', connected: false, conectado: false, error: message, message, errorCode: error.code || 'WHATSAPP_INTERNAL_ERROR', diagnostic: error.diagnostic, rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
 }
 
 router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, async (req, res) => {
@@ -2363,7 +2364,7 @@ router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, 
 
     const resultado = await consultarStatusWhatsappEvolution(assinatura);
     if (!resultado.success) throw Object.assign(createEvolutionError(resultado.message, resultado.httpStatus, resultado.errorCode), {
-      rateLimitSource: resultado.rateLimitSource, upstreamStatus: resultado.upstreamStatus,
+      diagnostic: resultado.diagnostic, rateLimitSource: resultado.rateLimitSource, upstreamStatus: resultado.upstreamStatus,
       retryAfterSeconds: resultado.retryAfterSeconds, retryAt: resultado.retryAt,
     });
     res.json(resultado);
@@ -2390,7 +2391,7 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
     if (usarEvolutionWhatsapp()) {
       const resultado = await consultarStatusWhatsappEvolution(assinatura);
       if (!resultado.success) throw Object.assign(createEvolutionError(resultado.message, resultado.httpStatus, resultado.errorCode), {
-        rateLimitSource: resultado.rateLimitSource, upstreamStatus: resultado.upstreamStatus,
+        diagnostic: resultado.diagnostic, rateLimitSource: resultado.rateLimitSource, upstreamStatus: resultado.upstreamStatus,
         retryAfterSeconds: resultado.retryAfterSeconds, retryAt: resultado.retryAt,
       });
       res.json({
@@ -2623,9 +2624,9 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
     const assinatura = await carregarAssinaturaAtualizada(id);
     if (!assinatura) throw createEvolutionError('Nao foi possivel localizar a assinatura.', 404, 'SUBSCRIPTION_NOT_FOUND');
     const sessao = usarEvolutionWhatsapp()
-      ? await consultarStatusWhatsappEvolution(assinatura)
+      ? await consultarStatusWhatsappEvolution(assinatura, { cacheMs: 10000 })
       : await consultarStatusWhatsappLocal(Number(id));
-    if (!sessao.success) throw Object.assign(createEvolutionError(sessao.message, sessao.httpStatus || 502, sessao.errorCode), { rateLimitSource: sessao.rateLimitSource, upstreamStatus: sessao.upstreamStatus, retryAfterSeconds: sessao.retryAfterSeconds, retryAt: sessao.retryAt });
+    if (!sessao.success) throw Object.assign(createEvolutionError(sessao.message, sessao.httpStatus || 502, sessao.errorCode), { diagnostic: sessao.diagnostic, rateLimitSource: sessao.rateLimitSource, upstreamStatus: sessao.upstreamStatus, retryAfterSeconds: sessao.retryAfterSeconds, retryAt: sessao.retryAt });
     const status = sessao.conectado ? 'connected' : sessao.connectionAttemptActive || ['iniciando', 'qr_pronto'].includes(sessao.status) ? 'pairing' : 'disconnected';
     console.info('[WHATSAPP] Estado da conexao:', { assinaturaId: id, status });
     res.json({ ...sessao, status });

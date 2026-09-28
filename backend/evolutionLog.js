@@ -58,7 +58,7 @@ function sanitize(value, seen = new WeakSet()) {
 }
 
 function logEvolution(event, data = {}, level = 'info') {
-  const safe = sanitize({ event, ...data });
+  const safe = sanitize({ timestamp: new Date().toISOString(), ...require('./evolutionContext').current(), event, ...data });
   if (event === 'evolution_upstream_429' && typeof safe.body === 'string') {
     safe.bodyTruncated ||= safe.body.length > 1000;
     safe.body = safe.body.slice(0, 1000);

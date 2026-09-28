@@ -1,5 +1,5 @@
 // Coordination is local to this Node process. Only confirmed connection/logout
-// or an external 429 ends an attempt; elapsed time never authorizes another connect.
+// or rejection of connect itself ends an attempt; a status/webhook error does not.
 const queues = new Map();
 const cooldowns = new Map();
 const connections = new Map();
@@ -22,6 +22,7 @@ function rateLimitError(state, rateLimitSource = 'local_cooldown') {
     upstreamStatus: rateLimitSource === 'upstream' ? 429 : undefined, rateLimitSource,
     retryAfterSeconds, retryAt: state.until,
     localBackoffSeconds: state.localBackoffSeconds,
+    diagnostic: state.diagnostic,
   });
 }
 
@@ -30,14 +31,14 @@ function checkCooldown(key) {
   if (state?.until > Date.now()) throw rateLimitError(state);
 }
 
-function recordRateLimit(key, header) {
+function recordRateLimit(key, header, diagnostic) {
   const previous = cooldowns.get(key);
   const failures = previous && Date.now() - previous.until < 600000 ? previous.failures + 1 : 1;
   const localBackoffSeconds = Math.min(300, 30 * 2 ** Math.min(failures - 1, 4));
   const delay = Math.max(retryAfterMs(header), localBackoffSeconds * 1000);
-  const state = { failures, until: Date.now() + delay, localBackoffSeconds };
+  const state = { failures, until: Date.now() + delay, localBackoffSeconds, diagnostic };
   cooldowns.set(key, state);
-  connections.delete(key);
+  // A 429 from status or webhook does not prove that the WhatsApp attempt ended.
   return rateLimitError(state, 'upstream');
 }
 
@@ -75,6 +76,7 @@ function invalidateConnection(key, onlySettled = false) {
   if (!onlySettled || !connections.get(key)?.pending) connections.delete(key);
 }
 function hasConnection(key) { return connections.has(key); }
+function clearRateLimit(key) { cooldowns.delete(key); }
 
 // Bound retention without timers that keep the process alive.
 const cleanup = setInterval(() => {
@@ -82,4 +84,4 @@ const cleanup = setInterval(() => {
 }, 60000);
 cleanup.unref();
 
-module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection };
+module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection, clearRateLimit };

@@ -7,7 +7,7 @@
     unmount();
     if (!session || session.token !== token || session.id !== accountId) session = {
       token, id: accountId, connected: false, attempt: false, checked: false, qr: '', number: '',
-      until: 0, failures: 0, deadline: 0, polls: 0, inFlight: null, note: '', paused: false,
+      until: 0, failures: 0, deadline: 0, polls: 0, inFlight: null, note: '', paused: false, diagnostic: '',
     };
     const s = session, controller = new AbortController();
     let active = true, timer = null, countdown = null;
@@ -33,15 +33,15 @@
       $('whatsappState').textContent = cooling ? 'WhatsApp temporariamente indisponível' : !s.checked && !busy ? 'Estado da conexão não confirmado' : s.connected ? '🟢 WhatsApp conectado' : s.attempt ? 'Preparando conexão...' : s.checked ? '🔴 WhatsApp desconectado' : 'Consultando conexão...';
       $('whatsappNumber').hidden = !s.connected || !s.number;
       $('whatsappNumber').textContent = s.number ? `Número conectado: +${s.number}` : '';
-      $('whatsappNotice').textContent = cooling ? `${unavailable} Nova consulta em ${Math.ceil((s.until - Date.now()) / 1000)} s.` : s.note;
+      $('whatsappNotice').textContent = (cooling ? `${s.note || unavailable} Nova consulta em ${Math.ceil((s.until - Date.now()) / 1000)} s.` : s.note) + (s.diagnostic ? ` ${s.diagnostic}` : '');
       $('whatsappConnect').hidden = s.connected || s.attempt;
       $('whatsappConnect').disabled = busy || cooling || !s.checked;
       $('whatsappRefresh').disabled = busy || cooling;
       $('whatsappDisconnect').hidden = !s.connected && !s.attempt;
       $('whatsappDisconnect').disabled = busy || cooling;
       $('whatsappConfirmDisconnect').disabled = busy || cooling;
-      $('whatsappQrArea').hidden = !s.qr || s.connected || cooling;
-      if (s.qr && !s.connected && !cooling) $('whatsappQr').src = s.qr;
+      $('whatsappQrArea').hidden = !s.qr || s.connected;
+      if (s.qr && !s.connected) $('whatsappQr').src = s.qr;
       else $('whatsappQr').removeAttribute('src');
       if (cooling && visible()) countdown = setTimeout(paint, 1000); // UI only; never retries the provider.
     }
@@ -53,11 +53,11 @@
       }
       timer = setTimeout(() => {
         if (Date.now() >= s.deadline) { schedule(); return; }
-        s.polls++; run('status');
+        s.polls++; run('status', 'poll');
       }, Math.min(60000, 15000 * 2 ** s.failures));
     }
     function apply(data, action) {
-      s.checked = true; s.failures = 0;
+      s.checked = true; s.failures = 0; s.diagnostic = '';
       s.connected = Boolean(data.connected || data.conectado || ['connected', 'conectado'].includes(data.status));
       s.number = s.connected && /^\d{10,15}$/.test(data.connectedNumber || '') ? data.connectedNumber : '';
       if (s.connected || action === 'logout') { s.attempt = false; s.qr = ''; s.deadline = 0; s.polls = 0; s.paused = false; }
@@ -73,21 +73,28 @@
       s.note = s.connected ? 'Sua conexão está pronta.' : s.attempt ? s.qr ? 'Escaneie o QR Code abaixo para concluir a conexão.' : 'Preparando conexão... Aguarde o QR Code ou atualize o status. Não é necessário conectar novamente.' : 'Conecte seu WhatsApp para utilizar a integração do estabelecimento.';
     }
     function fail(error, action) {
-      s.checked = false; s.qr = ''; s.failures++;
+      s.checked = false; if (action !== 'status') s.qr = ''; s.failures++;
+      const details = error.data?.diagnostic;
+      s.diagnostic = details?.requestId ? `Referência: ${details.requestId}. Etapa: ${details.endpoint || action}.` : '';
       if (action === 'iniciar' && (!error.status || error.status >= 500 || error.status === 409)) s.attempt = true;
       if (error.status === 429 || error.data?.errorCode === 'EVOLUTION_RATE_LIMIT') {
-        const seconds = Math.max(30, Number(error.data?.retryAfterSeconds) || 0, error.retrySeconds || 0);
-        s.until = Math.max(s.until, Date.now() + seconds * 1000, Number(error.data?.retryAt) || 0);
-        s.paused = true; s.note = unavailable; stop();
+        // Relative server durations also work when the browser clock is skewed.
+        const supplied = Math.max(Number(error.data?.retryAfterSeconds) || 0, error.retrySeconds || 0);
+        const seconds = Number.isFinite(supplied) && supplied > 0 ? supplied : 30;
+        s.until = Math.max(s.until, Date.now() + seconds * 1000);
+        const source = error.data?.rateLimitSource === 'local_cooldown'
+          ? 'Bloqueio local após um HTTP 429 anterior da Evolution; esta consulta não foi enviada ao provedor.'
+          : 'A Evolution ou seu proxy respondeu HTTP 429 (limite de requisições).';
+        s.paused = true; s.note = `${unavailable} ${source}`; stop();
       } else {
-        s.note = error.status === 401 ? 'Sua sessão expirou. Entre novamente no painel.' : error.status === 403 ? 'O acesso a esta conexão está indisponível para sua conta.' : 'Não foi possível confirmar a conexão. Atualize o status antes de tentar novamente.';
+        s.note = error.status === 401 ? 'Sua sessão expirou. Entre novamente no painel.' : error.status === 403 ? 'O acesso a esta conexão está indisponível para sua conta.' : error.data?.message || 'Não foi possível confirmar a conexão. Atualize o status antes de tentar novamente.';
         const permanent = [400, 401, 403, 404, 409].includes(error.status) || ['EVOLUTION_INVALID_KEY', 'EVOLUTION_NOT_CONFIGURED', 'EVOLUTION_INVALID_URL', 'EVOLUTION_ENDPOINT_NOT_FOUND', 'EVOLUTION_INVALID_RESPONSE', 'EVOLUTION_STATE_UNKNOWN'].includes(error.data?.errorCode);
         if (action !== 'status' || permanent || s.failures >= 3) { s.paused = true; stop(); }
         if (active && error.status === 401) location.assign('/login.html');
         else if (active && error.status === 403) { unmount(); denied(); }
       }
     }
-    async function run(action) {
+    async function run(action, trigger) {
       if (!visible() || s.inFlight || Date.now() < s.until) return;
       if (action === 'iniciar' && (!s.checked || s.attempt || s.connected)) return;
       stop();
@@ -95,7 +102,7 @@
       s.inFlight = (async () => {
         try {
           const response = await fetch(base + '/' + action, { method: action === 'iniciar' ? 'POST' : action === 'logout' ? 'DELETE' : 'GET',
-            headers: { 'Content-Type': 'application/json', 'x-barbeiro-token': token }, cache: 'no-store',
+            headers: { 'Content-Type': 'application/json', 'x-barbeiro-token': token, 'x-whatsapp-trigger': trigger }, cache: 'no-store',
             signal: AbortSignal.any([controller.signal, AbortSignal.timeout(action === 'iniciar' ? 70000 : 20000)]),
             ...(action === 'iniciar' ? { body: '{}' } : {}) });
           const data = await response.json();
@@ -113,18 +120,18 @@
       paint();
       try { await s.inFlight; } finally { s.inFlight = null; paint(); schedule(); }
     }
-    $('whatsappConnect').onclick = () => run('iniciar');
-    $('whatsappRefresh').onclick = () => run('status');
+    $('whatsappConnect').onclick = () => run('iniciar', 'connect_click');
+    $('whatsappRefresh').onclick = () => run('status', 'manual_status');
     $('whatsappDisconnect').onclick = () => { if (!s.inFlight && Date.now() >= s.until) { $('whatsappConfirm').showModal(); $('whatsappCancel').focus(); } };
     $('whatsappCancel').onclick = () => $('whatsappConfirm').close();
-    $('whatsappConfirmDisconnect').onclick = () => { $('whatsappConfirm').close(); run('logout'); };
+    $('whatsappConfirmDisconnect').onclick = () => { $('whatsappConfirm').close(); run('logout', 'logout_click'); };
     function visibility() { if (!visible()) { stop(); clearTimeout(countdown); } else paint(); }
     document.addEventListener('visibilitychange', visibility);
     window.addEventListener('pagehide', unmount);
     dispose = () => { active = false; stop(); clearTimeout(countdown); controller.abort(); $('whatsappConfirm')?.close(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', unmount); };
     paint();
     // A previous mount may still be aborting. Wait before checking status; never start a connection here.
-    Promise.resolve(s.inFlight).then(() => { if (active) run('status'); });
+    Promise.resolve(s.inFlight).then(() => { if (active) run('status', 'section_open'); });
   }
   window.StudiofyWhatsapp = { mount, unmount };
 })();

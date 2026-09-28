@@ -76,7 +76,7 @@ test('timeout de connect preserva tentativa incerta ate encerramento explicito',
   assert.equal(calls, 1);
 });
 
-test('429 no polling encerra tentativa que ja tinha codigo e impede novo connect', async t => {
+test('429 no polling preserva tentativa que ja tinha codigo e impede novo connect', async t => {
   process.env.EVOLUTION_API_URL = 'https://polling-429.test';
   process.env.EVOLUTION_API_KEY = 'fake-single-connect-key';
   for (const level of ['info', 'error']) t.mock.method(console, level, () => {});
@@ -88,7 +88,7 @@ test('429 no polling encerra tentativa que ja tinha codigo e impede novo connect
   await api.conectarInstancia('same', '5511999999999');
   assert.equal(api.tentativaConexaoAtiva('same'), true);
   await assert.rejects(api.obterEstadoConexao('same'), { rateLimitSource: 'upstream' });
-  assert.equal(api.tentativaConexaoAtiva('same'), false);
+  assert.equal(api.tentativaConexaoAtiva('same'), true);
   await assert.rejects(api.conectarInstancia('same', '5511999999999'), { rateLimitSource: 'local_cooldown' });
   assert.equal(connects, 1);
 });
