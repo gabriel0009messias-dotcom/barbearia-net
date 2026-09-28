@@ -188,18 +188,22 @@ async function requestTransport(path, options = {}) {
           httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
         const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter, diagnostic);
         const metadata = {};
-        for (const name of ['content-type', 'server', 'via', 'cf-ray', 'x-ratelimit-limit',
+        for (const name of ['content-type', 'server', 'date', 'via', 'cf-ray', 'x-ratelimit-limit',
           'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining',
-          'ratelimit-reset', 'rndr-id', 'request-id', 'x-request-id']) {
+          'ratelimit-reset', 'ratelimit', 'ratelimit-policy', 'x-ratelimit-policy',
+          'x-ratelimit-reset-after', 'rndr-id', 'request-id', 'x-request-id']) {
           const value = response.headers.get(name);
           if (value !== null) metadata[name] = /^(?:x-)?ratelimit-/.test(name) && /^\d+$/.test(value)
             ? value.slice(0, 256) : sanitizeUpstreamBody(value).body.slice(0, 256);
         }
         const body = await upstream429Body(response);
-        logEvolution('evolution_upstream_429', { ...context, httpStatus,
+        logEvolution('evolution_upstream_429', { ...context, path: endpoint, httpStatus,
+          durationMs: Date.now() - started,
           statusText: sanitizeUpstreamBody(response.statusText || '').body.slice(0, 256),
           ...metadata, upstreamRetryAfter: upstreamRetryAfter === null ? null : sanitizeUpstreamBody(upstreamRetryAfter).body.slice(0, 256),
           localBackoffSeconds: error.localBackoffSeconds,
+          studiofyCooldown: { backoffSeconds: error.localBackoffSeconds,
+            effectiveSeconds: error.retryAfterSeconds, retryAt: error.retryAt },
           effectiveRetryAfterSeconds: error.retryAfterSeconds, ...body });
         logEvolution('rate_limit', { ...context, httpStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
         throw error;

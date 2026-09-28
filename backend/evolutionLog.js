@@ -25,15 +25,19 @@ function redactText(value, maskPhone = true) {
 // Sanitize before truncating: a cut inside a credential must never expose its prefix.
 function redactDiagnosticText(raw) {
   return redactText(raw)
+      .replace(/data:image\/[^\s"'<>]+/gi, '[QR IMAGE REDACTED]')
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[EMAIL REDACTED]')
       .replace(/<(?:input|meta)\b[^>]*(?:key|authorization|token|password|senha|secret|cookie|pairing|credential)[^>]*>/gi, '[SENSITIVE HTML REDACTED]')
       .replace(/((?:set-cookie|cookie|authorization)\s*["']?\s*[:=]\s*)[^\r\n<]*/gi, '$1[REDACTED]')
-      .replace(/((?:[\w-]*(?:token|secret|password|credential)|api[ _-]?key|senha|pairing[ _-]?(?:code)?|qr[ _-]?code|database[ _-]?url|code)\s*["']?\s*(?:[:=]|<\/[^>]+>\s*<[^>]+>)\s*)(?:"[^"]*"|'[^']*'|[^\s<,;}]+)/gi, '$1[REDACTED]');
+      .replace(/((?:[\w-]*(?:token|secret|password|credential)|api[ _-]?key|senha|pairing[ _-]?(?:code)?|qr[ _-]?code|qr|base64|database[ _-]?url|code|email|phone|telefone|cpf|cnpj|address|endereco|nome|name)\s*["']?\s*(?:[:=]|<\/[^>]+>\s*<[^>]+>)\s*)(?:"[^"]*"|'[^']*'|[^\r\n<;}]*)/gi, '$1[REDACTED]');
 }
 
 function sanitizeUpstreamBody(raw) {
   let safe;
   try {
-    const parsed = JSON.parse(raw, (_, value) => typeof value === 'string' ? redactDiagnosticText(value) : value);
+    const parsed = JSON.parse(raw, (key, value) =>
+      /^(?:customer|client|cliente|contact|contato|profile|perfil|name|nome|email|phone|telefone|mobile|celular|cpf|cnpj|address|endereco|jid|remoteJid|pushName|owner|ownerJid)$/i.test(key)
+        ? '[CUSTOMER DATA REDACTED]' : typeof value === 'string' ? redactDiagnosticText(value) : value);
     safe = JSON.stringify(sanitize(parsed));
   } catch { safe = redactDiagnosticText(raw); }
   return { body: safe.slice(0, 1000), bodyTruncated: safe.length > 1000 };

@@ -29,6 +29,10 @@ test('diagnostico seguro da resposta upstream 429', async t => {
     assert.equal(result.event.upstreamRetryAfter, '120');
     assert.equal(result.event.localBackoffSeconds, 30);
     assert.equal(result.event.effectiveRetryAfterSeconds, 120);
+    assert.deepEqual(result.event.studiofyCooldown, {
+      backoffSeconds: 30, effectiveSeconds: 120, retryAt: result.event.studiofyCooldown.retryAt,
+    });
+    assert.ok(Number.isFinite(result.event.studiofyCooldown.retryAt));
     const date = new Date(Date.now() + 120000).toUTCString();
     result = await run('limited', { 'Retry-After': date });
     assert.equal(result.event.upstreamRetryAfter, date);
@@ -40,22 +44,50 @@ test('diagnostico seguro da resposta upstream 429', async t => {
       assert.equal(event.upstreamRetryAfter, value);
       assert.equal(event.localBackoffSeconds, 30);
       assert.equal(event.effectiveRetryAfterSeconds, 30);
+      assert.equal(event.studiofyCooldown.backoffSeconds, 30);
+      assert.equal(event.studiofyCooldown.effectiveSeconds, 30);
     }
   });
   await t.test('captura somente headers de resposta permitidos e metadados HTTP', async () => {
-    const headers = { 'content-type': 'text/html', server: 'proxy', via: '1.1 gateway', 'cf-ray': 'ray-test',
+    const headers = { 'content-type': 'text/html', server: 'proxy', date: 'Mon, 28 Sep 2026 10:58:59 GMT', via: '1.1 gateway', 'cf-ray': 'ray-test',
       'x-ratelimit-limit': '100', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1234567890',
       'ratelimit-limit': '100', 'ratelimit-remaining': '0', 'ratelimit-reset': '60',
+      ratelimit: '"default";r=0;t=30', 'ratelimit-policy': '"default";q=100;w=60',
+      'x-ratelimit-policy': '100;w=60', 'x-ratelimit-reset-after': '30',
       'rndr-id': 'render-test', 'request-id': 'request-test', 'x-request-id': 'x-request-test' };
     const { event, name } = await run('<html>Limited</html>', { ...headers,
       'set-cookie': 'private-cookie', authorization: 'private-auth', apikey: 'private-key' },
-    { headers: { authorization: 'Bearer private-request-token' } });
+    { requestId: 'diagnostic-request-id', headers: { authorization: 'Bearer private-request-token' } });
     assert.equal(event.endpoint, `/instance/connectionState/${name}`);
+    assert.equal(event.path, event.endpoint);
+    assert.equal(new URL(event.origin).origin, 'https://diagnostics.test');
+    assert.equal(event.requestId, 'diagnostic-request-id');
+    assert.ok(Number.isFinite(Date.parse(event.timestamp)));
+    assert.ok(Number.isFinite(event.durationMs) && event.durationMs >= 0);
     assert.equal(event.method, 'GET');
     assert.equal(event.httpStatus, 429);
     assert.equal(event.statusText, 'Too Many Requests');
     for (const [key, value] of Object.entries(headers)) assert.equal(event[key], value);
     assert.doesNotMatch(JSON.stringify(logs), /private-cookie|private-auth|private-key|private-request-token/);
+  });
+  await t.test('Retry-After menor que o minimo preserva valor original e cooldown local', async () => {
+    const { event } = await run('limited', { 'Retry-After': '5' });
+    assert.equal(event.upstreamRetryAfter, '5');
+    assert.equal(event.studiofyCooldown.backoffSeconds, 30);
+    assert.equal(event.studiofyCooldown.effectiveSeconds, 30);
+  });
+  await t.test('dados de clientes e QR sao removidos do corpo e headers permitidos', async () => {
+    const { event } = await run(JSON.stringify({ message: 'Too Many Requests',
+      customer: { arbitrary: 'private-customer-data' }, nome: 'private-name',
+      email: 'private-email@example.test', telefone: 11999998888, cpf: 'private-cpf',
+      endereco: 'private-address', remoteJid: 'private-jid', qr: 'private-qr',
+      detail: 'Contact private-detail@example.test data:image/png;base64,private-image' }),
+    { server: 'proxy token=private-header-token', 'x-customer-data': 'private-unknown-header' });
+    assert.equal(JSON.parse(event.body).message, 'Too Many Requests');
+    assert.doesNotMatch(JSON.stringify(logs), /private-(?:customer|name|email|cpf|address|jid|qr|detail|image|header|unknown)|11999998888/);
+    const text = await run('Too Many Requests\nname=private-text-name with spaces\nqr=private-text-qr\nemail=private-text@example.test');
+    assert.match(text.event.body, /Too Many Requests/);
+    assert.doesNotMatch(JSON.stringify(logs), /private-text/);
   });
   await t.test('corpo JSON e segredos aninhados', async () => {
     const { event } = await run(JSON.stringify({ message: 'Too Many Requests', nested: {
@@ -119,5 +151,7 @@ test('diagnostico seguro da resposta upstream 429', async t => {
     assert.equal(event.upstreamRetryAfter, null);
     assert.equal(event.localBackoffSeconds, 60);
     assert.equal(event.effectiveRetryAfterSeconds, 60);
+    assert.equal(event.studiofyCooldown.backoffSeconds, 60);
+    assert.equal(event.studiofyCooldown.effectiveSeconds, 60);
   });
 });
