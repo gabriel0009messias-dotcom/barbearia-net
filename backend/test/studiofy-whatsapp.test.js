@@ -141,8 +141,12 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
   await t.test('QR pendente é recuperado por status sem novo connect', async () => {
     pendingQr = true; await page.click('#whatsappConnect'); await ready(); const count = connectCalls();
     assert.equal(await page.$eval('#whatsappQrArea', e => e.hidden), true);
-    // Some provider versions include the QR in their state payload; reuse that response.
-    instances.get(name).base64 = qr;
+    // Evolution 2.3.7 emits the QR separately from connectionState.
+    process.env.EVOLUTION_WEBHOOK_SECRET = 'synthetic-browser-secret';
+    const response = await originalFetch(base + '/api/webhook/evolution', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': 'synthetic-browser-secret' },
+      body: JSON.stringify({ event: 'qrcode.updated', instance: name, data: { qrcode: { base64: qr } } }) });
+    assert.equal(response.status, 200);
     await page.click('#whatsappRefresh'); await ready(); await page.waitForSelector('#whatsappQrArea', { visible: true });
     assert.equal(connectCalls(), count); pendingQr = false;
   });

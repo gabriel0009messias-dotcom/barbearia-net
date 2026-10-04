@@ -283,7 +283,8 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     assert.equal(result.body.pairingCode, 'ABCD1234');
     assert.equal(calls.filter((call) => call.path === '/instance/create').length, before);
   });
-  await t.test('QR sem codigo permanece pendente sem repetir connect e preserva erros HTTP', async () => {
+  await t.test('QR sem codigo permanece pendente sem repetir connect e preserva erros HTTP', async sub => {
+    let now = Date.now(); sub.mock.method(Date, 'now', () => now);
     instances.get('barbearia-2').state = 'close';
     emptyCodes = 1;
     const before = calls.length;
@@ -294,6 +295,7 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
     await request(qrRoute, tokens[1], {});
     assert.equal(calls.slice(before).filter(call => call.path.includes('/connect/')).length, 1);
     failure = { status: 401, body: '<html>Unauthorized</html>' };
+    now += 10001; // The short cache must expire before probing a new upstream fault.
     const result = await request(qrRoute, tokens[1], {});
     assert.equal(result.status, 502);
     assert.equal(result.body.errorCode, 'EVOLUTION_INVALID_KEY');
@@ -339,11 +341,10 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
       const before = calls.length;
       const result = await request(route + '/pairing-code', tokens[0], { phone: '75983179933' });
       assert.equal(result.status, 200);
-      await new Promise(resolve => setTimeout(resolve, 30)); // webhook disparado apos o codigo
       const paths = calls.slice(before).map(call => call.path);
       const expected = ['/instance/connectionState/barbearia-1'];
       if (scenario === 'new') expected.push('/instance/create', '/instance/connectionState/barbearia-1');
-      if (scenario !== 'connected') expected.push('/instance/connect/barbearia-1', '/webhook/set/barbearia-1');
+      if (scenario !== 'connected') expected.push('/webhook/set/barbearia-1', '/instance/connect/barbearia-1');
       assert.deepEqual(paths, expected);
     }
   });

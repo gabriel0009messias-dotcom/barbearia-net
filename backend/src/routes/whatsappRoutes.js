@@ -8,6 +8,7 @@ router.get('/status', requireAuth, async (req, res, next) => {
   try {
     res.json(await whatsappService.getStatus(req.user.salon_id));
   } catch (error) {
+    if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds));
     next(error);
   }
 });
@@ -16,6 +17,7 @@ router.post('/start', requireAuth, async (req, res, next) => {
   try {
     res.json(await whatsappService.start(req.user.salon_id));
   } catch (error) {
+    if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds));
     next(error);
   }
 });

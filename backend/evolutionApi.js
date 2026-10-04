@@ -3,6 +3,7 @@ const { logEvolution, sanitize, sanitizeUpstreamBody } = require('./evolutionLog
 const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
 const statusCache = new Map();
+const connectionCodes = new Map();
 const requestContext = require('./evolutionContext');
 function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
 function traceStatus(event, data) {
@@ -11,6 +12,38 @@ function traceStatus(event, data) {
 const existence = require('./evolutionExistenceCache');
 function connectionKey(instance) { return `${getEvolutionConfig().baseUrl}|${instance}`; }
 function tentativaConexaoAtiva(instance) { return guard.hasConnection(connectionKey(instance)); }
+
+function obterCodigoConexao(instanceName) {
+  const entry = connectionCodes.get(connectionKey(instanceName));
+  if (entry?.until > Date.now()) return entry.result;
+  connectionCodes.delete(connectionKey(instanceName));
+  return null;
+}
+
+// Only call after authenticating the webhook and resolving its unique tenant.
+function receberEventoConexao(instanceName, event, data) {
+  const key = connectionKey(instanceName);
+  invalidateStatus(instanceName); // prevents an older in-flight response from repopulating cache
+  if (event === 'QRCODE_UPDATED') {
+    const base64 = data?.qrcode?.base64 || data?.base64;
+    const pairingCode = extrairPairingCode(data);
+    if (typeof base64 !== 'string' && !pairingCode) return;
+    for (const [name, entry] of connectionCodes) if (entry.until <= Date.now()) connectionCodes.delete(name);
+    if (connectionCodes.size >= 1000) connectionCodes.delete(connectionCodes.keys().next().value);
+    connectionCodes.set(key, { until: Date.now() + 60000, result: {
+      ...(typeof base64 === 'string' ? { base64 } : {}), ...(pairingCode ? { pairingCode } : {}),
+    } });
+  } else if (event === 'CONNECTION_UPDATE') {
+    const state = extrairEstadoInstancia(data);
+    if (!state) return;
+    if (statusCache.size >= 1000) statusCache.delete(statusCache.keys().next().value);
+    statusCache.set(key, { at: Date.now(), until: Date.now() + 10000, result: { instance: { state } } });
+    if (['open', 'connected', 'logout'].includes(state)) {
+      connectionCodes.delete(key);
+      guard.invalidateConnection(key, true);
+    }
+  }
+}
 
 function normalizarBaseUrl(url = '') {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -148,7 +181,7 @@ async function evolutionRequest(path, options = {}) {
   const endpoint = path.split('?')[0];
   const instance = options.instanceName || endpoint.split('/')[3];
   guard.checkCooldown(connectionKey('global'));
-  if (instance && /^(\/instance\/|\/webhook\/set\/)/.test(endpoint)) {
+  if (instance && /^(\/instance\/|\/webhook\/set\/|\/message\/)/.test(endpoint)) {
     return guard.serialize(connectionKey(instance), () => requestTransport(path, options));
   }
   return requestTransport(path, options);
@@ -168,6 +201,7 @@ async function requestTransport(path, options = {}) {
     const budget = Math.min(remaining, timeoutMs);
     if (budget <= 0) throw createEvolutionError('Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT');
     const started = Date.now();
+    const statusBeforeTransport = instance ? statusCache.get(connectionKey(instance)) : null;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
     let httpStatus = null;
@@ -240,7 +274,8 @@ async function requestTransport(path, options = {}) {
       if (attempt >= attempts || !retryable || (deadline && deadline - Date.now() <= retryDelayMs)) throw error;
     } finally {
       clearTimeout(timer);
-      if (/^\/instance\/(?:connect|create|logout|delete)(?:\/|$)/.test(endpoint) && instance) invalidateStatus(instance);
+      if (/^\/instance\/(?:connect|create|logout|delete)(?:\/|$)/.test(endpoint) && instance &&
+          statusCache.get(connectionKey(instance)) === statusBeforeTransport) invalidateStatus(instance);
     }
     await sleep(retryDelayMs);
   }
@@ -351,6 +386,7 @@ async function buscarInstancia(instanceName, options = {}) {
 
 function invalidarExistenciaInstancia(instanceName) {
   invalidateStatus(instanceName);
+  connectionCodes.delete(connectionKey(instanceName));
   existence.invalidate(connectionKey(instanceName));
   guard.invalidateConnection(connectionKey(instanceName));
 }
@@ -398,9 +434,18 @@ async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
   invalidateStatus(instanceName);
   const numero = String(phoneNumber || '').trim();
   const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
-  return guard.connectOnce(connectionKey(instanceName), numero || 'qr', () => evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
+  const result = await guard.connectOnce(connectionKey(instanceName), numero || 'qr', () => evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
     ...options, instanceName, method: 'GET',
   }));
+  const confirmed = statusCache.get(connectionKey(instanceName));
+  if (confirmed?.until > Date.now() && ['open', 'connected'].includes(extrairEstadoInstancia(confirmed.result))) {
+    guard.invalidateConnection(connectionKey(instanceName), true);
+    return confirmed.result;
+  }
+  if (!obterCodigoConexao(instanceName) && (extrairConteudoQr(result) || extrairPairingCode(result))) {
+    receberEventoConexao(instanceName, 'QRCODE_UPDATED', result);
+  }
+  return result;
 }
 
 function extrairPairingCode(payload = null) {
@@ -422,6 +467,7 @@ async function obterEstadoConexao(instanceName, options = {}) {
   const key = connectionKey(instanceName);
   const { cacheMs = 0, ...requestOptions } = options;
   traceStatus('STATUS_REQUEST_RECEIVED', { requestId: options.requestId });
+  if (statusRequests.has(key)) return statusRequests.get(key);
   try {
     guard.checkCooldown(key);
     guard.checkCooldown(connectionKey('global'));
@@ -429,9 +475,8 @@ async function obterEstadoConexao(instanceName, options = {}) {
     if (error.code === 'EVOLUTION_RATE_LIMIT') traceStatus('STATUS_BLOCKED_BY_LOCAL_COOLDOWN', { retryAfterSeconds: error.retryAfterSeconds });
     throw error;
   }
-  if (statusRequests.has(key)) return statusRequests.get(key);
   const cached = statusCache.get(key);
-  if (cacheMs > 0 && cached?.until > Date.now()) {
+  if (cacheMs > 0 && cached?.until > Date.now() && Date.now() - cached.at < cacheMs) {
     logEvolution('status_cache_hit', { instanceName, ageMs: Date.now() - cached.at });
     return cached.result;
   }
@@ -443,6 +488,8 @@ async function obterEstadoConexao(instanceName, options = {}) {
   const job = evolutionRequest(`/instance/connectionState/${encodeURIComponent(instanceName)}`, {
     ...requestOptions, instanceName, method: 'GET', retryAttempts: 1,
   }).then(result => {
+    const newer = statusCache.get(key);
+    if (newer !== cacheEntry && newer?.until > Date.now()) return newer.result;
     if (extrairEstadoInstancia(result)) {
       existence.remember(key);
       guard.clearRateLimit(key);
@@ -464,6 +511,7 @@ async function desconectarInstancia(instanceName) {
       instanceName, timeoutMs: 15000, method: 'DELETE', retryAttempts: 1,
     });
     guard.invalidateConnection(connectionKey(instanceName));
+    connectionCodes.delete(connectionKey(instanceName));
     return result;
   } catch (error) {
     if (['EVOLUTION_INSTANCE_NOT_FOUND', 'EVOLUTION_ALREADY_DISCONNECTED'].includes(error.code)) {
@@ -473,7 +521,7 @@ async function desconectarInstancia(instanceName) {
   }
 }
 
-async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']) {
+async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']) {
   return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, {
     instanceName, timeoutMs: 5000,
     method: 'POST',
@@ -519,6 +567,8 @@ async function enviarListaInstancia(instanceName, number, options = {}) {
 }
 
 module.exports = {
+  receberEventoConexao,
+  obterCodigoConexao,
   tentativaConexaoAtiva,
   evolutionRequest,
   getEvolutionConfig,

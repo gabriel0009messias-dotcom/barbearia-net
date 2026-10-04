@@ -620,6 +620,19 @@ async function consultarStatusWhatsapp() {
     if (epoch !== whatsappEpoch) return;
     whatsappPollingErrors = 0;
     atualizarStatusWhatsapp(resposta.status, resposta.connected || resposta.conectado, resposta.connectionAttemptActive);
+    if (!whatsappConnected) {
+      const qr = resposta.qrCode || resposta.qr;
+      if (typeof qr === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr) || /^https:\/\/api\.qrserver\.com\/v1\/create-qr-code\/\?/.test(qr))) {
+        qrCodeImage.src = qr; qrCodeImage.hidden = false;
+      }
+      const code = resposta.pairingCode || resposta.code;
+      if (typeof code === 'string' && /^[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(code)) {
+        pairingCodeAtual = code;
+        pairingCodeValue.textContent = code.replace(/^([A-Z0-9]{4})([A-Z0-9]{4})$/i, '$1-$2');
+        pairingCodeValue.hidden = false; pairingCodeLabel.hidden = false;
+        pairingInstructions.hidden = false; copyPairingCodeButton.hidden = false;
+      }
+    }
     if (!whatsappConnected) qrStatusMessage.textContent = resposta.message || resposta.mensagem || 'Aguardando conexao pelo WhatsApp.';
     if (whatsappAttemptActive && !whatsappPolling && !whatsappStatusPaused) iniciarPollingWhatsapp();
   } catch (error) {

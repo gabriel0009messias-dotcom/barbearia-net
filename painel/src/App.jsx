@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest, clearToken, getToken, setToken } from './services/api';
 import './styles.css';
 
@@ -458,6 +458,8 @@ function WhatsappPage({ status: initialStatus }) {
   const [status, setStatus] = useState(initialStatus);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const busy = useRef(false);
+  const retryAt = useRef(0);
 
   useEffect(() => {
     setStatus(initialStatus);
@@ -468,25 +470,36 @@ function WhatsappPage({ status: initialStatus }) {
       return undefined;
     }
 
-    let attempts = 0;
-    const timer = window.setInterval(async () => {
+    let attempts = 0, active = true, timer;
+    const poll = async () => {
+      if (!active) return;
+      if (document.hidden || busy.current || Date.now() < retryAt.current) {
+        timer = window.setTimeout(poll, 15000); return;
+      }
       attempts += 1;
+      busy.current = true;
       try {
         const nextStatus = await apiRequest('/whatsapp/status');
+        if (!active) return;
         setStatus(nextStatus);
-        if (nextStatus.status === 'CONNECTED' || attempts >= 60) {
-          window.clearInterval(timer);
-        }
+        if (nextStatus.status === 'CONNECTED' || attempts >= 12) return;
+        timer = window.setTimeout(poll, 15000);
       } catch (error) {
+        if (!active) return;
+        retryAt.current = Date.now() + (error.retryAfterSeconds || 30) * 1000;
         setMessage(error.message);
-        window.clearInterval(timer);
+      } finally {
+        busy.current = false;
       }
-    }, 3000);
+    };
+    timer = window.setTimeout(poll, 15000);
 
-    return () => window.clearInterval(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [status?.status]);
 
   async function startWhatsapp() {
+    if (busy.current || Date.now() < retryAt.current || ['CONNECTED', 'CONNECTING', 'QR_READY'].includes(status?.status)) return;
+    busy.current = true;
     setLoading(true);
     setMessage('Solicitando QR Code à Evolution API...');
 
@@ -495,8 +508,10 @@ function WhatsappPage({ status: initialStatus }) {
       setStatus(nextStatus);
       setMessage(nextStatus.qr_code ? 'Escaneie o QR Code com o WhatsApp da barbearia.' : 'WhatsApp conectado.');
     } catch (error) {
+      retryAt.current = Date.now() + (error.retryAfterSeconds || 30) * 1000;
       setMessage(error.message);
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   }
@@ -526,7 +541,7 @@ function WhatsappPage({ status: initialStatus }) {
         </div>
       </div>
 
-      <button type="button" className="primary-button" onClick={startWhatsapp} disabled={loading || status?.status === 'CONNECTED'}>
+      <button type="button" className="primary-button" onClick={startWhatsapp} disabled={loading || ['CONNECTED', 'CONNECTING', 'QR_READY'].includes(status?.status)}>
         {loading ? 'Gerando QR Code...' : status?.status === 'CONNECTED' ? 'WhatsApp conectado' : 'Gerar QR Code'}
       </button>
 

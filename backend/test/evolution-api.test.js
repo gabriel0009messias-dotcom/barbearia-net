@@ -37,7 +37,7 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
     await api.configurarWebhookInstancia('salon-test', 'https://example.test/api/webhook/evolution');
     await api.enviarTextoInstancia('salon-test', '5511999999999', 'Olá!');
     assert.equal(requests[0].body.webhook.headers['x-webhook-secret'], 'private-webhook-secret');
-    assert.deepEqual(requests[0].body.webhook.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE']);
+    assert.deepEqual(requests[0].body.webhook.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']);
     assert.equal(requests[0].body.webhook.byEvents, false);
     assert.equal(requests[1].path, '/message/sendText/salon-test');
     assert.equal(requests[1].body.text, 'Olá!');

@@ -1,7 +1,7 @@
 ﻿const crypto = require('crypto');
 const { transaction } = require('./services/whatsapp/sessionRepository');
 const { createScheduling } = require('./services/whatsapp/scheduling');
-const { enviarTextoInstancia } = require('./evolutionApi');
+const { enviarTextoInstancia, receberEventoConexao, extrairEstadoInstancia } = require('./evolutionApi');
 const { sanitize } = require('./evolutionLog');
 
 function authorized(headers) {
@@ -35,6 +35,43 @@ function extract(payload) {
 }
 
 const log = (event, data = {}) => console.info('[WhatsApp]', JSON.stringify(sanitize({ event, ...data })));
+
+const connectionEvents = new Map();
+const connectionEventJobs = new Map();
+async function processConnectionEvent(payload) {
+  const event = String(payload.event || '').toUpperCase().replace(/[.\-]/g, '_');
+  if (!['CONNECTION_UPDATE', 'QRCODE_UPDATED'].includes(event)) return null;
+  const instance = payload.instance || payload.instanceName;
+  if (typeof instance !== 'string' || !instance || instance.length > 150) return { ok: true, ignored: true };
+  const state = extrairEstadoInstancia(payload.data);
+  if (event === 'CONNECTION_UPDATE' && !state) return { ok: true, ignored: true };
+  const digest = crypto.createHash('sha256').update(JSON.stringify([event, instance, payload.data])).digest('hex');
+  const eventKey = `${instance}|${event}`;
+  for (const [key, entry] of connectionEvents) if (entry.until <= Date.now()) connectionEvents.delete(key);
+  const previous = connectionEventJobs.get(instance) || Promise.resolve();
+  const job = previous.catch(() => {}).then(async () => {
+    const result = await transaction(async db => {
+    const tenants = await db.allAsync('SELECT id FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2', [instance]);
+    if (tenants.length !== 1) return { ok: true, ignored: true };
+    if (connectionEvents.get(eventKey)?.digest === digest) return { ok: true, duplicate: true };
+    if (event === 'CONNECTION_UPDATE') {
+      const status = ['open', 'connected'].includes(state) ? 'conectado' : ['connecting', 'pairing', 'syncing'].includes(state) ? 'iniciando' : 'desconectado';
+      await db.runAsync('UPDATE assinaturas SET whatsapp_status=$1, whatsapp_ultimo_check_em=$2, whatsapp_ultimo_erro=NULL WHERE id=$3 AND whatsapp_session=$4',
+        [status, new Date().toISOString(), tenants[0].id, instance]);
+    }
+    return { ok: true };
+    });
+    // Publish in-memory state only after the database commit succeeds.
+    if (!result.ignored && !result.duplicate) {
+      receberEventoConexao(instance, event, payload.data);
+      if (connectionEvents.size >= 1000) connectionEvents.delete(connectionEvents.keys().next().value);
+      connectionEvents.set(eventKey, { digest, until: Date.now() + 60000 });
+    }
+    return result;
+  });
+  connectionEventJobs.set(instance, job);
+  return job.finally(() => { if (connectionEventJobs.get(instance) === job) connectionEventJobs.delete(instance); });
+}
 
 async function drain(send = enviarTextoInstancia) {
   // Persistent lease prevents multiple processes from sending the same response concurrently.
@@ -71,6 +108,8 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
   if (!authorized(headers)) {
     const error = new Error('Webhook não autorizado.'); error.statusCode = 401; throw error;
   }
+  const connectionEvent = await processConnectionEvent(payload);
+  if (connectionEvent) return connectionEvent;
   const envelope = extract(payload);
   if (!envelope) return { ok: true, ignored: true };
   const result = await transaction(async db => {
@@ -94,7 +133,9 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
     log('mensagem recebida', { instance: envelope.instance, tenant, phone: `***${envelope.phone.slice(-4)}`, state: previous?.state || 'MENU', option: /^\d{1,2}$/.test(envelope.text) ? envelope.text : 'texto', nextState: result.session.state });
     return { ok: true };
   });
-  await drain(options.send);
+  // HTTP acknowledgements wait only for durable ingestion. The existing worker
+  // delivers the outbox, so provider failures cannot delay webhook responses.
+  if (!options.deferDelivery) await drain(options.send);
   return result;
 }
 

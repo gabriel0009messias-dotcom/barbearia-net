@@ -48,7 +48,7 @@ async function getStatus(salonId) {
     return toStatus(updated);
   } catch (error) {
     console.error(`[WhatsApp] falha ao atualizar status do salao ${salonId}: ${error.message}`);
-    return toStatus(current, { error: error.message });
+    throw error;
   }
 }
 

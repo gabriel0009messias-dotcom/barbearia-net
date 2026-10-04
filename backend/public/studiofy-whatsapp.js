@@ -58,7 +58,7 @@
     }
     function apply(data, action) {
       s.checked = true; s.failures = 0; s.diagnostic = '';
-      s.connected = Boolean(data.connected || data.conectado || ['connected', 'conectado'].includes(data.status));
+      s.connected = Boolean(data.connected || data.conectado || ['open', 'connected', 'conectado'].includes(data.status));
       s.number = s.connected && /^\d{10,15}$/.test(data.connectedNumber || '') ? data.connectedNumber : '';
       if (s.connected || action === 'logout') { s.attempt = false; s.qr = ''; s.deadline = 0; s.polls = 0; s.paused = false; }
       else {
@@ -98,6 +98,7 @@
       if (!visible() || s.inFlight || Date.now() < s.until) return;
       if (action === 'iniciar' && (!s.checked || s.attempt || s.connected)) return;
       stop();
+      if (action === 'status' && trigger === 'manual_status') s.paused = false;
       if (action === 'iniciar') { s.attempt = true; s.paused = false; s.deadline = Date.now() + 180000; s.polls = 0; s.note = 'Preparando conexão...'; }
       s.inFlight = (async () => {
         try {
@@ -125,7 +126,7 @@
     $('whatsappDisconnect').onclick = () => { if (!s.inFlight && Date.now() >= s.until) { $('whatsappConfirm').showModal(); $('whatsappCancel').focus(); } };
     $('whatsappCancel').onclick = () => $('whatsappConfirm').close();
     $('whatsappConfirmDisconnect').onclick = () => { $('whatsappConfirm').close(); run('logout', 'logout_click'); };
-    function visibility() { if (!visible()) { stop(); clearTimeout(countdown); } else paint(); }
+    function visibility() { if (!visible()) { stop(); clearTimeout(countdown); } else { paint(); schedule(); } }
     document.addEventListener('visibilitychange', visibility);
     window.addEventListener('pagehide', unmount);
     dispose = () => { active = false; stop(); clearTimeout(countdown); controller.abort(); $('whatsappConfirm')?.close(); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('pagehide', unmount); };

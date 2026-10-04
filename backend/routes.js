@@ -21,6 +21,7 @@ const {
   conectarInstancia,
   extrairPairingCode,
   obterEstadoConexao,
+  obterCodigoConexao,
   tentativaConexaoAtiva,
   desconectarInstancia,
   configurarWebhookInstancia,
@@ -1432,7 +1433,7 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
     if (statusMapeado === 'iniciando') {
       return { connectionAttemptActive: true, ...respostaStatusWhatsapp({
         status: statusMapeado,
-        qrCode: construirQrCodeUrl(extrairConteudoQr(estado) || extrairConteudoQr(estado?.instance)),
+        qrCode: construirQrCodeUrl(extrairConteudoQr(obterCodigoConexao(instanceName)) || extrairConteudoQr(estado) || extrairConteudoQr(estado?.instance)),
         instancia: instanceName,
         conectado: false,
         precisaQr: false,
@@ -1482,15 +1483,17 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
 }
 
 function respostaTentativaWhatsapp(instanceName) {
+  const code = obterCodigoConexao(instanceName);
   return { ...respostaStatusWhatsapp({ status: 'pairing', instancia: instanceName,
+    qrCode: construirQrCodeUrl(extrairConteudoQr(code)),
     conectado: false, precisaQr: false,
     mensagem: 'Tentativa em andamento. Acompanhando somente o estado da conexao. Se nenhum codigo foi exibido, encerre a tentativa em Desconectar WhatsApp antes de tentar novamente.',
-  }), connectionAttemptActive: true, pending: true };
+  }), ...(extrairPairingCode(code) ? { code: extrairPairingCode(code), pairingCode: extrairPairingCode(code) } : {}), connectionAttemptActive: true, pending: true };
 }
 
 async function gerarQrWhatsappEvolution(assinatura) {
   return compartilharGeracaoQr(assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id), async () => {
-    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
+    const options = { cacheMs: 10000, deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'qr', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     try {
       const { instanceName, estado: estadoConfirmado } = await garantirInstanciaWhatsapp(assinatura, '', options);
@@ -1498,6 +1501,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
       if (!estado.success) throw Object.assign(createEvolutionError(estado.message, estado.httpStatus, estado.errorCode), { diagnostic: estado.diagnostic, rateLimitSource: estado.rateLimitSource, upstreamStatus: estado.upstreamStatus, retryAfterSeconds: estado.retryAfterSeconds, retryAt: estado.retryAt });
       if (estado.conectado) return { ...estado, qrCode: null, qr: null };
       if (estado.connectionAttemptActive) return respostaTentativaWhatsapp(instanceName);
+      await configurarWebhookEvolutionSePossivel(instanceName);
       const conexao = await conectarInstancia(instanceName, '', options);
       if (['open', 'connected'].includes(conexao?.instance?.state || conexao?.state)) {
         return { connectedNumber: numeroWhatsappConectado(conexao), ...respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado.' }) };
@@ -1506,7 +1510,6 @@ async function gerarQrWhatsappEvolution(assinatura) {
       if (qrCode) {
         await persistirSessaoWhatsapp(assinatura.id, { whatsappSession: instanceName, whatsappStatus: 'qr_pronto',
           whatsappUltimoErro: null, whatsappUltimoCheckEm: agoraIso(), whatsappUltimoQrEm: agoraIso() });
-        void configurarWebhookEvolutionSePossivel(instanceName);
         return { ...respostaStatusWhatsapp({ status: 'success', qrCode, qr: qrCode, instancia: instanceName,
           conectado: false, precisaQr: true, mensagem: 'Escaneie o QR Code com o WhatsApp para concluir a conexao.' }), connectionAttemptActive: true };
       }
@@ -1716,7 +1719,7 @@ router.post('/webhook', requirePainelOuBridge, async (req, res) => {
 
 router.post('/webhook/evolution', async (req, res) => {
   try {
-    const resultado = await processarWebhookEvolution(req.body || {}, req.headers);
+    const resultado = await processarWebhookEvolution(req.body || {}, req.headers, { deferDelivery: true });
     res.json(resultado);
   } catch (error) {
     console.error('[WhatsApp] erro ao processar webhook', { status: error.statusCode || 503 });
@@ -2257,7 +2260,7 @@ router.post('/publico/assinaturas', async (req, res) => {
 
 async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
   return compartilharGeracaoQr(assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id), async () => {
-    const options = { deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
+    const options = { cacheMs: 10000, deadline: Date.now() + 60000, retryAttempts: 1, requestId: require('./evolutionContext').current().requestId || crypto.randomUUID() };
     logEvolution('connection_start', { requestId: options.requestId, mode: 'pairing', instance: assinatura.whatsapp_session || gerarNomeInstancia(assinatura.id) });
     const { instanceName, estado } = await garantirInstanciaWhatsapp(assinatura, numeroWhatsapp, options);
     const estadoAtual = await consultarStatusWhatsappEvolution({ ...assinatura, whatsapp_session: instanceName }, options, estado);
@@ -2274,13 +2277,13 @@ async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
     });
     console.info('[WHATSAPP] Solicitando pairing code', { assinaturaId: assinatura.id, numero: `***${numeroWhatsapp.slice(-4)}` });
     // /connect can restart a closed socket: issue it only once per attempt.
+    await configurarWebhookEvolutionSePossivel(instanceName);
     const resposta = await conectarInstancia(instanceName, numeroWhatsapp, options);
     const conectado = ['open', 'connected'].includes(resposta?.instance?.state || resposta?.state);
     if (conectado) return { ...respostaStatusWhatsapp({ status: 'connected', conectado: true, instancia: instanceName, mensagem: 'WhatsApp conectado com sucesso.' }), code: null, pairingCode: null };
     const pairingCode = extrairPairingCode(resposta);
     if (pairingCode) {
       console.info('[WHATSAPP] Pairing code gerado', { assinaturaId: assinatura.id });
-      void configurarWebhookEvolutionSePossivel(instanceName);
       return { ...respostaStatusWhatsapp({
         status: 'pairing_code', instancia: instanceName,
         mensagem: 'Codigo gerado. Conclua a vinculacao pelo WhatsApp.',

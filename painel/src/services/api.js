@@ -33,7 +33,11 @@ export async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(payload.error || `Falha ao acessar ${path}`);
+    const retry = response.headers.get('Retry-After');
+    const seconds = /^\d+$/.test(retry || '') ? Number(retry) : Math.max(0, (Date.parse(retry) - Date.now()) / 1000) || 0;
+    throw Object.assign(new Error(payload.error || `Falha ao acessar ${path}`), {
+      status: response.status, retryAfterSeconds: seconds,
+    });
   }
 
   return payload;
