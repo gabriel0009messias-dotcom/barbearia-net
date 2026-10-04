@@ -24,7 +24,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
   global.fetch = async (url, options = {}) => {
     if (String(url).startsWith(base)) return originalFetch(url, options);
     const u = new URL(url), name = u.pathname.split('/').pop();
-    upstream.push({ path: u.pathname, method: options.method });
+    upstream.push({ path: u.pathname, method: options.method, number: u.searchParams.get('number') });
     if (fault) return Response.json({ error: 'provider test failure' }, { status: fault, headers: { 'Retry-After': '90' } });
     if (u.pathname.startsWith('/webhook/')) return Response.json({ success: true });
     if (u.pathname === '/instance/create') { const body = JSON.parse(options.body); assert.equal(body.qrcode, false); instances.set(body.instanceName, { state: 'close' }); return Response.json({ instance: { instanceName: body.instanceName } }); }
@@ -33,7 +33,9 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     if (u.pathname.startsWith('/instance/connectionState/')) return Response.json({ instance });
     if (u.pathname.startsWith('/instance/connect/')) {
       if (holdConnect) await new Promise(resolve => { releaseConnect = resolve; });
-      instance.state = 'connecting'; return Response.json(pendingQr ? { count: 0 } : { base64: qr });
+      if (instance.state === 'open') return Response.json({ instance });
+      upstream.at(-1).startedSocket = instance.state === 'close';
+      instance.state = 'connecting'; return Response.json(pendingQr ? { count: 0 } : u.searchParams.has('number') ? { pairingCode: 'ABCD1234' } : { base64: qr });
     }
     if (u.pathname.startsWith('/instance/logout/')) { instance.state = 'close'; delete instance.base64; return Response.json({ success: true }); }
     throw Error('Unexpected upstream endpoint: ' + u.pathname);
@@ -92,7 +94,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     await page.waitForFunction(() => document.querySelector('#whatsappState').textContent === 'Preparando conexão...');
     for (let i = 0; i < 100 && !releaseConnect; i++) await new Promise(r => setTimeout(r, 10)); assert.ok(releaseConnect);
     assert.equal(connectCalls(), 1); releaseConnect(); holdConnect = false; await ready(); await page.waitForSelector('#whatsappQrArea', { visible: true });
-    assert.equal(await page.$eval('#whatsappQr', e => e.src), qr); assert.equal(await page.$$eval('.sw-instructions li', es => es.length), 4);
+    assert.equal(await page.$eval('#whatsappQr', e => e.src), qr); assert.equal(await page.$$eval('#whatsappQrArea .sw-instructions li', es => es.length), 4);
     await page.evaluate(() => document.getElementById('whatsappConnect').dispatchEvent(new MouseEvent('click'))); assert.equal(connectCalls(), 1);
   });
   await t.test('QR e controles cabem em desktop, 390 e 360', async () => {
@@ -128,7 +130,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
   await t.test('polling e atualização manual consultam apenas estado; conectado mostra número real', async () => {
     const count = connectCalls(); await tick(15000); await page.click('#whatsappRefresh'); await ready(); assert.equal(connectCalls(), count);
     assert.equal(instances.get(name).state, 'connecting');
-    assert.equal(await page.$eval('#whatsappState', e => e.textContent), 'Preparando conexão...', 'Intermediate status alone does not prove that the QR was scanned');
+    assert.equal(await page.$eval('#whatsappState', e => e.textContent), 'Aguardando leitura do QR Code', 'Intermediate status alone does not prove that the QR was scanned');
     instances.set(name, { state: 'open', ownerJid: '5511988887777:4@s.whatsapp.net' }); await tick(15000);
     assert.match(await page.$eval('#whatsappState', e => e.textContent), /WhatsApp conectado/); assert.equal(await page.$eval('#whatsappNumber', e => e.textContent), 'Número conectado: +5511988887777');
     assert.equal(await page.$eval('#whatsappQrArea', e => e.hidden), true); assert.equal((await page.evaluate(() => window.waDelays())).length, 0);
@@ -179,7 +181,41 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     await page.click('#whatsappConnect'); await ready(); const count = waRequests(), connects = connectCalls();
     await tick(180000); assert.equal(waRequests(), count); assert.equal(connectCalls(), connects);
     assert.match(await page.$eval('#whatsappNotice', e => e.textContent), /acompanhamento terminou/);
-    assert.equal(await page.$eval('#whatsappConnect', e => e.hidden), true); assert.equal((await page.evaluate(() => window.waDelays())).length, 0);
+    assert.equal(await page.$eval('#whatsappRetry', e => e.hidden), false); assert.equal((await page.evaluate(() => window.waDelays())).length, 0);
+    await disconnect();
+  });
+  await t.test('pareamento brasileiro: duas opcoes, telefone, clique duplicado, codigo e open', async () => {
+    assert.equal(await page.$eval('#whatsappConnect', e => e.hidden), false);
+    assert.equal(await page.$eval('#whatsappPairing', e => e.hidden), false);
+    assert.equal(await page.$eval('#whatsappDisconnect', e => e.hidden), true);
+    await page.click('#whatsappPairing'); await page.type('#whatsappPhone', '+55 (11) 99999-9999');
+    const before = connectCalls();
+    await page.evaluate(() => { const f = document.getElementById('whatsappPairingForm'); f.dispatchEvent(new Event('submit', { cancelable: true })); f.dispatchEvent(new Event('submit', { cancelable: true })); });
+    await ready(); await page.waitForSelector('#whatsappPairingArea', { visible: true });
+    assert.equal(connectCalls(), before + 1);
+    assert.equal(upstream.filter(c => c.path.includes('/connect/')).at(-1).number, '5511999999999');
+    assert.equal(await page.$eval('#whatsappPairingValue', e => e.textContent), 'ABCD-1234');
+    assert.equal(await page.$eval('#whatsappQrArea', e => e.hidden), true);
+    assert.ok(network.every(r => !r.url.includes('fake-test-key')));
+    instances.set(name, { state: 'open' }); await tick(15000);
+    assert.equal(await page.$eval('#whatsappPairingArea', e => e.hidden), true);
+    await disconnect();
+  });
+  await t.test('QR ausente sai de preparando em 60s e recuperacao explicita preserva socket', async () => {
+    pendingQr = true; await page.click('#whatsappConnect'); await ready();
+    const starts = upstream.filter(c => c.startedSocket).length;
+    await tick(60001);
+    assert.equal(await page.$eval('#whatsappRetry', e => e.hidden), false);
+    assert.equal(await page.$eval('#whatsappState', e => e.textContent), 'C\u00f3digo de conex\u00e3o indispon\u00edvel');
+    pendingQr = false; await page.click('#whatsappRetry'); await ready();
+    await page.waitForSelector('#whatsappQrArea', { visible: true });
+    assert.equal(upstream.filter(c => c.startedSocket).length, starts);
+    await tick(60001);
+    assert.equal(await page.$eval('#whatsappQrArea', e => e.hidden), true);
+    await page.click('#whatsappRetry'); await ready();
+    await page.waitForSelector('#whatsappQrArea', { visible: true });
+    assert.equal(upstream.filter(c => c.startedSocket).length, starts);
+    assert.equal(upstream.filter(c => /delete|restart/.test(c.path)).length, 0);
     await disconnect();
   });
   await t.test('429 de status preserva QR e tentativa; tela explica origem sem reconectar', async () => {

@@ -4,6 +4,8 @@ const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
 const statusCache = new Map();
 const connectionCodes = new Map();
+const recoveries = new Map();
+const recoveryWindows = new Map();
 const requestContext = require('./evolutionContext');
 function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
 function traceStatus(event, data) {
@@ -15,9 +17,71 @@ function tentativaConexaoAtiva(instance) { return guard.hasConnection(connection
 
 function obterCodigoConexao(instanceName) {
   const entry = connectionCodes.get(connectionKey(instanceName));
-  if (entry?.until > Date.now()) return entry.result;
+  if (entry?.until > Date.now()) return { ...entry.result, codeExpiresInSeconds: Math.ceil((entry.until - Date.now()) / 1000) };
   connectionCodes.delete(connectionKey(instanceName));
   return null;
+}
+
+function progressoConexao(instanceName, state) {
+  const key = connectionKey(instanceName);
+  let progress = recoveryWindows.get(key);
+  if (!progress) {
+    for (const [name, entry] of recoveryWindows) if (Date.now() - entry.startedAt > 600000 && !guard.hasConnection(name)) recoveryWindows.delete(name);
+    progress = { startedAt: guard.connectionAttempt(key)?.startedAt || Date.now(), lastRecovery: 0, recoveries: 0 };
+    recoveryWindows.set(key, progress);
+  }
+  const attempt = guard.connectionAttempt(key);
+  const code = obterCodigoConexao(instanceName);
+  return { connectionState: state, connectionMode: attempt?.mode && attempt.mode !== 'qr' ? 'pairing' : 'qr',
+    connectionTimedOut: !code && Date.now() - progress.startedAt >= 60000,
+    canRetry: !code && Date.now() - progress.startedAt >= 60000,
+    codeExpiresInSeconds: code?.codeExpiresInSeconds || 0 };
+}
+
+// Recovery is single-flight and bounded separately from socket creation.
+// The official 2.3.7 connect controller returns the current QR while connecting.
+async function recuperarCodigoConexao(instanceName, phoneNumber = '', options = {}) {
+  const key = connectionKey(instanceName);
+  guard.checkCooldown(key);
+  const mode = String(phoneNumber || '').trim() || 'qr';
+  const current = recoveries.get(key);
+  if (current) {
+    if (current.mode !== mode) throw createEvolutionError('Aguarde a recuperacao em andamento antes de trocar o metodo.', 409, 'WHATSAPP_BUSY');
+    return current.promise;
+  }
+  const job = (async () => {
+    const statePayload = options.confirmedState || await obterEstadoConexao(instanceName, { ...options, cacheMs: options.explicit ? 0 : 10000 });
+    const state = extrairEstadoInstancia(statePayload);
+    if (['open', 'connected'].includes(state)) return statePayload;
+    const existing = obterCodigoConexao(instanceName);
+    const attempt = guard.connectionAttempt(key);
+    if (attempt?.pending) return existing || {};
+    if (attempt && attempt.mode !== mode && !['close', 'closed', 'disconnected', 'logout'].includes(state)) {
+      throw createEvolutionError('A instancia ainda tem uma tentativa com outro metodo. Aguarde ela terminar antes de trocar entre QR e codigo.', 409, 'WHATSAPP_METHOD_PENDING');
+    }
+    if (existing && (!phoneNumber || extrairPairingCode(existing))) return existing;
+    const info = progressoConexao(instanceName, state);
+    const window = recoveryWindows.get(key);
+    if (Date.now() - window.lastRecovery < 15000 || (!options.explicit && (info.connectionTimedOut || window.recoveries >= 3))) return {};
+    if (['close', 'closed', 'disconnected', 'logout'].includes(state)) {
+      if (!options.explicit || !info.canRetry) return {};
+      guard.invalidateConnection(key, true); // explicit retry + freshly confirmed closed socket
+      recoveryWindows.delete(key);
+      return conectarInstancia(instanceName, phoneNumber, options);
+    }
+    if (state !== 'connecting') return {};
+    window.lastRecovery = Date.now(); window.recoveries++;
+    // No retries of this endpoint and no restart/logout/delete fallback.
+    const query = phoneNumber ? `?number=${encodeURIComponent(phoneNumber)}` : '';
+    const result = await evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
+      timeoutMs: 12000, ...options, instanceName, method: 'GET', retryAttempts: 1,
+    });
+    logEvolution('connection_code_recovery', { instanceName, state, hasQr: Boolean(extrairConteudoQr(result)), hasPairingCode: Boolean(extrairPairingCode(result)), fields: Object.keys(result) });
+    receberEventoConexao(instanceName, 'QRCODE_UPDATED', result);
+    return obterCodigoConexao(instanceName) || result;
+  })().finally(() => { if (recoveries.get(key)?.promise === job) recoveries.delete(key); });
+  recoveries.set(key, { mode, promise: job });
+  return job;
 }
 
 // Only call after authenticating the webhook and resolving its unique tenant.
@@ -25,9 +89,10 @@ function receberEventoConexao(instanceName, event, data) {
   const key = connectionKey(instanceName);
   invalidateStatus(instanceName); // prevents an older in-flight response from repopulating cache
   if (event === 'QRCODE_UPDATED') {
-    const base64 = data?.qrcode?.base64 || data?.base64;
+    const qr = extrairConteudoQr(data);
+    const base64 = qr ? construirQrCodeUrl(qr) : null;
     const pairingCode = extrairPairingCode(data);
-    if (typeof base64 !== 'string' && !pairingCode) return;
+    if (!base64 && !pairingCode) return;
     for (const [name, entry] of connectionCodes) if (entry.until <= Date.now()) connectionCodes.delete(name);
     if (connectionCodes.size >= 1000) connectionCodes.delete(connectionCodes.keys().next().value);
     connectionCodes.set(key, { until: Date.now() + 60000, result: {
@@ -38,9 +103,9 @@ function receberEventoConexao(instanceName, event, data) {
     if (!state) return;
     if (statusCache.size >= 1000) statusCache.delete(statusCache.keys().next().value);
     statusCache.set(key, { at: Date.now(), until: Date.now() + 10000, result: { instance: { state } } });
-    if (['open', 'connected', 'logout'].includes(state)) {
+    if (['open', 'connected', 'close', 'closed', 'disconnected', 'logout'].includes(state)) {
       connectionCodes.delete(key);
-      guard.invalidateConnection(key, true);
+      if (['open', 'connected', 'logout'].includes(state)) guard.invalidateConnection(key, true);
     }
   }
 }
@@ -434,6 +499,7 @@ async function conectarInstancia(instanceName, phoneNumber = '', options = {}) {
   invalidateStatus(instanceName);
   const numero = String(phoneNumber || '').trim();
   const query = numero ? `?number=${encodeURIComponent(numero)}` : '';
+  if (!guard.hasConnection(connectionKey(instanceName))) recoveryWindows.delete(connectionKey(instanceName));
   const result = await guard.connectOnce(connectionKey(instanceName), numero || 'qr', () => evolutionRequest(`/instance/connect/${encodeURIComponent(instanceName)}${query}`, {
     ...options, instanceName, method: 'GET',
   }));
@@ -567,6 +633,8 @@ async function enviarListaInstancia(instanceName, number, options = {}) {
 }
 
 module.exports = {
+  recuperarCodigoConexao,
+  progressoConexao,
   receberEventoConexao,
   obterCodigoConexao,
   tentativaConexaoAtiva,

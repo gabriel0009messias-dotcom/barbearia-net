@@ -64,6 +64,9 @@ async function processConnectionEvent(payload) {
     // Publish in-memory state only after the database commit succeeds.
     if (!result.ignored && !result.duplicate) {
       receberEventoConexao(instance, event, payload.data);
+      log('evento de conexao recebido', { instance, event, state,
+        hasQr: Boolean(payload.data?.qrcode?.base64 || payload.data?.base64 || payload.data?.qrcode?.code),
+        hasPairingCode: Boolean(payload.data?.qrcode?.pairingCode || payload.data?.pairingCode) });
       if (connectionEvents.size >= 1000) connectionEvents.delete(connectionEvents.keys().next().value);
       connectionEvents.set(eventKey, { digest, until: Date.now() + 60000 });
     }

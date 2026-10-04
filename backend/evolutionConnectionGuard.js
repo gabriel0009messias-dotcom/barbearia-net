@@ -57,7 +57,7 @@ function connectOnce(key, mode, task) {
     if (current.mode !== mode) throw Object.assign(new Error('Existe uma tentativa de conexao em andamento. Aguarde antes de trocar o metodo ou numero.'), { statusCode: 409, code: 'WHATSAPP_BUSY' });
     return current.promise;
   }
-  const entry = { mode, pending: true };
+  const entry = { mode, pending: true, startedAt: Date.now() };
   entry.promise = Promise.resolve().then(task).then(result => {
     entry.pending = false;
     return result;
@@ -76,6 +76,10 @@ function invalidateConnection(key, onlySettled = false) {
   if (!onlySettled || !connections.get(key)?.pending) connections.delete(key);
 }
 function hasConnection(key) { return connections.has(key); }
+function connectionAttempt(key) {
+  const entry = connections.get(key);
+  return entry ? { mode: entry.mode, pending: entry.pending, startedAt: entry.startedAt } : null;
+}
 function clearRateLimit(key) { cooldowns.delete(key); }
 
 // Bound retention without timers that keep the process alive.
@@ -84,4 +88,4 @@ const cleanup = setInterval(() => {
 }, 60000);
 cleanup.unref();
 
-module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection, clearRateLimit };
+module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection, connectionAttempt, clearRateLimit };
