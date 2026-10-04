@@ -39,6 +39,8 @@ const { logEvolution } = require('./evolutionLog');
 
 const router = express.Router();
 router.use(require('./evolutionContext').whatsappRequestContext);
+// Temporary, fixed-instance maintenance endpoint; remove after verification.
+require('./temporaryEvolutionWebhookAdmin').registerTemporaryEvolutionWebhookAdmin(router, requireAdmin);
 const DIAS_VENCIMENTO = [5, 12, 24];
 const METODOS_PAGAMENTO = ['mercado_pago'];
 // O painel legado usa "ativo"; mantemos "ativa" para registros antigos.
