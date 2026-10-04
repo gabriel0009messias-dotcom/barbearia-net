@@ -10,7 +10,7 @@ async function buscarJson(url, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const error = new Error(payload?.error || 'Nao foi possivel enviar o link de recuperacao.');
+    const error = new Error(payload?.error || 'Não foi possível enviar o link de recuperação.');
     error.status = response.status;
     throw error;
   }
@@ -20,7 +20,7 @@ async function buscarJson(url, options = {}) {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  message.textContent = 'Enviando link de recuperacao...';
+  message.textContent = 'Enviando link de recuperação...';
 
   try {
     const payload = await buscarJson('/api/barbeiro/recuperar-senha/solicitar', {
@@ -31,7 +31,7 @@ form.addEventListener('submit', async (event) => {
       }),
     });
 
-    message.textContent = payload.mensagem || 'Link enviado com sucesso.';
+    message.textContent = payload.mensagem || 'Link de recuperação da sua conta Studiofy enviado com sucesso.';
     form.reset();
   } catch (error) {
     console.error(error);

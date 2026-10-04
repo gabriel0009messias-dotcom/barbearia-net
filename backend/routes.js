@@ -772,7 +772,8 @@ function criarProvedorEmailApi() {
       process.env.SMTP_USER ||
       ''
   ).trim();
-  const fromName = String(process.env.EMAIL_FROM_NAME || 'Salaoflix').trim();
+  const configuredFromName = String(process.env.EMAIL_FROM_NAME || 'Studiofy').trim();
+  const fromName = /^sal[aã]o\s*flix$/i.test(configuredFromName) ? 'Studiofy' : configuredFromName;
 
   if (resendApiKey && from) {
     return { provider: 'resend', apiKey: resendApiKey, from, fromName };
@@ -956,9 +957,9 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
 
   await enviarEmail({
     to: email,
-    subject: 'Codigo de recuperacao do Salãoflix',
-    text: `Codigo de recuperacao do Salãoflix: ${codigo}\n\nEsse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.`,
-    html: `<p>Codigo de recuperacao do Salãoflix: <strong>${codigo}</strong></p><p>Esse codigo vale por 15 minutos. Se voce nao pediu essa troca, ignore esta mensagem.</p>`,
+    subject: 'Código de recuperação | Studiofy',
+    text: `Código de recuperação da sua conta Studiofy: ${codigo}\n\nEste código expira em 15 minutos. Se você não solicitou essa alteração, ignore este e-mail.\n\nStudiofy`,
+    html: `<p>Código de recuperação da sua conta Studiofy: <strong>${codigo}</strong></p><p>Este código expira em 15 minutos. Se você não solicitou essa alteração, ignore este e-mail.</p><p>Studiofy</p>`,
   });
 }
 
@@ -1073,14 +1074,24 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
 
   const info = await enviarEmail({
     to: email,
-    subject: 'Recuperacao de senha do Salaoflix',
+    subject: 'Recuperação de senha | Studiofy',
     text:
-      `Clique no link abaixo para redefinir sua senha:\n\n${linkRecuperacao}\n\n` +
-      'Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.',
+      'Olá,\n\nRecebemos uma solicitação para redefinir a senha da sua conta Studiofy.\n\n' +
+      `Clique no link abaixo para criar uma nova senha:\n\n${linkRecuperacao}\n\n` +
+      'Este link expira em 60 minutos.\n\nSe você não solicitou essa alteração, ignore este e-mail.\n\nStudiofy',
     html:
-      `<p>Clique no link abaixo para redefinir sua senha:</p>` +
-      `<p><a href="${linkRecuperacao}">${linkRecuperacao}</a></p>` +
-      '<p>Esse link expira em 60 minutos. Se voce nao pediu essa troca, ignore este e-mail.</p>',
+      '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>' +
+      '<body style="margin:0;padding:24px 16px;background:#f3f6fa;font-family:Arial,sans-serif;color:#17212e">' +
+      '<div style="max-width:560px;margin:0 auto;padding:28px;background:#ffffff;border-radius:12px">' +
+      '<h1 style="margin:0 0 24px;font-size:24px;color:#1674df">Studiofy</h1><p>Olá,</p>' +
+      '<p style="line-height:1.6">Recebemos uma solicitação para redefinir a senha da sua conta Studiofy.</p>' +
+      '<p>Clique no link abaixo para criar uma nova senha:</p>' +
+      `<p style="margin:28px 0"><a href="${linkRecuperacao}" style="display:inline-block;padding:14px 22px;background:#1674df;color:#ffffff;text-decoration:none;border-radius:6px">Criar nova senha</a></p>` +
+      '<p style="font-size:13px;line-height:1.6">Se o botão não funcionar, copie e cole este link no navegador:</p>' +
+      `<p style="font-size:13px;word-break:break-all;overflow-wrap:anywhere"><a href="${linkRecuperacao}">${linkRecuperacao}</a></p>` +
+      '<p>Este link expira em 60 minutos.</p>' +
+      '<p style="line-height:1.6;color:#526173">Se você não solicitou essa alteração, ignore este e-mail.</p>' +
+      '<p style="margin-top:28px">Studiofy</p></div></body></html>',
   });
 
   console.info('[recuperacao-email] envio concluido', {
@@ -1088,8 +1099,14 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
     messageId: info?.messageId || null,
     accepted: Array.isArray(info?.accepted) ? info.accepted : [],
     rejected: Array.isArray(info?.rejected) ? info.rejected : [],
-    response: info?.response || null,
+    response: ocultarDadosRecuperacaoNosLogs(info?.response || ''),
   });
+}
+
+function ocultarDadosRecuperacaoNosLogs(value) {
+  return String(value || '')
+    .replace(/https?:\/\/[^\s"'<>]*[?&]token=[^\s"'<>]*/gi, '[link de recuperação oculto]')
+    .replace(/\b[a-f0-9]{64}\b/gi, '[token oculto]');
 }
 
 function erroHorarioJaOcupado(error) {
@@ -1970,16 +1987,16 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
 
     res.json({
       ok: true,
-      mensagem: 'Enviamos um link de recuperacao para o seu Gmail.',
+      mensagem: 'Enviamos um link de recuperação da sua conta Studiofy para o seu e-mail.',
     });
   } catch (error) {
     console.error('[recuperacao-email] falha ao solicitar link', {
       email,
       statusCode: error.statusCode || 500,
-      message: error.message,
-      stack: error.stack,
+      message: ocultarDadosRecuperacaoNosLogs(error.message),
+      stack: ocultarDadosRecuperacaoNosLogs(error.stack),
     });
-    res.status(error.statusCode || 500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: ocultarDadosRecuperacaoNosLogs(error.message) });
   }
 });
 
@@ -2062,7 +2079,7 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
 
     await runAsync("UPDATE password_reset_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1", [recovery.id]);
 
-    res.json({ ok: true, mensagem: 'Senha atualizada com sucesso. Agora voce ja pode entrar no painel.' });
+    res.json({ ok: true, mensagem: 'Senha da sua conta Studiofy atualizada com sucesso. Agora você já pode entrar no painel.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

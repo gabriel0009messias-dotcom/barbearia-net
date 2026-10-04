@@ -38,7 +38,7 @@ services:
       - key: EMAIL_FROM
         sync: false
       - key: EMAIL_FROM_NAME
-        value: Salaoflix
+        value: Studiofy
       - key: EVOLUTION_ALWAYS_ONLINE
         value: true
       - key: EVOLUTION_SYNC_FULL_HISTORY

@@ -10,7 +10,7 @@ async function buscarJson(url, options = {}) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const error = new Error(payload?.error || 'Nao foi possivel validar o link.');
+    const error = new Error(payload?.error || 'Não foi possível validar o link.');
     error.status = response.status;
     throw error;
   }
@@ -34,8 +34,8 @@ document.querySelectorAll('[data-toggle-password]').forEach((button) => {
 
 async function validarToken() {
   if (!token) {
-    info.textContent = 'Link de recuperacao invalido.';
-    message.textContent = 'Abra novamente o link enviado para o seu Gmail.';
+    info.textContent = 'Link de recuperação inválido.';
+    message.textContent = 'Abra novamente o link enviado para o seu e-mail.';
     return;
   }
 
@@ -46,7 +46,7 @@ async function validarToken() {
   } catch (error) {
     console.error(error);
     info.textContent = error.message;
-    message.textContent = 'Solicite um novo link de recuperacao.';
+    message.textContent = 'Solicite um novo link de recuperação.';
   }
 }
 
@@ -65,9 +65,9 @@ form.addEventListener('submit', async (event) => {
       }),
     });
 
-    message.textContent = payload.mensagem || 'Senha atualizada com sucesso.';
+    message.textContent = payload.mensagem || 'Senha da sua conta Studiofy atualizada com sucesso.';
     form.hidden = true;
-    info.textContent = 'Senha redefinida. Agora voce pode voltar ao login e entrar normalmente.';
+    info.textContent = 'Senha redefinida. Agora você pode voltar ao login e entrar na sua conta Studiofy.';
   } catch (error) {
     console.error(error);
     message.textContent = error.message;
