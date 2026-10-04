@@ -3,13 +3,18 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const express = require('express');
 
-test('temporary webhook admin: real admin auth, fixed scope and secret-safe verification', async t => {
+test('temporary webhook admin: real admin auth, fixed scope and secret-safe verification', { timeout: 60000 }, async t => {
   const previous = { ...process.env };
+  const realNow = Date.now;
+  let clockOffset = 0;
+  t.mock.method(Date, 'now', () => realNow() + clockOffset);
   const environment = require('./helpers/postgres').testEnvironment();
   process.env.LEGACY_ADMIN_EMAIL = 'temporary-admin@example.test';
   process.env.LEGACY_ADMIN_PASSWORD = 'synthetic-admin-password';
   process.env.EVOLUTION_API_KEY = 'synthetic-evolution-key';
   process.env.EVOLUTION_WEBHOOK_SECRET = 'synthetic-maintenance-secret';
+  process.env.AUTHENTICATION_API_KEY = 'synthetic-authentication-marker';
+  process.env.DATABASE_CONNECTION_URI = 'postgresql://fixture:synthetic-database-marker@db.test/db';
   const secret = process.env.EVOLUTION_WEBHOOK_SECRET;
   const logs = [];
   for (const method of ['info', 'error', 'warn', 'log']) {
@@ -27,6 +32,16 @@ test('temporary webhook admin: real admin auth, fixed scope and secret-safe veri
       assert.equal(req.headers.apikey, 'synthetic-evolution-key');
       const write = req.method === 'POST' && req.url === '/webhook/set/barbearia-6';
       assert.ok(write || (req.method === 'GET' && req.url === '/webhook/find/barbearia-6'));
+      if (mode === 'rate-limit') {
+        res.writeHead(429, { 'Retry-After': '30', 'Content-Type': 'text/plain',
+          Server: `edge-test ${process.env.AUTHENTICATION_API_KEY} ${secret}`,
+          Via: `1.1 proxy-test ${process.env.DATABASE_CONNECTION_URI}`, 'CF-Ray': 'test-ray',
+          'CF-Cache-Status': 'DYNAMIC', 'X-Request-ID': 'upstream-test',
+          'X-Render-Origin-Server': 'render-test', 'X-Render-Secret': secret,
+          Authorization: 'Bearer private-auth', Cookie: 'private-cookie',
+          'Set-Cookie': 'private-set-cookie', apikey: process.env.EVOLUTION_API_KEY });
+        return res.end('Too Many Requests\n');
+      }
       if (mode === 'hold' && write) await new Promise(resolve => { release = resolve; });
       if ((mode === 'set-error' && write) || (mode === 'read-error' && !write)) {
         res.writeHead(500);
@@ -79,7 +94,7 @@ test('temporary webhook admin: real admin auth, fixed scope and secret-safe veri
       headers: { 'Content-Type': 'application/json', ...(token ? { 'x-admin-token': token } : {}) },
       ...(method === 'POST' ? { body: JSON.stringify(body) } : {}) });
     const data = await response.json();
-    assert.ok(Object.values(data).every(value => typeof value === 'boolean'));
+    assert.ok(Object.entries(data).every(([key, value]) => key === 'diagnostic' || typeof value === 'boolean'));
     assert.ok(!JSON.stringify(data).includes(secret));
     assert.equal(response.headers.get('cache-control'), 'no-store');
     return { status: response.status, data };
@@ -118,6 +133,37 @@ test('temporary webhook admin: real admin auth, fixed scope and secret-safe veri
       assert.equal(result.data.configuracaoAplicada, mode === 'read-error');
     }
   });
+  await t.test('429 returns safe upstream evidence, one POST, no read/retry; cooldown sends nothing', async sub => {
+    sub.after(() => { clockOffset += 31000; });
+    mode = 'rate-limit';
+    process.env.EVOLUTION_API_RETRY_ATTEMPTS = '9';
+    const before = calls.length;
+    const result = await request(route, token);
+    assert.equal(result.status, 502);
+    assert.equal(calls.length, before + 1);
+    assert.equal(calls.at(-1).path, '/webhook/set/barbearia-6');
+    const diagnostic = result.data.diagnostic;
+    assert.equal(diagnostic.httpStatus, 429);
+    assert.equal(diagnostic.statusText, 'Too Many Requests');
+    assert.equal(diagnostic.method, 'POST');
+    assert.equal(diagnostic.endpoint, '/webhook/set/barbearia-6');
+    assert.equal(diagnostic.origin, process.env.EVOLUTION_API_URL);
+    assert.ok(diagnostic.durationMs >= 0);
+    assert.equal(diagnostic.upstreamRetryAfter, '30');
+    assert.equal(diagnostic.headers['retry-after'], '30');
+    assert.equal(diagnostic.headers['x-render-origin-server'], 'render-test');
+    assert.equal(diagnostic.headers['cf-cache-status'], 'DYNAMIC');
+    assert.equal(diagnostic.body, 'Too Many Requests');
+    assert.equal(diagnostic.classification.producerConfirmed, false);
+    assert.equal(diagnostic.classification.confidence, 'low');
+    for (const name of ['authorization', 'cookie', 'set-cookie', 'apikey', 'x-render-secret']) assert.equal(diagnostic.headers[name], undefined);
+    assert.doesNotMatch(JSON.stringify(result.data), /synthetic-evolution-key|synthetic-maintenance-secret|synthetic-authentication-marker|synthetic-database-marker|private-auth|private-cookie|private-set-cookie|stack/);
+    const blocked = await request(route, token);
+    assert.equal(calls.length, before + 1);
+    assert.equal(blocked.data.diagnostic.httpStatus, null);
+    assert.equal(blocked.data.diagnostic.classification.probableOrigin, 'studiofy_local_cooldown');
+    assert.doesNotMatch(logs.join('\n'), /synthetic-maintenance-secret|synthetic-evolution-key|synthetic-authentication-marker|synthetic-database-marker|private-auth|private-cookie|private-set-cookie/);
+  });
   await t.test('saved header, URL, events, flags and enabled state are verified', async () => {
     for (mode of ['missing-header', 'wrong-header', 'wrong-url', 'extra-event', 'wrong-flags', 'disabled']) {
       const result = await request(route, token);
@@ -128,7 +174,9 @@ test('temporary webhook admin: real admin auth, fixed scope and secret-safe veri
   await t.test('concurrency is blocked; successful request sets and reads only barbearia-6', async () => {
     mode = 'hold';
     const first = request(route, token);
-    while (!release) await new Promise(resolve => setTimeout(resolve, 5));
+    const deadline = realNow() + 5000;
+    while (!release && realNow() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(typeof release, 'function', 'The held upstream request must be reached');
     const count = calls.length;
     assert.deepEqual(await request(route, token), { status: 409, data: { operacaoEmAndamento: true } });
     assert.equal(calls.length, count);

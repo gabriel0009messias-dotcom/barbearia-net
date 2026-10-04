@@ -1,5 +1,5 @@
 // Respostas da Evolution podem conter tokens de instancia e credenciais de QR.
-const sensitive = /apikey|api.key|authorization|password|senha|secret|token|hash|cookie|credential|pairing|qrcode|^qr$|^key$|^code$|base64|headers|database.url|private.key/i;
+const sensitive = /apikey|api.key|authorization|password|senha|secret|token|hash|cookie|credential|pairing|qrcode|^qr$|^key$|^code$|base64|headers|database.*(?:url|uri)|private.key/i;
 
 function redactText(value, maskPhone = true) {
   let text = String(value);

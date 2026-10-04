@@ -1,6 +1,7 @@
 // Temporary maintenance route. Remove this file and its registration after use.
 const crypto = require('node:crypto');
 const { configurarWebhookInstancia, evolutionRequest } = require('./evolutionApi');
+const { routeDiagnostic } = require('./evolutionDiagnostics');
 
 const ROUTE = '/admin/whatsapp/barbearia-6/webhook-temporario';
 const INSTANCE = 'barbearia-6';
@@ -32,11 +33,11 @@ function registerTemporaryEvolutionWebhookAdmin(router, requireAdmin) {
     let configurationApplied = false;
     try {
       if (!confirmed) {
-        await configurarWebhookInstancia(INSTANCE, URL, [...EVENTS]);
+        await configurarWebhookInstancia(INSTANCE, URL, [...EVENTS], { temporaryDiagnostics: true });
         configurationApplied = true;
       }
       const saved = await evolutionRequest(`/webhook/find/${INSTANCE}`, {
-        instanceName: INSTANCE, method: 'GET', timeoutMs: 10000, retryAttempts: 1,
+        instanceName: INSTANCE, method: 'GET', timeoutMs: 10000, retryAttempts: 1, temporaryDiagnostics: true,
       });
       const header = saved.headers?.['x-webhook-secret'];
       const headerSaved = typeof header === 'string' && header.length > 0;
@@ -61,10 +62,11 @@ function registerTemporaryEvolutionWebhookAdmin(router, requireAdmin) {
         'byEventsDesativado', 'base64Desativado'].every(key => checks[key]);
       if (checks.verificacaoConcluida) confirmed = true;
       return res.status(checks.verificacaoConcluida ? 200 : 502).json(checks);
-    } catch {
-      // Never return or log upstream responses/errors: they can contain secrets.
+    } catch (error) {
+      // Keep the existing 502 contract, returning only a safe diagnostic projection.
       return res.status(502).json({ autorizado: true,
-        configuracaoAplicada: configurationApplied, verificacaoConcluida: false });
+        configuracaoAplicada: configurationApplied, verificacaoConcluida: false,
+        diagnostic: routeDiagnostic(error) });
     } finally {
       busy = false;
     }

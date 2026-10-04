@@ -7,6 +7,7 @@ const connectionCodes = new Map();
 const recoveries = new Map();
 const recoveryWindows = new Map();
 const requestContext = require('./evolutionContext');
+const { responseDiagnostic } = require('./evolutionDiagnostics');
 function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
 function traceStatus(event, data) {
   if (process.env.EVOLUTION_STATUS_TRACE === 'true') logEvolution(event, data);
@@ -255,7 +256,7 @@ async function evolutionRequest(path, options = {}) {
 async function requestTransport(path, options = {}) {
   const config = ensureEvolutionConfigured();
   const { retryAttempts = config.retryAttempts, retryDelayMs = config.retryDelayMs,
-    timeoutMs = config.timeoutMs, deadline, requestId = requestContext.current().requestId || randomUUID(), instanceName,
+    timeoutMs = config.timeoutMs, deadline, requestId = requestContext.current().requestId || randomUUID(), instanceName, temporaryDiagnostics = false,
     ...fetchOptions } = options;
   // Criacao e outras mutacoes nao podem ser repetidas cegamente apos timeout.
   const attempts = path.startsWith('/instance/') ? 1 : (fetchOptions.method || 'GET') === 'GET' ? Math.max(1, retryAttempts) : 1;
@@ -286,6 +287,11 @@ async function requestTransport(path, options = {}) {
         const diagnostic = { requestId, endpoint, instanceName: instance, method: context.method,
           httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
         const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter, diagnostic);
+        if (temporaryDiagnostics) {
+          error.upstreamDiagnostic = await responseDiagnostic(response, context, started);
+          logEvolution('evolution_temporary_upstream_error', { ...error.upstreamDiagnostic, headers: undefined, ...error.upstreamDiagnostic.headers }, 'error');
+          throw error;
+        }
         const metadata = {};
         for (const name of ['content-type', 'server', 'date', 'via', 'cf-ray', 'x-ratelimit-limit',
           'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining',
@@ -307,18 +313,25 @@ async function requestTransport(path, options = {}) {
         logEvolution('rate_limit', { ...context, httpStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
         throw error;
       }
+      if (temporaryDiagnostics && !response.ok) {
+        const upstreamDiagnostic = await responseDiagnostic(response, context, started);
+        const [message, status, code] = classifyFailure(httpStatus, {}, endpoint);
+        logEvolution('evolution_temporary_upstream_error', { ...upstreamDiagnostic, headers: undefined, ...upstreamDiagnostic.headers }, 'error');
+        throw Object.assign(createEvolutionError(message, status, code), { upstreamStatus: httpStatus, upstreamDiagnostic });
+      }
       const raw = await response.text();
       let payload;
       try { payload = JSON.parse(raw); }
       catch { payload = { nonJson: true, body: raw }; }
-      logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started, response: payload });
+      logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started,
+        ...(temporaryDiagnostics ? {} : { response: payload }) });
       if (!response.ok || payload?.error) {
         const [message, status, code] = classifyFailure(httpStatus, payload, endpoint);
         if (code === 'EVOLUTION_INSTANCE_NOT_FOUND' && instance) invalidarExistenciaInstancia(instance);
-        throw Object.assign(createEvolutionError(message, status, code, payload), { upstreamStatus: httpStatus });
+        throw Object.assign(createEvolutionError(message, status, code, temporaryDiagnostics ? null : payload), { upstreamStatus: httpStatus });
       }
       if (payload?.nonJson || payload === null || typeof payload !== 'object') {
-        throw createEvolutionError('Evolution API retornou uma resposta invalida. Verifique a URL e a inicializacao do servico.', 502, 'EVOLUTION_INVALID_RESPONSE', payload);
+        throw createEvolutionError('Evolution API retornou uma resposta invalida. Verifique a URL e a inicializacao do servico.', 502, 'EVOLUTION_INVALID_RESPONSE', temporaryDiagnostics ? null : payload);
       }
       if (endpoint.startsWith('/instance/delete/') && instance) invalidarExistenciaInstancia(instance);
       return payload;
@@ -334,7 +347,9 @@ async function requestTransport(path, options = {}) {
       if (error !== original) error.cause = original;
       error.diagnostic ||= { requestId, endpoint, instanceName: instance, method: context.method,
         httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
-      logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started, error }, 'error');
+      logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started,
+        ...(temporaryDiagnostics ? { errorCode: error.code, rateLimitSource: error.rateLimitSource,
+          retryAfterSeconds: error.retryAfterSeconds } : { error }) }, 'error');
       const retryable = ['EVOLUTION_TIMEOUT', 'EVOLUTION_OFFLINE'].includes(error.code);
       if (attempt >= attempts || !retryable || (deadline && deadline - Date.now() <= retryDelayMs)) throw error;
     } finally {
@@ -587,9 +602,9 @@ async function desconectarInstancia(instanceName) {
   }
 }
 
-async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']) {
+async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'], options = {}) {
   return evolutionRequest(`/webhook/set/${encodeURIComponent(instanceName)}`, {
-    instanceName, timeoutMs: 5000,
+    ...options, instanceName, timeoutMs: 5000,
     method: 'POST',
     body: JSON.stringify({
       webhook: { enabled: true, url, byEvents: false, base64: false, events,
