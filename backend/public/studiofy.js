@@ -2,16 +2,30 @@ const $=s=>document.querySelector(s),esc=v=>String(v??'').replace(/[&<>"']/g,c=>
 const money=v=>Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}),token=localStorage.getItem('barbearia_auth_token');
 const sections=['Dashboard','Agendamentos','WhatsApp','Conversas','Clientes','Meus serviços','Profissionais','Financeiro','Horários','Minha página','Notificações','Relatórios','Configurações','Assinatura'];
 let account;
+let refreshInFlight=null;
 let state,section='Dashboard',agendaDate=todayLocal(),agendaMode='week';
 function todayLocal(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());}
 const iconPaths=['M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z','M4 5h16v16H4z M8 3v4 M16 3v4 M4 11h16','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M17 4a4 4 0 0 1 0 8 M22 21v-2a4 4 0 0 0-3-4','M4 5h16v15H4z M8 5V3h8v2 M4 11h16','M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M4 21v-2a6 6 0 0 1 6-5h4a6 6 0 0 1 6 5v2','M3 5h18v15H3z M3 9h18 M15 14h3','M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18 M12 7v5l3 2','M3 3h18v18H3z M3 8h18 M8 8v13','M5 17h14l-2-4V9a5 5 0 0 0-10 0v4z M10 21h4','M4 20V10 M10 20V4 M16 20v-8 M22 20H2','M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2','M3 6h18v14H3z M3 10h18'];
 const icon=i=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[i]}"/></svg>`;
-async function api(path='',method='GET',body){const r=await fetch('/api/studiofy'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''},body:body?JSON.stringify(body):undefined});const data=await r.json();if(r.status===401)location.href='/login.html';if(r.status===403 && data.acesso)await refresh();if(!r.ok)throw Error(data.error || 'Não foi possível concluir.');return data;}
+async function requestJson(url,options){
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),20000);
+ try{
+  const r=await fetch(url,{...options,signal:controller.signal,cache:'no-store'});
+  const data=await r.json();
+  if(r.status===401)location.href='/login.html';
+  if(!r.ok){const error=Error(data.error || 'Não foi possível concluir.');error.status=r.status;error.details=data;throw error;}
+  return data;
+ }catch(error){if(error.name==='AbortError')throw Error('O servidor demorou para responder. Tente novamente.');throw error;}
+ finally{clearTimeout(timeout);}
+}
+async function api(path='',method='GET',body){
+ try{return await requestJson('/api/studiofy'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''},body:body?JSON.stringify(body):undefined});}
+ catch(error){if(error.status===403 && error.details?.acesso && !refreshInFlight)await refresh();throw error;}
+}
 function message(value,error=false){$('#message').textContent=value;$('#message').classList.toggle('error',error);}
 async function action(fn){try{await fn();}catch(e){message(e.message,true);}}
 async function accountApi(path, method='GET') {
- const r=await fetch('/api'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''}});
- const data=await r.json();if(r.status===401)location.href='/login.html';if(!r.ok)throw Error(data.error || 'Não foi possível concluir.');return data;
+ return requestJson('/api'+path,{method,headers:{'Content-Type':'application/json','x-barbeiro-token':token || ''}});
 }
 async function subscriptionView(){
  const config=await accountApi('/publico/assinatura-config');
@@ -20,24 +34,112 @@ async function subscriptionView(){
  $('#subscribe').onclick=()=>action(async()=>{const payment=await accountApi('/publico/assinaturas/'+account.id+'/checkout','POST');location.assign(payment.checkoutUrl);});
  $('#checkAccess').onclick=()=>action(refresh);
 }
-async function refresh(){
- account=await accountApi('/barbeiro/me');
+function dashboardStatus(status){
+ let box=$('#dashboardStatus');if(!box){box=document.createElement('div');box.id='dashboardStatus';box.className='dashboard-status';box.setAttribute('aria-live','polite');$('#view').before(box);}
+ box.dataset.state=status;$('#view').setAttribute('aria-busy',String(status==='loading'));
+ if(status==='loading')box.textContent=state?'Atualizando dados…':'Carregando painel…';
+ else if(status==='error'){
+  box.innerHTML='<span>'+(state?'Falha na atualização. Os dados exibidos podem estar desatualizados.':'Não foi possível carregar o painel.')+'</span> <button id="retryDashboard" type="button">Tentar novamente</button>';
+  $('#retryDashboard').onclick=()=>action(refresh);
+ }else box.textContent='Atualizado em '+new Date().toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo'});
+}
+function refresh(){
+ if(refreshInFlight)return refreshInFlight;
+ message('');
+ dashboardStatus('loading');
+ if(!state)$('#view').innerHTML='<div class="card" role="status">Carregando os dados do estabelecimento…</div>';
+ refreshInFlight=loadPanel().then(()=>dashboardStatus('ready')).catch(async error=>{
+  dashboardStatus('error');
+  if(error.status===403 && error.details?.acesso){
+   account={...account,id:account?.id || error.details.id,acesso:error.details.acesso};state=null;await showAccessRequired();
+  }else if(!state)$('#view').innerHTML='<div class="card">Os indicadores estarão disponíveis quando o carregamento for concluído.</div>';
+  throw error;
+ }).finally(()=>{refreshInFlight=null;});
+ return refreshInFlight;
+}
+async function showAccessRequired(){
+ window.StudiofyWhatsapp?.unmount();window.StudiofyInbox?.pause();
+ state=null;$('#title').textContent='Assinatura';$('#navigation').innerHTML='<button id="plans">Ver planos</button>';
+ $('#plans').onclick=()=>action(subscriptionView);await subscriptionView();
+}
+async function loadPanel(){
+ const nextAccount=await accountApi('/barbeiro/me');
+ account=nextAccount;
  $('#salonName').textContent=account.barbearia_nome;$('#sidebarSalon').textContent=account.barbearia_nome;
  const access=account.acesso;
- let banner=$('#trialBanner');if(!banner){banner=document.createElement('div');banner.id='trialBanner';banner.className='card';$('#view').before(banner);}
+ let banner=$('#trialBanner');if(!banner){banner=document.createElement('div');banner.id='trialBanner';banner.className='card dashboard-access';$('#view').before(banner);}
  banner.hidden=access?.status==='subscription_active';
- banner.textContent=access?.status==='trial_active'?`7 dias grátis: termina em ${new Date(access.trial.endsAt).toLocaleString('pt-BR')} (${access.trial.daysRemaining} dia(s) restantes).`:access?.mensagem || '';
+ banner.textContent=access?.status==='trial_active'?`7 dias grátis: termina em ${new Date(access.trial.endsAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})} (${access.trial.daysRemaining} dia(s) restantes).`:access?.mensagem || '';
  if(access && !access.liberado){
-  window.StudiofyWhatsapp?.unmount();
-  window.StudiofyInbox?.pause();
-  state=null;$('#title').textContent='Assinatura';$('#navigation').innerHTML='<button id="plans">Ver planos</button>';
-  $('#plans').onclick=()=>action(subscriptionView);await subscriptionView();return;
+  await showAccessRequired();return;
  }
  state=await api('/painel');window.StudiofyInbox?.resume();$('#publicLink').href='/agendar/'+state.pagina.slug;render();
 }
 const table=(headers,rows)=>`<div class="card table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join(''):`<tr><td colspan="${headers.length}" class="empty">Nenhum registro por aqui ainda.</td></tr>`}</tbody></table></div>`;
 const field=(label,name,type='text',value='',extra='')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());
+function normalizeClientPhone(value){
+ let digits=String(value || '').replace(/\D/g,'');
+ if(digits.length===12 || digits.length===13){if(digits.startsWith('55'))digits=digits.slice(2);}
+ return /^\d{10,11}$/.test(digits)?digits:'';
+}
+function servedClients(){
+ const clients=new Map();
+ const phones=new Map(state.agendamentos.map(a=>[a.id,a.telefone]));
+ for(const a of state.financeiro?.historico || []){
+  const phone=normalizeClientPhone(phones.get(a.id));
+  if(!phone)continue;
+  const client=clients.get(phone)||{nome:a.cliente,telefone:phone,visitas:0};client.visitas++;clients.set(phone,client);
+ }
+ return clients;
+}
+function renderDashboard(view){
+ const f=state.financeiro,appointments=state.agendamentos;
+ const date=state.agenda?.hoje || f?.referencia || today();
+ const dateLabel=date.split('-').reverse().join('/');
+ const day=appointments.filter(a=>a.data===date);
+ const scheduled=day.filter(a=>a.status==='confirmado').length;
+ const completed=f?.hoje.atendimentos;
+ const operational=completed===undefined?'—':scheduled+completed;
+ const time=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date());
+ const upcoming=appointments.filter(a=>a.status==='confirmado' &&
+  (typeof a.futuro==='boolean'?a.futuro:a.data+'T'+a.hora>date+'T'+time))
+  .sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)||a.id-b.id).slice(0,5);
+ const activeProfessionals=state.profissionais.filter(p=>p.ativo===true).length;
+ const access=account?.acesso;
+ const accessLabel=access?.status==='trial_active'?'Teste grátis ativo':
+  access?.status==='subscription_active'?'Assinatura ativa':access?.mensagem || 'Situação indisponível';
+ const currency=period=>f?money(f[period].valor_centavos/100):'—';
+ const metrics=[
+  ['today','Agendamentos de hoje',operational,'Agendados e concluídos · '+dateLabel,1],
+  ['clients','Clientes atendidos',f?servedClients().size:'—','Telefones únicos · todo o histórico',2],
+  ['revenue-today','Faturamento de hoje',currency('hoje'),'Somente concluídos · '+dateLabel,5],
+  ['revenue-month','Faturamento do mês',currency('mes'),'Mês atual · somente concluídos',5],
+ ];
+ view.innerHTML='<div class="section-intro"><p>Hoje · '+esc(dateLabel)+' <span class="muted">· horário de São Paulo</span></p><button id="newBooking" class="primary">+ Novo agendamento</button></div>'+
+  '<div class="metrics dashboard-metrics">'+metrics.map(([key,label,value,note,i])=>
+   `<article class="card metric" data-dashboard="${key}"><div class="metric-label">${icon(i)}${label}</div><strong class="stat">${value}</strong><small class="metric-note">${note}</small></article>`).join('')+'</div>'+
+  '<section class="card dashboard-finance" aria-labelledby="dashboardFinanceTitle"><div class="panel-heading"><h2 id="dashboardFinanceTitle">Resumo financeiro</h2><button id="seeFinance" class="text-button">Ver financeiro ↗</button></div>'+
+  '<p class="muted">Preço registrado no atendimento. Somente concluídos, sem atendimentos futuros.</p>'+
+  (f?'<dl class="financial-strip">'+[['hoje','Hoje',dateLabel],['semana','Esta semana','Desde '+f.inicio_semana.split('-').reverse().join('/')+' · segunda-feira'],['mes','Este mês','Desde '+f.inicio_mes.split('-').reverse().join('/')]].map(([key,label,note])=>
+   `<div data-dashboard-period="${key}"><dt>${label}</dt><dd>${currency(key)}</dd><small>${esc(note)} · ${f[key].atendimentos} atendimento(s)</small></div>`).join('')+'</dl>'+
+   (f.total.atendimentos?'':'<p class="muted">Nenhum atendimento concluído ainda.</p>'):'<p role="alert">Resumo financeiro indisponível. Tente atualizar o painel.</p>')+'</section>'+
+  '<div class="dashboard-columns dashboard-content"><section class="card upcoming" aria-labelledby="upcomingTitle"><div class="panel-heading"><h2 id="upcomingTitle">Próximos agendamentos</h2><button id="seeAgenda" class="text-button">Ver agenda ↗</button></div><p class="muted">Até cinco atendimentos agendados após o horário atual.</p>'+
+  (upcoming.length?upcoming.map(a=>'<div class="appointment-summary"><span class="avatar">'+esc((a.nome_cliente || '').slice(0,1))+'</span><div class="appointment-person"><strong>'+esc(a.nome_cliente)+'</strong><small>'+esc(a.servico_nome)+(a.profissional?' · '+esc(a.profissional):'')+'</small></div><div class="appointment-time"><strong>'+esc(a.hora)+'</strong><small>'+esc(a.data.split('-').reverse().join('/'))+'</small></div></div>').join(''):
+   '<div class="empty-state">'+icon(1)+'<h3>Nenhum próximo agendamento</h3><p>Os próximos horários confirmados aparecerão aqui.</p></div>')+'</section>'+
+  '<section class="card" aria-labelledby="todayStatusTitle"><div class="panel-heading"><h2 id="todayStatusTitle">Situação dos agendamentos</h2><span class="pill">Hoje · '+esc(dateLabel)+'</span></div><dl class="appointment-status-summary">'+
+  [['confirmado','Agendados',scheduled],['concluido','Concluídos',completed??'—'],['cancelado','Cancelados',day.filter(a=>a.status==='cancelado').length],['falta','Faltas',day.filter(a=>a.status==='falta').length]].map(([key,label,count])=>
+   `<div data-dashboard-status="${key}"><dt><span class="status-dot dot-${key}" aria-hidden="true"></span>${label}</dt><dd>${count}</dd></div>`).join('')+'</dl><p class="muted">Agendamentos de hoje inclui agendados e concluídos. Cancelamentos e faltas ficam separados.</p></section></div>'+
+  '<div class="dashboard-columns dashboard-bottom"><section class="card" aria-labelledby="topServicesTitle"><div class="panel-heading"><h2 id="topServicesTitle">Serviços mais realizados</h2><span class="pill">Todo o histórico</span></div>'+
+  (f?.servicos.length?'<ol class="dashboard-ranking">'+f.servicos.slice(0,3).map(s=>'<li><strong>'+esc(s.servico)+'</strong><span>'+s.atendimentos+' atendimento(s)</span></li>').join('')+'</ol>':
+   '<p class="muted">'+(f?'Nenhum atendimento concluído ainda.':'Ranking indisponível.')+'</p>')+'</section>'+
+  '<section class="card dashboard-establishment" aria-labelledby="establishmentSummaryTitle"><h2 id="establishmentSummaryTitle">Seu estabelecimento</h2><dl><div data-dashboard-professionals><dt>Profissionais ativos</dt><dd>'+activeProfessionals+' <small>de '+state.profissionais.length+' cadastrado(s)</small></dd></div>'+
+  '<div data-dashboard-subscription><dt>Situação da assinatura</dt><dd>'+esc(accessLabel)+'</dd></div></dl><button id="seeSubscription" class="text-button">Ver assinatura ↗</button></section></div>';
+ $('#newBooking').onclick=()=>bookingForm();
+ $('#seeAgenda').onclick=()=>{section='Agendamentos';render();};
+ $('#seeFinance').onclick=()=>{section='Financeiro';render();};
+ $('#seeSubscription').onclick=()=>{section='Assinatura';render();};
+}
 function render(){
  window.StudiofyWhatsapp?.unmount();
  window.StudiofyInbox?.unmount();
@@ -49,17 +151,12 @@ function render(){
  if(section==='Conversas'){window.StudiofyInbox.mount($('#view'),token,()=>action(refresh));return;}
  const view=$('#view'),appointments=state.agendamentos;
  if(section==='Dashboard'){
-  const active=appointments.filter(a=>a.status==='confirmado'),done=appointments.filter(a=>a.status==='concluido'),clients=new Set(appointments.map(a=>a.telefone).filter(Boolean));
-  const dates=Array.from({length:7},(_,i)=>shiftDate(today(),i-6));
-  const counts=dates.map(d=>appointments.filter(a=>a.data===d && a.status!=='cancelado').length),max=Math.max(1,...counts);
-  const upcoming=active.filter(a=>a.data+'T'+a.hora>=today()+'T'+new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'}).format(new Date())).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)).slice(0,5);
-  view.innerHTML='<div class="section-intro"><div><p>Uma visão do seu negócio, em tempo real.</p></div><button id="newBooking" class="primary">+ Novo agendamento</button></div><div class="metrics">'+[['Agendamentos hoje',active.filter(a=>a.data===today()).length,1,'Horários confirmados'],['Clientes',clients.size,2,'Clientes do estabelecimento'],['Faturamento',money(done.reduce((n,a)=>n+Number(a.preco),0)),5,'Atendimentos concluídos'],['Serviços realizados',done.length,3,'Total de atendimentos concluídos']].map(([l,v,i,n])=>'<article class="card metric"><div class="metric-label">'+icon(i)+l+'</div><strong class="stat">'+v+'</strong><small class="metric-note">'+n+'</small></article>').join('')+'</div><div class="dashboard-columns"><article class="card"><div class="panel-heading"><h2>Agendamentos por dia</h2><span class="pill">Últimos 7 dias</span></div><p class="muted">Acompanhe o movimento da sua agenda</p><div class="bar-chart">'+dates.map((d,i)=>'<div class="chart-column"><span>'+counts[i]+'</span><div class="bar-track"><div class="chart-bar" style="height:'+counts[i]/max*100+'%"></div></div><small>'+new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})+'</small></div>').join('')+'</div></article><article class="card upcoming"><div class="panel-heading"><h2>Próximos agendamentos</h2><button id="seeAgenda" class="text-button">Ver agenda ↗</button></div>'+ (upcoming.length?upcoming.map(a=>'<div class="appointment-summary"><span class="avatar">'+esc(a.nome_cliente.slice(0,1))+'</span><div><strong>'+esc(a.nome_cliente)+'</strong><small>'+esc(a.servico_nome)+' · '+esc(a.profissional||'Profissional principal')+'</small></div><div class="appointment-time"><strong>'+esc(a.hora)+'</strong><small>'+a.data.slice(5).split('-').reverse().join('/')+'</small></div></div>').join(''):'<div class="empty-state">'+icon(1)+'<h3>Sua agenda começa aqui</h3><p>Os próximos horários reservados aparecerão neste espaço.</p></div>')+'</article></div><div class="card page-callout"><div><span class="eyebrow">SEU NEGÓCIO SEMPRE ABERTO</span><h2>Um link. Mais possibilidades.</h2><p class="muted">Compartilhe sua página e receba agendamentos online.</p></div><a class="button primary" target="_blank" rel="noopener" href="/agendar/'+esc(state.pagina.slug)+'">Visualizar minha página ↗</a></div>';
-  $('#newBooking').onclick=()=>bookingForm();$('#seeAgenda').onclick=()=>{section='Agendamentos';render();};
+  renderDashboard(view);
  }else if(section==='Agendamentos'){
   renderAgenda(view,appointments);
  }else if(section==='Clientes'){
-  const clients=new Map();for(const a of appointments){const c=clients.get(a.telefone)||{nome:a.nome_cliente,telefone:a.telefone,visitas:0};c.visitas+=a.status==='concluido'?1:0;clients.set(a.telefone,c);}
-  view.innerHTML='<p class="muted">Clientes registrados nos agendamentos deste estabelecimento.</p>'+table(['Nome','WhatsApp','Atendimentos concluídos'],[...clients.values()].map(c=>[esc(c.nome),esc(c.telefone),c.visitas]));
+  const clients=servedClients();
+  view.innerHTML='<p class="muted">Clientes com atendimentos concluídos, agrupados pelo telefone normalizado. Cancelamentos, faltas e reservas futuras não entram na contagem.</p>'+table(['Nome','WhatsApp','Atendimentos concluídos'],[...clients.values()].map(c=>[esc(c.nome),esc(c.telefone),c.visitas]));
  }else if(section==='Meus serviços'){
   view.innerHTML='<div class="row"><p class="muted">Cuidados que levam a sua assinatura.</p><button id="addService" class="primary">+ Adicionar serviço</button></div><div class="service-list">'+state.servicos.map(s=>`<article class="card service-row">${s.foto?`<img class="service-photo" src="${esc(s.foto)}" alt="">`:`<div class="service-placeholder">${icon(3)}</div>`}<span class="pill">${s.ativo?'Ativo':'Inativo'}</span><h3 style="margin-top:15px">${esc(s.nome)}</h3><p class="muted">${esc(s.categoria || '')}</p><p class="muted">${esc(s.descricao)}</p><p>${money(s.preco)} · ${s.duracao} min</p><button data-edit-service="${s.id}">Editar</button> <button data-delete-service="${s.id}">Excluir / desativar</button></article>`).join('')+'</div>';
   $('#addService').onclick=()=>serviceForm();document.querySelectorAll('[data-edit-service]').forEach(b=>b.onclick=()=>serviceForm(state.servicos.find(s=>s.id===+b.dataset.editService)));document.querySelectorAll('[data-delete-service]').forEach(b=>b.onclick=()=>action(async()=>{await api('/servicos/'+b.dataset.deleteService,'DELETE');await refresh();message('Serviço desativado. Histórico preservado.');}));

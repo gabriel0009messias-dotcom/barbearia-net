@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
+const { accountView } = require('./services/accountView');
 
 require('./loadEnv');
 
@@ -2085,11 +2086,14 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
   }
 });
 
-router.get('/barbeiro/me', requireConta, async (req, res) => {
+router.get('/barbeiro/me', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+}, requireConta, async (req, res) => {
   try {
-    res.json(await montarRespostaAssinatura(req.assinatura.id));
+    res.json(accountView(await montarRespostaAssinatura(req.assinatura.id)));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível carregar os dados da sua conta.' });
   }
 });
 

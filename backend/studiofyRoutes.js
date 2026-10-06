@@ -2,6 +2,8 @@ const {profileInput,saveProfile,publicProfile}=require('./services/establishment
 const express=require('express');
 const rateLimit=require('express-rate-limit');
 const {createPublicBookings}=require('./services/publicBookings');
+const {financialSummary}=require('./services/finance');
+const {localMoment,appointmentPermissions}=require('./services/agenda');
 const {createStudio,serviceInput,image,validateHours,validDate,time,text,fail,effectiveHours}=require('./services/studiofy');
 module.exports=function studioRoutes(db,auth,access) {
  const router=express.Router();
@@ -56,7 +58,11 @@ module.exports=function studioRoutes(db,auth,access) {
     bloqueios:await c.allAsync('SELECT * FROM bloqueios WHERE assinatura_id=$1 ORDER BY data,hora',[id]),
     lembretes:await c.allAsync('SELECT r.*,a.nome_cliente,a.data,a.hora FROM appointment_reminders r JOIN agendamentos a ON a.id=r.appointment_id AND a.assinatura_id=r.assinatura_id WHERE r.assinatura_id=$1 ORDER BY due_at DESC LIMIT 200',[id])};
   });
-  res.json(result);
+  res.set('Cache-Control','no-store');
+  const now=new Date(),moment=localMoment(now);
+  res.json({...result,agenda:{hoje:moment.date},
+   agendamentos:result.agendamentos.map(a=>({...a,...appointmentPermissions(a,moment)})),
+   financeiro:financialSummary(result.agendamentos,now)});
  }));
  router.post('/servicos',wrap(async(req,res)=>{
   const s=await serviceInput(req.body);
