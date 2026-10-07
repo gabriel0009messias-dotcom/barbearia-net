@@ -1672,38 +1672,8 @@ router.post('/agendamentos/:id/lembrete-7', requirePainelOuBridge, async (req, r
   }
 });
 
-router.get('/faturamento', requireBarbeiro, (req, res) => {
-  const { periodo } = req.query;
-  let query = `
-    SELECT SUM(COALESCE(a.preco, s.preco, 0)) AS total
-    FROM agendamentos a
-    LEFT JOIN servicos s ON a.servico_id = s.id
-    WHERE a.status = 'confirmado'
-      AND a.assinatura_id = $1
-  `;
-  const params = [req.assinatura.id];
-
-  if (periodo === 'dia') {
-    query += " AND a.data = to_char(CURRENT_DATE, 'YYYY-MM-DD')";
-  }
-
-  if (periodo === 'mes') {
-    query += " AND substring(a.data, 1, 7) = to_char(CURRENT_DATE, 'YYYY-MM')";
-  }
-
-  if (periodo === 'ano') {
-    query += " AND substring(a.data, 1, 4) = to_char(CURRENT_DATE, 'YYYY')";
-  }
-
-  db.get(query, params, (err, row) => {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
-
-    res.json({ total: row?.total || 0 });
-  });
-});
+router.get('/faturamento', require('./services/financialRevenue').financialResponse,
+  requireBarbeiro, require('./services/financialRevenue').financialRevenue(db));
 
 router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
   db.all(

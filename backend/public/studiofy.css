@@ -6,4 +6,30 @@
 .cancel-dialog{color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:460px;width:calc(100% - 32px);padding:24px;box-shadow:0 25px 90px #0009}.cancel-dialog::backdrop{background:#03080cbd}.cancel-dialog h2{line-height:1.5}.cancel-dialog .error:empty{display:none}.saved-booking{border-top:1px solid var(--line);padding:20px 0}.saved-booking button{margin-bottom:8px}#privateBookingLink{font-size:11px}#booking label{margin-top:18px}
 .agenda-filters{display:flex;flex-wrap:wrap;gap:16px;align-items:end;margin-bottom:20px}.agenda-filters .row{flex-wrap:wrap}.agenda-filters label{min-width:190px;max-width:100%}.agenda-filters [aria-pressed=true]{background:#12589b;border-color:#62b0ff}.agenda-item{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.agenda-item>div{min-width:0;overflow-wrap:anywhere}.agenda-item small{display:block;color:var(--muted);margin-bottom:5px}.agenda-item .agenda-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:8px}.agenda-actions select{width:auto;max-width:100%}.agenda-actions small{flex-basis:100%}.agenda-status{display:inline-block;padding:4px 9px;border-radius:5px;background:#273644;color:#e3ecf5}.status-confirmado{background:#103c63;color:#a9d8ff}.status-concluido{background:#17452f;color:#adf1c9}.status-cancelado{background:#50272b;color:#ffd1d5}.status-falta{background:#574117;color:#ffe0a1}.agenda-dialog{color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:12px;width:calc(100% - 32px);max-width:460px;max-height:90vh;overflow:auto;padding:24px}.agenda-dialog::backdrop{background:#03080cbd}.agenda-dialog dt{color:var(--muted);margin-top:12px}.agenda-dialog dd{margin:4px 0;overflow-wrap:anywhere}.calendar-professionals{display:grid;margin-top:8px}.calendar-professionals span{font-size:10px;padding:5px;overflow-wrap:anywhere;border-left:1px solid var(--line)}@media(max-width:600px){.agenda-item{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.agenda-filters{display:block}.agenda-filters label{margin-top:12px}.agenda-actions button,.agenda-actions select{min-height:42px}}
 .agenda-toolbar>.row,.agenda-filters>.row{min-width:0;max-width:100%}.agenda-filters select,.agenda-booking-form input,.agenda-booking-form select{min-width:0;max-width:100%}.agenda-booking-form label{min-width:0;overflow-wrap:anywhere}.agenda-booking-form h2,.agenda-dialog h2{overflow-wrap:anywhere}.agenda-booking-form #retryAgendaSlots{justify-self:start}.agenda-dialog button{min-height:42px;margin:4px 4px 0 0}.agenda-booking-form [aria-busy=true]{cursor:wait}@media(max-width:360px){.agenda-item{grid-template-columns:1fr}.agenda-dialog{padding:18px}.agenda-toolbar button,.agenda-filters button{min-height:42px}}
+/* Financeiro and its shared service report; keep other modules' layout intact. */
+.finance-view{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.finance-view .finance-intro{flex-wrap:wrap;margin:12px 0 18px;gap:12px}
+.finance-view .finance-intro p{flex:1;min-width:160px}
+.finance-view .finance-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.finance-view .metric{margin-bottom:0;min-width:0;padding:18px}
+.finance-view .metric-label{margin:0;font-size:12px;line-height:1.4}
+.finance-view .stat{font-size:clamp(20px,2.3vw,28px);line-height:1.25;letter-spacing:-.6px;max-width:100%;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.finance-view .finance-count{font-size:12px;margin:8px 0 4px}
+.finance-view .metric-note{display:block;color:var(--muted);line-height:1.5}
+.finance-view .finance-period-empty{color:var(--muted);font-size:11px;margin:12px 0 0;line-height:1.5}
+.finance-view .finance-total{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;margin:14px 0 24px;padding:16px 18px;min-width:0}
+.finance-view .finance-total h2{margin:0 0 3px;font-size:13px}
+.finance-view .finance-total .stat{margin:0;font-size:22px}
+.finance-view .finance-total>span{margin-left:auto;color:var(--muted);max-width:100%}
+.finance-view section{min-width:0;margin-top:24px}
+.finance-view section h2{margin-bottom:8px}
+.finance-view .finance-caption{font-size:11px;line-height:1.6;margin-bottom:14px}
+.finance-view .table-wrap{max-width:100%;padding:8px 14px;overscroll-behavior-x:contain}
+.finance-view table{min-width:520px;white-space:normal}
+.finance-view th,.finance-view td{min-width:110px;max-width:300px;overflow-wrap:anywhere;vertical-align:top}
+.finance-view .finance-amount{white-space:nowrap;font-variant-numeric:tabular-nums}
+.finance-view .finance-empty{color:var(--muted);padding:24px 18px;line-height:1.6}
+.finance-view .finance-table-note{display:none;font-size:11px;color:var(--muted);margin:0 0 10px}
+@media(max-width:850px){.finance-view .finance-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.finance-view .metric{padding:16px}.finance-view .stat{font-size:22px}}
+@media(max-width:600px){.finance-view .finance-metrics{grid-template-columns:1fr}.finance-view .metric{padding:16px 18px}.finance-view .stat{font-size:26px}.finance-view .finance-total>span{margin-left:0;flex-basis:100%}.finance-view .table-wrap{padding:6px 10px}.finance-view .finance-intro button{min-height:42px}.finance-view .finance-table-note{display:block}}
 .calendar-professionals span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

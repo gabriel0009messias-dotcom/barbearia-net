@@ -1,6 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {financialSummary}=require('../services/finance');
+const {historicalCents,financialPeriod,periodTotal}=require('../services/finance');
 
 const now=new Date('2026-10-15T15:00:00Z'); // 12:00 in São Paulo, Thursday.
 const booking=(id,data,preco,status='concluido',extra={})=>({id,data,preco,status,hora:'09:00',
@@ -55,4 +56,58 @@ test('Financeiro: estabelecimento sem atendimentos recebe zeros e histórico vaz
  const f=financialSummary([],now);
  for(const period of ['hoje','semana','mes','total'])assert.deepEqual(f[period],{atendimentos:0,valor_centavos:0});
  assert.deepEqual(f.servicos,[]);assert.deepEqual(f.historico,[]);assert.deepEqual(f.meses,[]);
+});
+
+test('Financeiro: datas e horários legados impossíveis não faturam nem quebram o histórico',()=>{
+ const invalid=[{data:'2026-02-30'},{data:'2026-13-01'},{data:'inválida'},{data:null},
+  {hora:'25:99'},{hora:'24:00'},{hora:null},{hora:'9:00'},{hora:'09:00:00'}];
+ const f=financialSummary([...rows,...invalid.map((extra,i)=>booking(100+i,'2026-10-14',999,'concluido',extra))],now);
+ assert.deepEqual(f,financialSummary(rows,now));
+});
+
+for(const value of [null,undefined,-10,NaN,Infinity,-Infinity,'NaN','30 reais','',' ','1,00',true,{},1.005,'1.005',2.675,0.001,1e20]){
+ test(`Financeiro: preço inválido ${String(value)} é excluído sem fallback ou alteração do total`,()=>{
+  assert.equal(historicalCents(value),null);
+  const f=financialSummary([...rows,booking(100,'2026-10-14',value,'concluido',{catalogo_preco:999})],now);
+  assert.deepEqual(f,financialSummary(rows,now));
+ });
+}
+
+test('Financeiro: centavos exatos, zero válido e decimais legados com zeros finais',()=>{
+ for(const [price,cents] of [[0,0],[0.29,29],[1.01,101],[30.10,3010],['20.20',2020],['1.000',100],['1.0100',101]]){
+  assert.equal(historicalCents(price),cents);
+ }
+ assert.equal(financialSummary([booking(1,'2026-10-15',0)],now).total.atendimentos,1);
+});
+
+test('Financeiro: serviço sem nome tem indicação neutra e não altera o registro',()=>{
+ const unnamed=booking(100,'2026-10-15',30,'concluido',{servico_nome:null,studio_service_id:2});
+ const summary=financialSummary([booking(1,'2026-10-15',30),unnamed],now);
+ assert.equal(summary.servicos.length,2);
+ assert.equal(summary.historico[0].servico,'Serviço não identificado');
+ assert.equal(unnamed.servico_nome,null);
+});
+
+test('Financeiro: seletores legados, mês solicitado e mês vazio compartilham o resumo',()=>{
+ const f=financialSummary(rows,now);
+ for(const [query,cents] of [[{periodo:'dia'},5030],[{periodo:'hoje'},5030],[{periodo:'semana'},9030],
+  [{periodo:'mes'},20030],[{periodo:'mes',mes:'2026-09'},125000],
+  [{periodo:'mes_customizado',mes:'2026-09'},125000],[{periodo:'mes_customizado',mes:'2026-08'},0],
+  [{periodo:'mes',mes:'2026-11'},0],[{periodo:'ano'},145030],[{periodo:'total'},145030],
+  [{periodo:'historico'},145030],[{},145030]]){
+  assert.equal(periodTotal(f,financialPeriod(query,now)),cents);
+ }
+});
+
+test('Financeiro: período e mês inválidos retornam erro 400 explícito',()=>{
+ for(const query of [{periodo:'outro'},{periodo:''},{periodo:['dia']},{periodo:'mes_customizado'},
+  {periodo:'mes',mes:'2026-13'},{periodo:'mes',mes:'2026-00'},{periodo:'mes',mes:'0000-01'},
+  {periodo:'mes',mes:'2026-2'},{periodo:'mes',mes:['2026-10']},{periodo:'dia',mes:'2026-10'},
+  {periodo:'toString'},{periodo:'__proto__'}]){
+  assert.throws(()=>financialPeriod(query,now),e=>e.statusCode===400);
+ }
+});
+
+test('Financeiro: overflow é detectado antes de publicar total impreciso',()=>{
+ assert.throws(()=>financialSummary([booking(1,'2026-10-14','90071992547409.91'),booking(2,'2026-10-14',0.01)],now),/safe integer/);
 });

@@ -166,13 +166,41 @@ function render(){
  else if(section==='Horários')hoursForm();
  else if(section==='Notificações')view.innerHTML='<p class="muted">Lembretes previstos para 20 minutos antes. Entregas incertas exigem conferência no WhatsApp. Mensagens vencidas não são enviadas.</p>'+table(['Cliente','Atendimento','Lembrete previsto','Status','Tentativas','Último erro'],state.lembretes.map(r=>[esc(r.nome_cliente),esc(r.data+' '+r.hora),new Date(r.due_at).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'}),esc(({pending:'Pendente',sending:'Enviando',sent:'Enviado',cancelled:'Cancelado',uncertain:'Entrega incerta',expired:'Expirado'})[r.status]),r.attempts,esc(r.last_error || '—')]));
  else if(section==='Financeiro' || section==='Relatórios'){
-  const totals=new Map();for(const a of appointments.filter(a=>a.status==='concluido')){const key=section==='Financeiro'?a.data.slice(0,7):a.servico_nome;const v=totals.get(key)||{count:0,total:0};v.count++;v.total+=Number(a.preco);totals.set(key,v);}
-  view.innerHTML='<p class="muted">Valores dos atendimentos marcados como concluídos. Não representa conciliação bancária.</p>'+table([section==='Financeiro'?'Mês':'Serviço','Atendimentos concluídos','Valor'],[...totals].map(([k,v])=>[esc(k),v.count,money(v.total)]));
+  renderFinance(view,section==='Relatórios');
  }else view.innerHTML=`<div class="card"><h2>${section==='Assinatura'?'Minha assinatura':'Conexões e configurações'}</h2><p class="muted">${section==='Assinatura'?'Consulte sua assinatura e os pagamentos no painel integrado.':'Gerencie a conexão do WhatsApp e o suporte no painel integrado. Agendamentos são feitos pela sua página pública.'}</p><a class="button primary" href="/barbeiro.html">${section==='Assinatura'?'Gerenciar assinatura':'Configurar WhatsApp e suporte'}</a></div>`;
  if(section==='Configurações'){
   view.insertAdjacentHTML('afterbegin',`<div class="card"><h2>Cancelamento pelo cliente</h2><p class="muted">Defina a antecedência mínima em minutos. Com zero, o cliente pode cancelar até antes do início do atendimento. A regra vale também para reservas já existentes.</p><form id="cancellationPolicy" class="stack">${field('Antecedência mínima (minutos)','antecedencia_minutos','number',state.pagina.antecedencia_cancelamento_minutos??0,'required min="0" max="129600" step="1"')}<button class="primary" type="submit">Salvar regra de cancelamento</button></form></div>`);
   $('#cancellationPolicy').onsubmit=e=>{e.preventDefault();const f=e.currentTarget,b=f.querySelector('button');b.disabled=true;action(async()=>{try{await api('/politica-cancelamento','PUT',{antecedencia_minutos:Number(f.antecedencia_minutos.value)});await refresh();message('Regra de cancelamento salva.');}finally{b.disabled=false;}});};
  }
+}
+function renderFinance(view,reports=false){
+ const f=state.financeiro,formatDate=d=>d.split('-').reverse().join('/');
+ if(!f){
+  view.innerHTML='<div class="finance-view card" role="alert"><p>Financeiro indisponível. Tente atualizar os dados.</p><button id="refreshFinance" type="button">Tentar novamente</button></div>';
+  $('#refreshFinance').onclick=()=>action(refresh);return;
+ }
+ const financeTable=(headers,rows,empty,label)=>rows.length
+  ? `<p class="finance-table-note">Deslize a tabela para ver todas as colunas.</p><div class="card table-wrap" role="region" aria-label="${esc(label)}" tabindex="0"><table><thead><tr>${headers.map(h=>`<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>'<tr>'+row.map((cell,i)=>`<td${headers[i].startsWith('Valor')?' class="finance-amount"':''}>${cell}</td>`).join('')+'</tr>').join('')}</tbody></table></div>`
+  : `<p class="card finance-empty" role="status">${empty}</p>`;
+ const services=financeTable(['Serviço','Atendimentos concluídos','Valor faturado'],
+  f.servicos.map(s=>[esc(s.servico),s.atendimentos,money(s.valor_centavos/100)]),
+  'Nenhum serviço realizado com atendimento concluído válido.','Serviços realizados e faturamento');
+ const intro='<div class="section-intro finance-intro"><p>Receita dos atendimentos concluídos · horário de São Paulo</p><button id="refreshFinance" type="button">Atualizar dados</button></div>';
+ const serviceSection='<section id="financeServices" aria-labelledby="financeServicesTitle"><h2 id="financeServicesTitle">Serviços mais realizados · todo o histórico</h2><p class="muted finance-caption">Ordenados por quantidade realizada, depois pelo faturamento.</p>'+services+'</section>';
+ if(reports){view.innerHTML='<div class="finance-view">'+intro+serviceSection+'</div>';}
+ else{
+  const periods=[['hoje','Faturamento de hoje',formatDate(f.referencia)],
+   ['semana','Faturamento da semana',`Desde ${formatDate(f.inicio_semana)} · segunda-feira`],
+   ['mes','Faturamento do mês',`Desde ${formatDate(f.inicio_mes)}`]];
+  view.innerHTML='<div class="finance-view">'+intro+'<div class="metrics finance-metrics">'+periods.map(([key,label,note])=>
+   `<article class="card metric" data-finance="${key}" aria-label="${label}"><h2 class="metric-label">${label}</h2><strong class="stat">${money(f[key].valor_centavos/100)}</strong><p class="finance-count">${f[key].atendimentos} atendimento(s) concluído(s)</p><small class="metric-note">${note}</small>${f[key].atendimentos?'':'<p class="finance-period-empty">Nenhum atendimento concluído neste período.</p>'}</article>`).join('')+'</div>'+
+   `<div class="card finance-total" data-finance="total"><div><h2>Atendimentos concluídos</h2><small>Todo o histórico financeiro válido</small></div><strong class="stat">${f.total.atendimentos}</strong><span>${money(f.total.valor_centavos/100)} faturados</span></div>`+
+   serviceSection+
+   '<section id="financeMonths" aria-labelledby="financeMonthsTitle"><h2 id="financeMonthsTitle">Faturamento por mês</h2>'+financeTable(['Mês','Atendimentos concluídos','Valor faturado'],f.meses.map(m=>[esc(m.mes.split('-').reverse().join('/')),m.atendimentos,money(m.valor_centavos/100)]),'Nenhum faturamento mensal registrado.','Faturamento por mês')+'</section>'+
+   '<section id="financeHistory" aria-labelledby="financeHistoryTitle"><h2 id="financeHistoryTitle">Histórico financeiro</h2><p class="muted finance-caption">Preço salvo no atendimento. Do mais recente ao mais antigo.</p>'+financeTable(['Data / horário','Cliente','Serviço / profissional','Valor do atendimento','Status'],f.historico.map(a=>[esc(formatDate(a.data)+' · '+a.hora),esc(a.cliente || 'Cliente não informado'),esc(a.servico)+'<br><small>'+esc(a.profissional || 'Profissional não informado')+'</small>',money(a.valor_centavos/100),'<span class="pill">Concluído</span>']),'Nenhum registro financeiro: nenhum atendimento concluído válido.','Histórico de atendimentos faturados')+'</section>'+
+   '<p class="muted finance-caption">Somente concluídos com data, horário e preço histórico válidos, cujo horário já foi alcançado. Não representa conciliação bancária.</p></div>';
+ }
+ $('#refreshFinance').onclick=()=>action(refresh);
 }
 const statusLabel=s=>({confirmado:'Agendado',concluido:'Concluído',cancelado:'Cancelado',falta:'Falta',pendente:'Pendente'})[s] || s;
 const statusBadge=a=>`<span class="agenda-status status-${esc(a.status)}">${esc(statusLabel(a.status))}</span>`;
