@@ -74,6 +74,8 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
   assert.equal((await request('/studiofy/agendamentos/'+booking,'PATCH',{status:'cancelado'},a.token)).status,200);
   assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[booking])).status,'cancelled');
   assert.ok((await createStudio(db).times(a.id,future,service,professional)).includes('10:00'));
+  assert.equal((await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'14:00'},a.token)).status,409);
+  const replacement=await request('/studiofy/agendamentos','POST',body(),a.token);assert.equal(replacement.status,201);booking=replacement.body.id;
   assert.equal((await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'14:00'},a.token)).status,200);
   r=await db.getAsync('SELECT * FROM appointment_reminders WHERE appointment_id=$1',[booking]);assert.equal(r.status,'pending');assert.equal(new Date(r.due_at).toISOString(),new Date(`${future}T13:40:00-03:00`).toISOString());
   assert.equal((await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:00'},b.token)).status,404);
@@ -98,11 +100,12 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
   await createReminderWorker(db,send,()=>new Date(clock().getTime()-1)).drain();assert.equal(sent.length,0);
   await Promise.all([createReminderWorker(db,send,clock).drain(),createReminderWorker(db,send,clock).drain()]);assert.equal(sent.length,1);assert.match(sent[0][2],/Gabriel/);assert.match(sent[0][2],/Alongamento/);assert.match(sent[0][2],/20 minutos/);assert.match(sent[0][2],/Studio Bella/);
   await createReminderWorker(db,send,clock).drain();assert.equal(sent.length,1);
-  await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:00'},a.token);
+  assert.equal((await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:00'},a.token)).status,200);
   let r=await db.getAsync('SELECT * FROM appointment_reminders WHERE appointment_id=$1',[booking]);assert.equal(r.status,'pending');assert.equal(r.sent_at,null);
   await request('/studiofy/agendamentos/'+booking,'PATCH',{status:'cancelado'},a.token);
   await createReminderWorker(db,send,()=>new Date(`${future}T15:40:00-03:00`)).drain();assert.equal(sent.length,1);
-  await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:00'},a.token);
+  assert.equal((await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:00'},a.token)).status,409);
+  const replacement=await request('/studiofy/agendamentos','POST',{...body(),hora:'16:00'},a.token);assert.equal(replacement.status,201);booking=replacement.body.id;
   let attempts=0;const fail=async()=>{attempts++;throw Error('ambiguous');};
   await createReminderWorker(db,fail,()=>new Date(`${future}T15:40:00-03:00`)).drain();await createReminderWorker(db,fail,()=>new Date(`${future}T15:41:00-03:00`)).drain();assert.equal(attempts,1);
   assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[booking])).status,'uncertain');

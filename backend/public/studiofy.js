@@ -3,7 +3,7 @@ const money=v=>Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'
 const sections=['Dashboard','Agendamentos','WhatsApp','Conversas','Clientes','Meus serviços','Profissionais','Financeiro','Horários','Minha página','Notificações','Relatórios','Configurações','Assinatura'];
 let account;
 let refreshInFlight=null;
-let state,section='Dashboard',agendaDate=todayLocal(),agendaMode='week';
+let state,section='Dashboard',agendaDate=todayLocal(),agendaMode='week',agendaFilter='todos',agendaProfessional='';
 function todayLocal(){return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());}
 const iconPaths=['M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z','M4 5h16v16H4z M8 3v4 M16 3v4 M4 11h16','M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M17 4a4 4 0 0 1 0 8 M22 21v-2a4 4 0 0 0-3-4','M4 5h16v15H4z M8 5V3h8v2 M4 11h16','M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M4 21v-2a6 6 0 0 1 6-5h4a6 6 0 0 1 6 5v2','M3 5h18v15H3z M3 9h18 M15 14h3','M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18 M12 7v5l3 2','M3 3h18v18H3z M3 8h18 M8 8v13','M5 17h14l-2-4V9a5 5 0 0 0-10 0v4z M10 21h4','M4 20V10 M10 20V4 M16 20v-8 M22 20H2','M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M5 5l2 2 M17 17l2 2 M5 19l2-2 M17 7l2-2','M3 6h18v14H3z M3 10h18'];
 const icon=i=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${iconPaths[i]}"/></svg>`;
@@ -174,17 +174,99 @@ function render(){
   $('#cancellationPolicy').onsubmit=e=>{e.preventDefault();const f=e.currentTarget,b=f.querySelector('button');b.disabled=true;action(async()=>{try{await api('/politica-cancelamento','PUT',{antecedencia_minutos:Number(f.antecedencia_minutos.value)});await refresh();message('Regra de cancelamento salva.');}finally{b.disabled=false;}});};
  }
 }
-function appointmentTable(rows){return table(['Cliente','Serviço / profissional','Data','Horário','Status','Ações'],rows.map(a=>[esc(a.nome_cliente),`${esc(a.servico_nome)}<br><small>${esc(a.profissional || 'Profissional principal')}</small>`,esc(a.data.split('-').reverse().join('/')),esc(a.hora),esc(a.status),`<button data-reschedule="${a.id}">Remarcar</button><select aria-label="Alterar status" data-status="${a.id}"><option value="">Ações</option><option value="confirmado">Confirmar</option><option value="cancelado">Cancelar</option><option value="concluido">Concluir</option><option value="falta">Registrar falta</option></select>`]));}
-function bindAppointments(){document.querySelectorAll('[data-reschedule]').forEach(b=>b.onclick=()=>bookingForm(state.agendamentos.find(a=>a.id===+b.dataset.reschedule)));document.querySelectorAll('[data-status]').forEach(b=>b.onchange=()=>{if(b.value)action(async()=>{await api('/agendamentos/'+b.dataset.status,'PATCH',{status:b.value});await refresh();message('Agendamento atualizado.');});});}
+const statusLabel=s=>({confirmado:'Agendado',concluido:'Concluído',cancelado:'Cancelado',falta:'Falta',pendente:'Pendente'})[s] || s;
+const statusBadge=a=>`<span class="agenda-status status-${esc(a.status)}">${esc(statusLabel(a.status))}</span>`;
+let agendaMutationInFlight=false,agendaSlotsInFlight=null;
+async function agendaSlotsQuery(key,isCurrent){
+ // A form reopened while a previous request finishes must not start a parallel query.
+ while(agendaSlotsInFlight){try{await agendaSlotsInFlight;}catch{}if(!isCurrent())return null;}
+ if(!isCurrent())return null;
+ const request=api('/horarios?'+key);agendaSlotsInFlight=request;
+ try{return await request;}finally{if(agendaSlotsInFlight===request)agendaSlotsInFlight=null;}
+}
+function lockAgendaActions(disabled){document.querySelectorAll('[data-status],[data-reschedule],[data-detail-reschedule],#newBooking').forEach(el=>el.disabled=disabled);}
+function agendaTiming(a){
+ const valid=typeof a.data==='string' && /^\d{4}-\d{2}-\d{2}$/.test(a.data) && !isNaN(Date.parse(a.data)) && new Date(a.data).toISOString().slice(0,10)===a.data && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.hora || '');
+ const parts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date()).map(p=>[p.type,p.value]));
+ const current=`${parts.year}-${parts.month}-${parts.day}${parts.hour}:${parts.minute}`;
+ return {valid,future:valid && a.data+a.hora>current};
+}
+const agendaCanReschedule=a=>a.status==='confirmado' && a.futuro===true && agendaTiming(a).future;
+const agendaCanFinish=a=>a.status==='confirmado' && a.pode_concluir===true && agendaTiming(a).valid && !agendaTiming(a).future;
+function agendaEmpty(){
+ if(agendaProfessional)return 'Nenhum agendamento para este profissional no filtro selecionado.';
+ return {hoje:'Nenhum agendamento hoje.',proximos:'Nenhum próximo agendamento.',concluidos:'Nenhum atendimento concluído.',cancelados:'Nenhum agendamento cancelado.'}[agendaFilter] || 'Nenhum agendamento cadastrado.';
+}
+function appointmentTable(rows){return '<div class="agenda-list">'+(rows.length?rows.map(a=>`<article class="card agenda-item" data-agenda-booking="${a.id}"><div><small>Data / horário</small><strong>${esc(a.data.split('-').reverse().join('/'))} · ${esc(a.hora)}</strong></div><div><small>Cliente</small><strong>${esc(a.nome_cliente)}</strong></div><div><small>Serviço</small><span>${esc(a.servico_nome)}</span></div><div><small>Profissional</small><strong>${esc(a.profissional || 'Profissional principal')}</strong></div><div><small>Valor</small><span>${money(a.preco || 0)}</span></div><div><small>Status</small>${statusBadge(a)}</div><div class="agenda-actions"><button data-view-booking="${a.id}">Ver detalhes</button>${agendaCanReschedule(a)?`<button data-reschedule="${a.id}" ${agendaMutationInFlight?'disabled':''}>Remarcar</button>`:''}${a.status==='confirmado'?`<select aria-label="Alterar status de ${esc(a.nome_cliente)}" data-status="${a.id}" ${agendaMutationInFlight?'disabled':''}><option value="">Ações</option><option value="cancelado">Cancelar</option>${agendaCanFinish(a)?'<option value="concluido">Concluir</option><option value="falta">Registrar falta</option>':''}</select>`:''}${a.status==='confirmado'&&!agendaCanFinish(a)?'<small>Conclusão e falta disponíveis a partir do horário agendado, após atualizar a Agenda.</small>':''}</div></article>`).join(''):`<p class="card empty" role="status">${agendaEmpty()}</p>`)+'</div>';}
+function showBookingDetails(a){
+ const dialog=document.createElement('dialog');dialog.className='agenda-dialog';dialog.setAttribute('aria-labelledby','bookingDetailsTitle');dialog.setAttribute('tabindex','-1');
+ dialog.innerHTML=`<h2 id="bookingDetailsTitle">Dados do agendamento</h2>${statusBadge(a)}<dl><dt>Cliente</dt><dd>${esc(a.nome_cliente)}</dd><dt>Telefone</dt><dd>${esc(a.telefone || 'Não informado')}</dd><dt>Serviço</dt><dd>${esc(a.servico_nome)}</dd><dt>Profissional</dt><dd>${esc(a.profissional || 'Profissional principal')}</dd><dt>Data e horário</dt><dd>${esc(a.data.split('-').reverse().join('/'))} · ${esc(a.hora)}</dd><dt>Duração</dt><dd>${esc(a.duracao)} minutos</dd><dt>Valor do atendimento</dt><dd>${money(a.preco || 0)}</dd></dl>${agendaCanReschedule(a)?`<button type="button" data-detail-reschedule ${agendaMutationInFlight?'disabled':''}>Remarcar</button> `:''}<button type="button" data-close-details>Fechar</button>`;
+ dialog.addEventListener('close',()=>dialog.remove());dialog.querySelector('[data-close-details]').onclick=()=>dialog.close();const reschedule=dialog.querySelector('[data-detail-reschedule]');if(reschedule)reschedule.onclick=()=>{dialog.close();bookingForm(a);};document.body.append(dialog);dialog.showModal();dialog.focus();dialog.scrollTop=0;
+}
+function bindAppointments(){
+ document.querySelectorAll('[data-view-booking]').forEach(b=>b.onclick=()=>showBookingDetails(state.agendamentos.find(a=>a.id===+b.dataset.viewBooking)));
+ document.querySelectorAll('[data-reschedule]').forEach(b=>b.onclick=()=>bookingForm(state.agendamentos.find(a=>a.id===+b.dataset.reschedule)));
+ document.querySelectorAll('[data-status]').forEach(b=>b.onchange=()=>{
+  const status=b.value,a=state.agendamentos.find(a=>a.id===+b.dataset.status);b.value='';
+  if(!status || agendaMutationInFlight || !a || a.status!=='confirmado')return;
+  if(!['cancelado','concluido','falta'].includes(status) || (status!=='cancelado'&&!agendaCanFinish(a)))return;
+  const verb={cancelado:'cancelar',concluido:'concluir',falta:'registrar falta para'}[status];
+  if(!confirm(`Deseja ${verb} o atendimento de ${a.nome_cliente}? Este estado será final e não permitirá remarcação.`))return;
+  agendaMutationInFlight=true;lockAgendaActions(true);message('Atualizando agendamento…');
+  action(async()=>{let saved=false;try{await api('/agendamentos/'+a.id,'PATCH',{status});saved=true;await refresh();message({cancelado:'Agendamento cancelado.',concluido:'Atendimento concluído.',falta:'Falta registrada.'}[status]);}
+   catch(error){message(saved?'A alteração foi salva, mas não foi possível atualizar a Agenda. Tente atualizar novamente.':error.message,true);}
+   finally{agendaMutationInFlight=false;lockAgendaActions(false);}});
+ });
+}
 function form(title,html,save){message('');$('#view').innerHTML=`<div class="card"><h2>${title}</h2><form id="editor" class="stack">${html}<div class="row"><button type="button" id="cancel">Voltar</button><button class="primary" type="submit">Salvar alterações</button></div></form></div>`;$('#cancel').onclick=render;$('#editor').onsubmit=e=>{e.preventDefault();const f=e.currentTarget,b=f.querySelector('[type=submit]');b.disabled=true;message('Salvando alterações…');action(async()=>{try{await save(f);await refresh();message('Alterações salvas.');}finally{b.disabled=false;}});};}
 const readFile=file=>new Promise((resolve,reject)=>{if(!file)return resolve(null);if(file.size>2*1024*1024 || !['image/png','image/jpeg','image/webp'].includes(file.type))return reject(Error('Use PNG, JPEG ou WebP de até 2 MB.'));const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(Error('Falha ao ler imagem.'));r.readAsDataURL(file);});
 function serviceForm(s={}){form(s.id?'Editar serviço':'Adicionar serviço',`<div class="form-grid">${field('Nome','nome','text',s.nome,'required maxlength="100"')}${field('Categoria','categoria','text',s.categoria,'maxlength="100"')}${field('Preço (R$)','preco','number',s.preco ?? '', 'required min="0" max="100000" step="0.01"')}${field('Duração (minutos)','duracao','number',s.duracao || 30,'required min="5" max="720"')}${field('Foto (PNG, JPEG ou WebP, até 2 MB)','foto','file','','accept="image/png,image/jpeg,image/webp"')}<label class="wide">Descrição<textarea name="descricao" maxlength="1000">${esc(s.descricao)}</textarea></label><label><span><input name="ativo" type="checkbox" ${s.ativo!==false?'checked':''}> Ativo</span></label><label><span><input name="removePhoto" type="checkbox"> Remover foto</span></label></div>`,async f=>{const data=Object.fromEntries(new FormData(f));await api('/servicos'+(s.id?'/'+s.id:''),s.id?'PUT':'POST',{...data,preco:+data.preco,duracao:+data.duracao,ativo:f.ativo.checked,foto:f.removePhoto.checked?null:await readFile(f.foto.files[0]) || s.foto || null});});}
 function professionalForm(p={}){form(p.id?'Editar profissional':'Adicionar profissional',`${field('Nome','nome','text',p.nome,'required maxlength="100"')}<label><span><input name="ativo" type="checkbox" ${p.ativo!==false?'checked':''}> Ativo</span></label><p>Serviços realizados</p>${state.servicos.map(s=>`<label><span><input name="services" type="checkbox" value="${s.id}" ${p.servicos?.includes(s.id)?'checked':''}> ${esc(s.nome)}</span></label>`).join('')}`,async f=>api('/profissionais'+(p.id?'/'+p.id:''),p.id?'PUT':'POST',{nome:f.nome.value,ativo:f.ativo.checked,servicos:[...f.querySelectorAll('[name=services]:checked')].map(x=>+x.value)}));}
 function bookingForm(a={}){
+ if(agendaMutationInFlight)return;
+ if(a.id&&!agendaCanReschedule(a)){message('Este atendimento não permite remarcação. Atualize a Agenda.',true);return;}
  const services=state.servicos.filter(s=>s.ativo);
  form(a.id?'Remarcar agendamento':'Novo agendamento',`<div class="form-grid">${field('Cliente','nome_cliente','text',a.nome_cliente,'required minlength="2" maxlength="100"')}${field('WhatsApp','telefone','tel',a.telefone,'required')}<label>Serviço<select name="servico_id" required>${services.map(s=>`<option value="${s.id}" ${s.id===a.studio_service_id?'selected':''}>${esc(s.nome)}</option>`).join('')}</select></label><label>Profissional<select name="profissional_id" required></select></label>${field('Data','data','date',a.data || today(),'required')}<label>Horário<select name="hora" required><option value="">Escolha a data</option></select></label></div>`,async f=>api('/agendamentos'+(a.id?'/'+a.id:''),a.id?'PUT':'POST',Object.fromEntries(new FormData(f))));
- const f=$('#editor');let version=0;
- const slots=()=>action(async()=>{const current=++version;f.hora.innerHTML='<option value="">Consultando…</option>';const times=await api('/horarios?'+new URLSearchParams({data:f.data.value,servico_id:f.servico_id.value,profissional_id:f.profissional_id.value,excluir_id:a.id || 0}));if(current!==version)return;f.hora.innerHTML='<option value="">Escolha um horário</option>'+times.map(t=>`<option ${t===a.hora?'selected':''}>${t}</option>`).join('');});
+ const f=$('#editor');f.closest('.card').classList.add('agenda-booking-form');
+ f.hora.parentElement.insertAdjacentHTML('beforeend','<small id="agendaSlotsStatus" role="status" aria-live="polite"></small><button id="retryAgendaSlots" type="button" hidden>Tentar novamente</button>');
+ const notice=$('#agendaSlotsStatus'),retry=$('#retryAgendaSlots'),save=f.querySelector('[type=submit]');
+ let version=0,inFlight=false,queued=false,pendingKey='',slotsReady=false,saving=false;
+ const updateSave=()=>{save.disabled=saving || inFlight || !slotsReady || !f.hora.value;};
+ const slots=async()=>{
+  if(!f.isConnected || saving)return;
+  const key=new URLSearchParams({data:f.data.value,servico_id:f.servico_id.value,profissional_id:f.profissional_id.value,excluir_id:a.id || 0}).toString();
+  if(inFlight&&key===pendingKey)return;
+  pendingKey=key;const current=++version;slotsReady=false;f.hora.disabled=true;retry.hidden=true;
+  f.hora.innerHTML='<option value="">Consultando…</option>';notice.textContent='Consultando horários disponíveis…';notice.classList.remove('error');updateSave();
+  if(inFlight){queued=true;return;}
+  if(!f.data.value || !f.servico_id.value || !f.profissional_id.value){
+   f.hora.innerHTML='<option value="">Selecione serviço, profissional e data</option>';notice.textContent='Escolha um serviço ativo, um profissional disponível e a data.';return;
+  }
+  inFlight=true;f.hora.setAttribute('aria-busy','true');updateSave();
+  try{
+   const times=await agendaSlotsQuery(key,()=>current===version&&f.isConnected);
+   if(current!==version || !f.isConnected)return;
+   if(!Array.isArray(times) || times.some(t=>typeof t!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))throw Error('Não foi possível consultar os horários. Tente novamente.');
+   f.hora.innerHTML='<option value="">'+(times.length?'Escolha um horário':'Nenhum horário disponível')+'</option>'+times.map(t=>`<option ${t===a.hora?'selected':''}>${esc(t)}</option>`).join('');
+   slotsReady=times.length>0;f.hora.disabled=!slotsReady;notice.textContent=times.length?'Horários atualizados.':'Nenhum horário disponível para esta seleção. Escolha outra data ou profissional.';
+  }catch(error){
+   if(current!==version || !f.isConnected)return;
+   f.hora.innerHTML='<option value="">Não foi possível carregar horários</option>';notice.textContent=error.message || 'Falha ao consultar horários. Tente novamente.';notice.classList.add('error');retry.hidden=false;
+  }finally{
+   inFlight=false;f.hora.setAttribute('aria-busy','false');updateSave();
+   if(queued){queued=false;slots();}
+  }
+ };
+ retry.onclick=slots;f.hora.onchange=updateSave;
+ f.onsubmit=e=>{
+  e.preventDefault();if(saving || agendaMutationInFlight || !slotsReady || inFlight || !f.hora.value)return;
+  const body=Object.fromEntries(new FormData(f));
+  if(a.id&&!confirm(`Confirmar a remarcação de ${body.nome_cliente} para ${body.data.split('-').reverse().join('/')} às ${body.hora}?`))return;
+  saving=true;agendaMutationInFlight=true;f.querySelectorAll('input,select,button').forEach(el=>el.disabled=true);message(a.id?'Remarcando agendamento…':'Salvando agendamento…');
+  action(async()=>{let saved=false;try{await api('/agendamentos'+(a.id?'/'+a.id:''),a.id?'PUT':'POST',body);saved=true;await refresh();message(a.id?'Agendamento remarcado.':'Agendamento criado.');}
+   catch(error){message(saved?'O agendamento foi salvo, mas não foi possível atualizar a Agenda. Tente atualizar novamente.':error.message,true);}
+   finally{saving=false;agendaMutationInFlight=false;if(f.isConnected){f.querySelectorAll('input,select,button').forEach(el=>el.disabled=false);f.hora.disabled=!slotsReady;updateSave();}lockAgendaActions(false);}});
+ };
  const people=()=>{f.profissional_id.innerHTML=state.profissionais.filter(p=>p.ativo && p.servicos.includes(+f.servico_id.value)).map(p=>`<option value="${p.id}" ${p.id===a.profissional_id?'selected':''}>${esc(p.nome)}</option>`).join('');slots();};f.servico_id.onchange=people;f.profissional_id.onchange=slots;f.data.onchange=slots;people();
 }
 function pageForm(){const p=state.pagina;form('Personalizar minha página',`<p class="muted">Veja como sua página ficará para seus clientes antes de salvar.</p><div class="form-grid">${field('Nome do estabelecimento','nome','text',p.nome,'required maxlength="100"')}${field('Link público','slug','text',p.slug,'required pattern="[a-z0-9]+(-[a-z0-9]+)*" maxlength="80"')}${field('Telefone / WhatsApp','telefone','tel',p.telefone)}<label>Tipo de negócio<select name="businessType">${(state.businessTypes||[]).map(t=>`<option value="${esc(t.code)}" ${t.code===p.businessType?'selected':''}>${esc(t.name)}</option>`).join('')}</select></label>${field('Cidade','city','text',p.city,'maxlength="100"')}${field('Estado (UF)','state','text',p.state,'maxlength="2"')}${field('Endereço','address','text',p.address,'maxlength="250"')}${field('Instagram (usuário)','instagram','text',p.instagram,'maxlength="30"')}${field('Cor de destaque','cor','color',p.cor)}<label class="wide">Descrição<textarea name="descricao" maxlength="1000">${esc(p.descricao)}</textarea></label>${field('Capa (até 2 MB)','capa','file','','accept="image/png,image/jpeg,image/webp"')}${field('Logo (até 2 MB)','logo','file','','accept="image/png,image/jpeg,image/webp"')}<label><span><input type="checkbox" name="removeCover"> Remover capa</span></label><label><span><input type="checkbox" name="removeLogo"> Remover logo</span></label></div><button id="previewButton" type="button">Visualizar página</button><div id="preview" class="preview" hidden></div>`,async f=>api('/pagina','PUT',await payload(f)));
@@ -213,16 +295,35 @@ setInterval(()=>{if(!['Conversas','WhatsApp'].includes(section) && !document.hid
 
 function shiftDate(date,n){const d=new Date(date+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
 function renderAgenda(view,appointments){
+ appointments=[...appointments].sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)||a.id-b.id);
+ appointments=appointments.filter(a=>!agendaProfessional || String(a.profissional_id)===agendaProfessional);
  const date=new Date(agendaDate+'T12:00:00Z'),start=shiftDate(agendaDate,-((date.getUTCDay()+6)%7));
  const days=Array.from({length:7},(_,i)=>shiftDate(start,i));
- view.innerHTML='<div class="agenda-toolbar"><div class="row"><button id="prevWeek" aria-label="Semana anterior">‹</button><button id="agendaToday">Hoje</button><button id="nextWeek" aria-label="Próxima semana">›</button><h2>'+date.toLocaleDateString('pt-BR',{month:'long',year:'numeric'})+'</h2></div><div class="row"><button id="agendaMode">'+(agendaMode==='week'?'Ver lista':'Ver calendário')+'</button><button id="newBooking" class="primary">+ Novo agendamento</button></div></div>';
- if(agendaMode==='list'){view.innerHTML+=appointmentTable(appointments);bindAppointments();}
+ view.innerHTML='<div class="agenda-toolbar"><div class="row"><button id="prevWeek" aria-label="Semana anterior">‹</button><button id="agendaToday">Hoje</button><button id="nextWeek" aria-label="Próxima semana">›</button><h2>'+date.toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo',month:'long',year:'numeric'})+'</h2></div><div class="row"><button id="agendaMode">'+(agendaMode==='week'?'Ver lista':'Ver calendário')+'</button><button id="newBooking" class="primary">+ Novo agendamento</button></div></div>';
+ view.innerHTML+='<div class="agenda-filters"><div class="row" aria-label="Filtrar agendamentos">'+[['todos','Todos'],['hoje','Hoje'],['proximos','Próximos'],['concluidos','Concluídos'],['cancelados','Cancelados']].map(([key,label])=>`<button data-agenda-filter="${key}" aria-pressed="${agendaMode==='list'&&agendaFilter===key}">${label}</button>`).join('')+'</div><label>Profissional<select id="agendaProfessional"><option value="">Todos os profissionais</option>'+state.profissionais.map(p=>`<option value="${p.id}" ${agendaProfessional===String(p.id)?'selected':''}>${esc(p.nome)}</option>`).join('')+'</select></label></div>';
+ if(agendaMode==='list'){
+  const filtered=appointments.filter(a=>agendaFilter==='hoje'?a.data===today():agendaFilter==='proximos'?a.futuro===true&&agendaTiming(a).future&&a.status==='confirmado':agendaFilter==='concluidos'?a.status==='concluido'&&a.futuro===false&&agendaTiming(a).valid&&!agendaTiming(a).future:agendaFilter==='cancelados'?a.status==='cancelado':true);
+  view.innerHTML+='<p class="muted">'+(agendaFilter==='proximos'?'Atendimentos agendados após o horário atual. ':agendaFilter==='hoje'?'Todos os status de hoje. ':'')+'Ordem cronológica · horário de São Paulo.</p>'+appointmentTable(filtered);bindAppointments();
+ }
  else {
  const entries=appointments.filter(a=>days.includes(a.data)&&a.status!=='cancelado');
  const first=Math.min(8,...entries.map(a=>+a.hora.slice(0,2))),last=Math.max(19,...entries.map(a=>Math.ceil((+a.hora.slice(0,2)*60 + +a.hora.slice(3)+a.duracao)/60)));
  const hours=Array.from({length:last-first},(_,i)=>first+i);
- view.innerHTML+='<div class="calendar-scroll card"><div class="week-calendar"><div class="calendar-corner"></div>'+days.map(d=>'<div class="calendar-day '+(d===today()?'is-today':'')+'"><small>'+new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'short'})+'</small><strong>'+d.slice(8)+'</strong></div>').join('')+'<div class="calendar-hours">'+hours.map(h=>'<span>'+String(h).padStart(2,'0')+':00</span>').join('')+'</div>'+days.map(d=>'<div class="calendar-lane" style="height:'+hours.length*64+'px">'+entries.filter(a=>a.data===d).map(a=>'<button class="calendar-event event-'+esc(a.status)+'" data-calendar-booking="'+a.id+'" style="top:'+((+a.hora.slice(0,2)-first)*60 + +a.hora.slice(3))/60*64+'px;min-height:'+Math.max(32,a.duracao/60*64-3)+'px"><strong>'+esc(a.hora)+' · '+esc(a.nome_cliente)+'</strong><span>'+esc(a.servico_nome)+'</span><small>'+esc(a.profissional||'')+'</small></button>').join('')+'</div>').join('')+'</div></div><p class="muted">Selecione um atendimento para remarcar. Use a lista para confirmar, concluir, cancelar ou registrar falta.</p>';
- document.querySelectorAll('[data-calendar-booking]').forEach(b=>b.onclick=()=>bookingForm(appointments.find(a=>a.id===+b.dataset.calendarBooking)));
+ view.innerHTML+=(entries.length?'':'<p class="card empty" role="status">'+(agendaProfessional?'Nenhum agendamento para este profissional nesta semana.':'Nenhum agendamento nesta semana.')+'</p>')+'<div class="calendar-scroll card"><div class="week-calendar"><div class="calendar-corner"></div>'+days.map(d=>'<div class="calendar-day '+(d===today()?'is-today':'')+'" data-agenda-date="'+d+'"><small>'+new Date(d+'T12:00:00Z').toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo',weekday:'short'})+'</small><strong>'+d.slice(8)+'</strong></div>').join('')+'<div class="calendar-hours">'+hours.map(h=>'<span>'+String(h).padStart(2,'0')+':00</span>').join('')+'</div>'+days.map(d=>'<div class="calendar-lane" data-agenda-date="'+d+'" style="height:'+hours.length*64+'px">'+entries.filter(a=>a.data===d).map(a=>'<button class="calendar-event event-'+esc(a.status)+'" data-calendar-booking="'+a.id+'" style="top:'+((+a.hora.slice(0,2)-first)*60 + +a.hora.slice(3))/60*64+'px;min-height:'+Math.max(32,a.duracao/60*64-3)+'px"><strong>'+esc(a.hora)+' · '+esc(a.nome_cliente)+'</strong><span>'+esc(a.servico_nome)+'</span><small>'+esc(a.profissional||'')+'</small></button>').join('')+'</div>').join('')+'</div></div><p class="muted">Selecione um atendimento para ver detalhes. Use a lista para concluir, cancelar ou registrar falta; a remarcação está disponível somente para agendamentos futuros confirmados.</p>';
+ document.querySelectorAll('[data-calendar-booking]').forEach(b=>b.onclick=()=>showBookingDetails(appointments.find(a=>a.id===+b.dataset.calendarBooking)));
+ // Separate simultaneous appointments by professional instead of stacking them.
+ const professionals=[...new Map(entries.map(a=>[String(a.profissional_id),a.profissional || 'Profissional principal'])).entries()].sort((a,b)=>a[1].localeCompare(b[1]));
+ const count=Math.max(1,professionals.length),calendar=$('.week-calendar');
+ calendar.style.gridTemplateColumns=`54px repeat(7,minmax(${count*125}px,1fr))`;calendar.style.minWidth=`${54+7*count*125}px`;
+ document.querySelectorAll('.calendar-day').forEach(day=>day.insertAdjacentHTML('beforeend','<div class="calendar-professionals" style="grid-template-columns:repeat('+count+',1fr)">'+professionals.map(([,name])=>'<span title="'+esc(name)+'">'+esc(name)+'</span>').join('')+'</div>'));
+ document.querySelectorAll('[data-calendar-booking]').forEach(b=>{
+  const a=entries.find(a=>a.id===+b.dataset.calendarBooking),column=professionals.findIndex(([id])=>id===String(a.profissional_id));
+  b.style.left=`calc(${column*100/count}% + 3px)`;b.style.right='auto';b.style.width=`calc(${100/count}% - 6px)`;
+  b.title=`${a.hora} · ${a.nome_cliente} · ${a.servico_nome} · ${a.profissional || 'Profissional principal'} · ${money(a.preco || 0)} · ${statusLabel(a.status)}`;
+  b.setAttribute('aria-label',b.title);b.querySelector('span').textContent=a.servico_nome+' · '+money(a.preco || 0);
+ });
  }
- $('#newBooking').onclick=()=>bookingForm();$('#agendaMode').onclick=()=>{agendaMode=agendaMode==='week'?'list':'week';render();};$('#agendaToday').onclick=()=>{agendaDate=today();render();};$('#prevWeek').onclick=()=>{agendaDate=shiftDate(agendaDate,-7);render();};$('#nextWeek').onclick=()=>{agendaDate=shiftDate(agendaDate,7);render();};
+ document.querySelectorAll('[data-agenda-filter]').forEach(b=>b.onclick=()=>{agendaFilter=b.dataset.agendaFilter;agendaMode='list';render();});
+ $('#agendaProfessional').onchange=e=>{agendaProfessional=e.target.value;render();};
+ $('#newBooking').onclick=()=>bookingForm();$('#agendaMode').onclick=()=>{agendaMode=agendaMode==='week'?'list':'week';render();};$('#agendaToday').onclick=()=>{agendaDate=today();if(agendaMode==='list')agendaFilter='hoje';render();};$('#prevWeek').onclick=()=>{agendaDate=shiftDate(agendaDate,-7);render();};$('#nextWeek').onclick=()=>{agendaDate=shiftDate(agendaDate,7);render();};
 }

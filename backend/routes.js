@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const { accountView } = require('./services/accountView');
+const { transitionAppointment } = require('./services/agenda');
 
 require('./loadEnv');
 
@@ -1612,22 +1613,13 @@ router.post('/agendamentos', requirePainelOuBridge, async (req, res) => {
   }
 });
 
-router.delete('/agendamentos/:id', requirePainelOuBridge, (req, res) => {
-  const { id } = req.params;
-
-  db.run("UPDATE agendamentos SET status='cancelado' WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
-
-    if (this.changes === 0) {
-      res.status(404).json({ error: 'Agendamento nao encontrado.' });
-      return;
-    }
-
+router.delete('/agendamentos/:id', requirePainelOuBridge, async (req, res) => {
+  try {
+    await transitionAppointment(db, req.assinatura.id, req.params.id, 'cancelado');
     res.json({ success: true });
-  });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Não foi possível cancelar o agendamento.' });
+  }
 });
 
 router.post('/agendamentos/:id/lembrete-15', requirePainelOuBridge, async (req, res) => {

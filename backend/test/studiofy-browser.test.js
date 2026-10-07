@@ -54,6 +54,7 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  await page.click('#agendaMode');
  for(let i=0;i<2 && !await page.$('[data-calendar-booking]');i++)await page.click('#nextWeek');
  await page.waitForSelector('[data-calendar-booking]');await page.click('[data-calendar-booking]');
+ await page.waitForSelector('.agenda-dialog[open]');await page.click('[data-detail-reschedule]');
  await page.waitForSelector('#editor');assert.equal(await page.$eval('[name=nome_cliente]',el=>el.value),'Gabriel');
  await page.click('[data-section="Configurações"]');await page.$eval('[name=antecedencia_minutos]',el=>el.value='60');await page.click('#cancellationPolicy [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('Regra de cancelamento salva'));
  assert.equal((await db.getAsync('SELECT cancellation_notice_minutes FROM assinaturas WHERE id=$1',[signup.assinatura.id])).cancellation_notice_minutes,60);
@@ -70,6 +71,6 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  const privateLink=await mobile.$eval('#privateBookingLink',el=>el.value);
  const guest=await browser.createBrowserContext(),guestPage=await guest.newPage();await guestPage.goto(privateLink);await guestPage.waitForFunction(()=>document.querySelector('#booking').textContent.includes('Agendamento cancelado com sucesso.'));assert.equal(new URL(guestPage.url()).hash,'');await guest.close();
  await mobile.bringToFront();await mobile.click('#myBookings');await mobile.waitForFunction(()=>document.querySelector('#savedBookings').textContent.includes('Nenhum agendamento futuro'));
- await page.bringToFront();await page.reload();await page.waitForSelector('[data-section="Agendamentos"]');await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('cancelado'));
+ await page.bringToFront();await page.reload();await page.waitForSelector('[data-section="Agendamentos"]');await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Cancelado'));
  assert.deepEqual(errors,[]);
 });

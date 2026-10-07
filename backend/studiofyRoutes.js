@@ -3,7 +3,7 @@ const express=require('express');
 const rateLimit=require('express-rate-limit');
 const {createPublicBookings}=require('./services/publicBookings');
 const {financialSummary}=require('./services/finance');
-const {localMoment,appointmentPermissions}=require('./services/agenda');
+const {localMoment,appointmentPermissions,appointmentId,transitionAppointment}=require('./services/agenda');
 const {createStudio,serviceInput,image,validateHours,validDate,time,text,fail,effectiveHours}=require('./services/studiofy');
 module.exports=function studioRoutes(db,auth,access) {
  const router=express.Router();
@@ -54,7 +54,7 @@ module.exports=function studioRoutes(db,auth,access) {
    await s.ensure(id);
    const a=await c.getAsync('SELECT * FROM assinaturas WHERE id=$1',[id]);
    return {businessTypes:await c.allAsync('SELECT code,name FROM business_types WHERE active=true ORDER BY sort_order,name'),pagina:page(a),horarios:effectiveHours(a),servicos:await s.services(id),profissionais:await s.professionals(id),
-    agendamentos:await c.allAsync('SELECT a.*,p.nome AS profissional FROM agendamentos a LEFT JOIN profissionais p ON p.id=a.profissional_id AND p.assinatura_id=a.assinatura_id WHERE a.assinatura_id=$1 ORDER BY a.data DESC,a.hora',[id]),
+    agendamentos:await c.allAsync('SELECT a.*,p.nome AS profissional FROM agendamentos a LEFT JOIN profissionais p ON p.id=a.profissional_id AND p.assinatura_id=a.assinatura_id WHERE a.assinatura_id=$1 ORDER BY a.data,a.hora,a.id',[id]),
     bloqueios:await c.allAsync('SELECT * FROM bloqueios WHERE assinatura_id=$1 ORDER BY data,hora',[id]),
     lembretes:await c.allAsync('SELECT r.*,a.nome_cliente,a.data,a.hora FROM appointment_reminders r JOIN agendamentos a ON a.id=r.appointment_id AND a.assinatura_id=r.assinatura_id WHERE r.assinatura_id=$1 ORDER BY due_at DESC LIMIT 200',[id])};
   });
@@ -119,18 +119,23 @@ module.exports=function studioRoutes(db,auth,access) {
   });res.status(201).json({ok:true});
  }));
  router.delete('/bloqueios/:id',wrap(async(req,res)=>{await db.runAsync('DELETE FROM bloqueios WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]);res.json({ok:true});}));
- router.get('/horarios',wrap(async(req,res)=>res.json(await createStudio(db).times(req.assinatura.id,req.query.data,req.query.servico_id,req.query.profissional_id,Number(req.query.excluir_id)||0))));
+ router.get('/horarios',wrap(async(req,res)=>{
+  const serviceId=appointmentId(req.query.servico_id),professionalId=appointmentId(req.query.profissional_id);
+  let excludeId=0,duration=null;
+  if(req.query.excluir_id!==undefined && req.query.excluir_id!=='0'){
+   excludeId=appointmentId(req.query.excluir_id);
+   const existing=await db.getAsync('SELECT status,studio_service_id,duracao FROM agendamentos WHERE id=$1 AND assinatura_id=$2',[excludeId,req.assinatura.id]);
+   if(!existing)fail('Agendamento não encontrado.',404);
+   if(existing.status==='confirmado' && existing.studio_service_id===serviceId)duration=existing.duracao;
+  }
+  res.json(await createStudio(db).times(req.assinatura.id,req.query.data,serviceId,professionalId,excludeId,duration));
+ }));
  router.post('/agendamentos',wrap(async(req,res)=>res.status(201).json(await tx(s=>s.book(req.assinatura.id,req.body)))));
  router.put('/agendamentos/:id',wrap(async(req,res)=>res.json(await tx(s=>s.book(req.assinatura.id,req.body,req.params.id)))));
  router.patch('/agendamentos/:id',wrap(async(req,res)=>{
-  if(!['confirmado','cancelado','concluido','falta'].includes(req.body.status))fail('Status inválido.');
-  await tx(async(s,c)=>{
-   const a=await c.getAsync('SELECT * FROM agendamentos WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]);if(!a)fail('Agendamento não encontrado.',404);
-   if(req.body.status==='confirmado' && a.status!=='confirmado') {
-    if(!(await s.times(req.assinatura.id,a.data,a.studio_service_id,a.profissional_id,a.id)).includes(a.hora))fail('Horário indisponível.',409);
-   }
-   await c.runAsync('UPDATE agendamentos SET status=$1 WHERE id=$2 AND assinatura_id=$3',[req.body.status,req.params.id,req.assinatura.id]);
-  });res.json({ok:true});
+  if(!['confirmado','cancelado','concluido','falta'].includes(req.body?.status))fail('Status inválido.');
+  await transitionAppointment(db,req.assinatura.id,req.params.id,req.body.status);
+  res.json({ok:true});
  }));
  return router;
 };

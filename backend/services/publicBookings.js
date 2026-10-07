@@ -1,5 +1,6 @@
 const crypto=require('node:crypto');
 const {fail}=require('./studiofy');
+const {transitionAppointment}=require('./agenda');
 const hash=token=>crypto.createHash('sha256').update(token).digest('hex');
 function tokenHash(token){
  if(typeof token!=='string' || !/^[a-f0-9]{64}$/.test(token))fail('Agendamento não encontrado ou link inválido.',404);
@@ -12,7 +13,7 @@ function createPublicBookings(db,clock=()=>new Date()){
   return token;
  }
  async function find(token,lock=false){
-  const row=await db.getAsync(`SELECT a.id,a.nome_cliente,a.servico_nome,a.preco,a.data,a.hora,a.duracao,a.status,
+  const row=await db.getAsync(`SELECT a.id,a.assinatura_id,a.nome_cliente,a.servico_nome,a.preco,a.data,a.hora,a.duracao,a.status,
    p.nome AS profissional,s.barbearia_nome,s.public_slug,s.cancellation_notice_minutes,
    (a.data || ' ' || a.hora)::timestamp AT TIME ZONE 'America/Sao_Paulo' AS starts_at
    FROM public_booking_access t JOIN agendamentos a ON a.id=t.appointment_id
@@ -36,9 +37,10 @@ function createPublicBookings(db,clock=()=>new Date()){
  async function get(token){return summary(await find(token));}
  // Called inside the same serialized transaction used by booking and rescheduling.
  async function cancel(token){
+  if(db.transaction)return db.transaction(c=>createPublicBookings(c,clock).cancel(token));
   const row=await find(token,true),current=summary(row);
   if(!current.cancelavel)fail(current.motivo,409);
-  await db.runAsync("UPDATE agendamentos SET status='cancelado' WHERE id=$1",[row.id]);
+  await transitionAppointment(db,row.assinatura_id,row.id,'cancelado',clock);
   // The existing reminder trigger cancels pending/sending reminders atomically.
   return summary({...row,status:'cancelado'});
  }

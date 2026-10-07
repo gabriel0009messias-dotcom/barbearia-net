@@ -1,5 +1,6 @@
 const sharp = require('sharp');
 const { localNow, addDays } = require('./whatsapp/scheduling');
+const { appointmentId, assertReschedule } = require('./agenda');
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 const text = (value, max = 100) => typeof value === 'string' && value.trim().length <= max ? value.trim() : fail('Texto inválido.');
 const minute = value => { const [h,m] = value.split(':').map(Number); return h*60+m; };
@@ -45,37 +46,55 @@ function createStudio(db, clock=()=>new Date()) {
    await db.runAsync('INSERT INTO profissional_servicos SELECT assinatura_id,$1,id FROM servicos_assinatura WHERE assinatura_id=$2 ON CONFLICT DO NOTHING',[p.lastID,tenant]);
   }
  }
- async function times(tenant,date,serviceId,professionalId,excludeId=0) {
+ async function times(tenant,date,serviceId,professionalId,excludeId=0,durationOverride=null) {
   const now=localNow(clock());
   if (!validDate(date) || date<now.date || date>addDays(now.date,90)) return [];
   const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE id=$1 AND assinatura_id=$2 AND ativo=true',[serviceId,tenant]);
   const p=await db.getAsync('SELECT p.id FROM profissionais p JOIN profissional_servicos ps ON ps.profissional_id=p.id AND ps.assinatura_id=p.assinatura_id WHERE p.id=$1 AND p.assinatura_id=$2 AND p.ativo=true AND ps.servico_id=$3',[professionalId,tenant,serviceId]);
   if (!s || !p) return [];
+  const duration=durationOverride ?? s.duracao;
   const config=await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[tenant]);
   const day=new Date(date+'T12:00:00Z').getUTCDay();
   const hours=effectiveHours(config)[day];
   const taken=await db.allAsync("SELECT hora,duracao FROM agendamentos WHERE assinatura_id=$1 AND data=$2 AND status='confirmado' AND (profissional_id=$3 OR profissional_id IS NULL) AND id<>$4",[tenant,date,professionalId,excludeId]);
   const blocks=await db.allAsync('SELECT hora,fim FROM bloqueios WHERE assinatura_id=$1 AND data=$2 AND (profissional_id=$3 OR profissional_id IS NULL)',[tenant,date,professionalId]);
   const results=[];
-  for (const [start,end] of hours) for(let m=minute(start);m+s.duracao<=minute(end);m+=5) {
+  for (const [start,end] of hours) for(let m=minute(start);m+duration<=minute(end);m+=5) {
    const label=`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
    if (date===now.date && label<=now.time) continue;
-   if (taken.some(a=>overlap(m,m+s.duracao,minute(a.hora),minute(a.hora)+a.duracao))) continue;
-   if (blocks.some(b=>!b.hora || overlap(m,m+s.duracao,minute(b.hora),b.fim?minute(b.fim):minute(b.hora)+30))) continue;
+   if (taken.some(a=>overlap(m,m+duration,minute(a.hora),minute(a.hora)+a.duracao))) continue;
+   if (blocks.some(b=>!b.hora || overlap(m,m+duration,minute(b.hora),b.fim?minute(b.fim):minute(b.hora)+30))) continue;
    results.push(label);
   }
   return results;
  }
  async function book(tenant,body,id=null) {
-  if(id && !(await db.getAsync('SELECT id FROM agendamentos WHERE assinatura_id=$1 AND id=$2',[tenant,id]))) fail('Agendamento não encontrado.',404);
+  if(!body || typeof body!=='object' || Array.isArray(body))fail('Dados do agendamento inválidos.');
+  if(db.transaction) return db.transaction(c=>createStudio(c,clock).book(tenant,body,id));
+  let existing;
+  if(id!==null){
+   id=appointmentId(id);
+   existing=await db.getAsync('SELECT * FROM agendamentos WHERE assinatura_id=$1 AND id=$2 FOR UPDATE',[tenant,id]);
+   if(!existing)fail('Agendamento não encontrado.',404);
+   assertReschedule(existing,localNow(clock()));
+  }
+  const serviceId=appointmentId(body.servico_id),professionalId=appointmentId(body.profissional_id);
   const nome=text(body.nome_cliente), telefone=String(body.telefone || '').replace(/\D/g,'');
   if (nome.length<2 || !/^\d{10,15}$/.test(telefone)) fail('Informe nome e telefone válidos.');
-  if (!(await times(tenant,body.data,body.servico_id,body.profissional_id,id || 0)).includes(body.hora)) fail('Horário indisponível. Escolha outro horário.',409);
-  const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1 AND id=$2',[tenant,body.servico_id]);
-  const values=[tenant,nome,telefone.length<=11?'55'+telefone:telefone,s.nome,s.preco,body.data,body.hora,body.profissional_id,s.duracao,s.id];
+  const sameService=existing?.studio_service_id===serviceId;
+  const duration=sameService?existing.duracao:null;
+  if (!(await times(tenant,body.data,serviceId,professionalId,id || 0,duration)).includes(body.hora)) fail('Horário indisponível. Escolha outro horário.',409);
+  const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1 AND id=$2',[tenant,serviceId]);
+  const name=sameService?existing.servico_nome:s.nome,price=sameService?existing.preco:s.preco;
+  const canonicalPhone=value=>{const digits=String(value || '').replace(/\D/g,'');return digits.length<=11?'55'+digits:digits;};
+  const savedPhone=canonicalPhone(telefone);
+  const values=[tenant,nome,savedPhone,name,price,body.data,body.hora,professionalId,duration ?? s.duracao,s.id];
   if(id) {
-   const result=await db.runAsync("UPDATE agendamentos SET nome_cliente=$2,telefone=$3,servico_nome=$4,preco=$5,data=$6,hora=$7,profissional_id=$8,duracao=$9,studio_service_id=$10,status='confirmado' WHERE assinatura_id=$1 AND id=$11",[...values,id]);
-   if(!result.changes) fail('Agendamento não encontrado.',404);
+   const result=await db.runAsync("UPDATE agendamentos SET nome_cliente=$2,telefone=$3,servico_nome=$4,preco=$5,data=$6,hora=$7,profissional_id=$8,duracao=$9,studio_service_id=$10 WHERE assinatura_id=$1 AND id=$11 AND status='confirmado'",[...values,id]);
+   if(!result.changes) fail('O estado do agendamento mudou. Atualize a Agenda.',409);
+   if(nome!==String(existing.nome_cliente || '').trim() || savedPhone!==canonicalPhone(existing.telefone)){
+    await db.runAsync('DELETE FROM public_booking_access WHERE appointment_id=$1',[id]);
+   }
    return {id};
   }
   const result=await db.runAsync("INSERT INTO agendamentos (assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,profissional_id,duracao,studio_service_id,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'confirmado')",values);

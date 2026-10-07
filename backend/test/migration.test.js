@@ -50,6 +50,17 @@ test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anterio
   for(const table of tables)assert.deepEqual((await c.query(`SELECT * FROM "${table}" ORDER BY 1`)).rows,beforeChat[table],`Chat preserva ${table}`);
   assert.equal((await c.query('SELECT count(*)::int AS n FROM chat_conversations')).rows[0].n,0);
   assert.equal((await c.query('SELECT count(*)::int AS n FROM chat_messages')).rows[0].n,0);
+  // Upgrade an existing schema containing every final state, without rewriting its facts.
+  for(const [id,status]of [[95,'concluido'],[96,'cancelado'],[97,'falta']])await c.query(
+   "INSERT INTO agendamentos (id,assinatura_id,nome_cliente,servico_nome,preco,data,hora,status,profissional_id,duracao,studio_service_id) VALUES ($1,42,'Cliente histórico','Cuidado',90,'2026-09-27','09:00',$2,$3,30,78)",[id,status,booking.profissional_id]);
+  const beforeFinal=(await c.query('SELECT * FROM agendamentos ORDER BY id')).rows;
+  await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/011_appointment_final_states.sql'),'utf8'));
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos ORDER BY id')).rows,beforeFinal);
+  for(const id of [95,96,97]){
+   await assert.rejects(c.query("UPDATE agendamentos SET status='confirmado' WHERE id=$1",[id]),error=>error.code==='23514');
+   await assert.rejects(c.query('UPDATE agendamentos SET preco=1 WHERE id=$1',[id]),error=>error.code==='23514');
+  }
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos ORDER BY id')).rows,beforeFinal);
  }finally{c.release();}
 });
 
@@ -83,7 +94,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql', '009_studiofy_chat.sql',
+      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql', '009_studiofy_chat.sql', '011_appointment_final_states.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);
