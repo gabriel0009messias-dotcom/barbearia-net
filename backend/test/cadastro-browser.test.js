@@ -92,9 +92,9 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
     } finally { await page.close(); }
   });
   for (const [scenario, expected] of [
-    ['existing', 'HTTP 409'],
-    ['signup', 'HTTP 400'], ['missing', 'HTTP 404'], ['server', 'HTTP 500'],
-    ['html', 'HTTP 502'], ['json', 'resposta invalida'],
+    ['existing', 'assinatura existente'],
+    ['signup', 'Confira os campos'], ['missing', 'temporariamente indisponível'], ['server', 'temporariamente indisponível'],
+    ['html', 'resposta invalida'], ['json', 'resposta invalida'],
     ['login', 'Cadastro salvo.'],
     ['network', 'Verifique sua conexao'], ['timeout', 'demorou para responder'],
   ]) {
@@ -152,7 +152,7 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
     failure = 'config';
     const page = await openForm();
     try {
-      assert.match(await page.$eval('#cadastroConfigMessage', element => element.textContent), /HTTP 503/);
+      assert.match(await page.$eval('#cadastroConfigMessage', element => element.textContent), /temporariamente indisponível/);
       assert.deepEqual(await page.$$eval('input:invalid, select:invalid', fields => fields.map(field => field.id)), []);
     } finally { await page.close(); failure = null; }
   });

@@ -1,15 +1,16 @@
 const sharp = require('sharp');
 const { localNow, addDays } = require('./whatsapp/scheduling');
 const { appointmentId, assertReschedule } = require('./agenda');
+const { servicePrice } = require('./signupInput');
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 const text = (value, max = 100) => typeof value === 'string' && value.trim().length <= max ? value.trim() : fail('Texto inválido.');
 const minute = value => { const [h,m] = value.split(':').map(Number); return h*60+m; };
-const time = value => /^([01]\d|2[0-3]):[0-5]\d$/.test(value || '');
+const time = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 const overlap = (a,b,c,d) => a < d && c < b;
 function validDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value || '') && !isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value; }
 function effectiveHours(config) {
  if(config.weekly_hours) return config.weekly_hours;
- return Array.from({length:7},(_,day)=>String(config.dias_funcionamento).split(',').map(Number).includes(day)
+ return Array.from({length:7},(_,day)=>String(config.dias_funcionamento || '').split(',').filter(v=>v!=='').map(Number).includes(day)
   ? [[config.horario_abertura,config.horario_almoco_inicio],[config.horario_almoco_fim,config.horario_fechamento]].filter(p=>p.every(time) && p[0]<p[1]) : []);
 }
 async function image(value) {
@@ -23,8 +24,8 @@ async function image(value) {
  } catch { fail('Imagem inválida ou com resolução excessiva.'); }
 }
 async function serviceInput(body) {
- const nome=text(body.nome), descricao=text(body.descricao || '',1000), preco=Number(body.preco), duracao=Number(body.duracao);
- if (!nome || !Number.isFinite(preco) || preco<0 || preco>100000 || Math.abs(preco*100-Math.round(preco*100))>0.00001 || !Number.isInteger(duracao) || duracao<5 || duracao>720) fail('Informe nome, preço válido e duração entre 5 e 720 minutos.');
+ const nome=text(body.nome), descricao=text(body.descricao || '',1000), preco=servicePrice(body.preco), duracao=Number(body.duracao);
+ if (!nome || !Number.isInteger(duracao) || duracao<5 || duracao>720) fail('Informe nome, preço válido e duração entre 5 e 720 minutos.');
  if (body.ativo !== undefined && typeof body.ativo !== 'boolean') fail('Status inválido.');
  return { categoria:body.categoria===undefined?undefined:text(body.categoria,100),nome,descricao,preco,duracao,foto:await image(body.foto),ativo:body.ativo!==false };
 }
@@ -46,14 +47,14 @@ function createStudio(db, clock=()=>new Date()) {
    await db.runAsync('INSERT INTO profissional_servicos SELECT assinatura_id,$1,id FROM servicos_assinatura WHERE assinatura_id=$2 ON CONFLICT DO NOTHING',[p.lastID,tenant]);
   }
  }
- async function times(tenant,date,serviceId,professionalId,excludeId=0,durationOverride=null) {
+ async function times(tenant,date,serviceId,professionalId,excludeId=0,durationOverride=null,snapshot=null) {
   const now=localNow(clock());
   if (!validDate(date) || date<now.date || date>addDays(now.date,90)) return [];
-  const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE id=$1 AND assinatura_id=$2 AND ativo=true',[serviceId,tenant]);
-  const p=await db.getAsync('SELECT p.id FROM profissionais p JOIN profissional_servicos ps ON ps.profissional_id=p.id AND ps.assinatura_id=p.assinatura_id WHERE p.id=$1 AND p.assinatura_id=$2 AND p.ativo=true AND ps.servico_id=$3',[professionalId,tenant,serviceId]);
+  const s=snapshot ? snapshot.service : await db.getAsync('SELECT * FROM servicos_assinatura WHERE id=$1 AND assinatura_id=$2 AND ativo=true',[serviceId,tenant]);
+  const p=snapshot ? snapshot.professional : await db.getAsync('SELECT p.id FROM profissionais p JOIN profissional_servicos ps ON ps.profissional_id=p.id AND ps.assinatura_id=p.assinatura_id WHERE p.id=$1 AND p.assinatura_id=$2 AND p.ativo=true AND ps.servico_id=$3',[professionalId,tenant,serviceId]);
   if (!s || !p) return [];
   const duration=durationOverride ?? s.duracao;
-  const config=await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[tenant]);
+  const config=snapshot ? snapshot.config : await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[tenant]);
   const day=new Date(date+'T12:00:00Z').getUTCDay();
   const hours=effectiveHours(config)[day];
   const taken=await db.allAsync("SELECT hora,duracao FROM agendamentos WHERE assinatura_id=$1 AND data=$2 AND status='confirmado' AND (profissional_id=$3 OR profissional_id IS NULL) AND id<>$4",[tenant,date,professionalId,excludeId]);
@@ -83,11 +84,23 @@ function createStudio(db, clock=()=>new Date()) {
   if (nome.length<2 || !/^\d{10,15}$/.test(telefone)) fail('Informe nome e telefone válidos.');
   const sameService=existing?.studio_service_id===serviceId;
   const duration=sameService?existing.duracao:null;
-  if (!(await times(tenant,body.data,serviceId,professionalId,id || 0,duration)).includes(body.hora)) fail('Horário indisponível. Escolha outro horário.',409);
-  const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1 AND id=$2',[tenant,serviceId]);
-  const name=sameService?existing.servico_nome:s.nome,price=sameService?existing.preco:s.preco;
+  // Lock the exact catalog/configuration rows used by both validation and insert.
+  // Native UPDATE/DELETE writers also respect these locks. Preserve the global
+  // transaction lock for appointments and blocks, and historical reschedules.
+  const config=await db.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR SHARE',[tenant]);
+  const s=await db.getAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1 AND id=$2 AND ativo=true FOR SHARE',[tenant,serviceId]);
+  const p=await db.getAsync('SELECT p.id FROM profissionais p JOIN profissional_servicos ps ON ps.profissional_id=p.id AND ps.assinatura_id=p.assinatura_id WHERE p.id=$1 AND p.assinatura_id=$2 AND p.ativo=true AND ps.servico_id=$3 FOR SHARE OF p,ps',[professionalId,tenant,serviceId]);
+  if (!config || !s || !p || !(await times(tenant,body.data,serviceId,professionalId,id || 0,duration,{config,service:s,professional:p})).includes(body.hora)) fail('Horário indisponível. Escolha outro horário.',409);
+  const name=sameService?existing.servico_nome:s.nome;
+  let price=existing?.preco;
+  if(!sameService) {
+   try { price=servicePrice(s.preco); }
+   catch { fail('Serviço indisponível. O estabelecimento precisa revisar o preço.',409); }
+  }
   const canonicalPhone=value=>{const digits=String(value || '').replace(/\D/g,'');return digits.length<=11?'55'+digits:digits;};
   const savedPhone=canonicalPhone(telefone);
+  const finalNow=localNow(clock());
+  if (body.data<finalNow.date || (body.data===finalNow.date && body.hora<=finalNow.time)) fail('Horário indisponível. Escolha outro horário.',409);
   const values=[tenant,nome,savedPhone,name,price,body.data,body.hora,professionalId,duration ?? s.duracao,s.id];
   if(id) {
    const result=await db.runAsync("UPDATE agendamentos SET nome_cliente=$2,telefone=$3,servico_nome=$4,preco=$5,data=$6,hora=$7,profissional_id=$8,duracao=$9,studio_service_id=$10 WHERE assinatura_id=$1 AND id=$11 AND status='confirmado'",[...values,id]);

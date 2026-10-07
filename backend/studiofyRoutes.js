@@ -1,6 +1,7 @@
 const {profileInput,saveProfile,publicProfile}=require('./services/establishment');
 const express=require('express');
-const rateLimit=require('express-rate-limit');
+const {createPublicLimiter}=require('./services/publicLimits');
+const {confirmBooking,recoverBooking}=require('./services/bookingRequests');
 const {createPublicBookings}=require('./services/publicBookings');
 const {financialSummary}=require('./services/finance');
 const {localMoment,appointmentPermissions,appointmentId,transitionAppointment}=require('./services/agenda');
@@ -15,30 +16,48 @@ module.exports=function studioRoutes(db,auth,access) {
   return a;
  };
   const page=a=>({...publicProfile(a),nome:a.barbearia_nome,descricao:a.page_description,telefone:a.telefone,slug:a.public_slug || 'studio-'+a.id,capa:a.cover_image,logo:a.logo_image,cor:a.page_color,antecedencia_cancelamento_minutos:a.cancellation_notice_minutes});
- router.use('/public',rateLimit({windowMs:60000,limit:90,validate:{trustProxy:false}}));
  router.use('/public',(_req,res,next)=>{res.set('Cache-Control','no-store');res.set('Referrer-Policy','no-referrer');next();});
- router.post('/public/reservas/consultar',wrap(async(req,res)=>{
-  res.json(await createPublicBookings(db).get(req.body.token));
+ const readLimit=createPublicLimiter(db,'reservationRead');
+ const recoveryLimit=createPublicLimiter(db,'confirmationRecovery');
+ const cancellationLimit=createPublicLimiter(db,'cancellation');
+ router.post('/public/reservas/consultar',createPublicLimiter(db,'reservationReadGlobal'),wrap(async(req,res)=>{
+  const access=createPublicBookings(db);
+  if(!(await readLimit.check(res,await access.context(req.body.token))))return;
+  res.json(await access.get(req.body.token));
  }));
- router.post('/public/reservas/cancelar',wrap(async(req,res)=>{
+ router.post('/public/reservas/recuperar',createPublicLimiter(db,'confirmationRecoveryGlobal'),async(req,res)=>{
+  try{
+   const result=await db.transaction(c=>recoverBooking(c,req.body.chave,req.body.solicitacao || {},context=>recoveryLimit.check(res,context,c)));
+   if(result)res.json(result);
+  }
+  catch(e){res.status(e.statusCode || 500).json({error:e.statusCode?e.message:'Não foi possível recuperar a confirmação.',...(e.publicCode?{code:e.publicCode}:{})});}
+ });
+ router.post('/public/reservas/cancelar',createPublicLimiter(db,'cancellationGlobal'),wrap(async(req,res)=>{
   if(req.body.confirmar!==true)fail('Confirme o cancelamento antes de continuar.');
+  if(!(await cancellationLimit.check(res,await createPublicBookings(db).context(req.body.token))))return;
   res.json(await db.transaction(c=>createPublicBookings(c).cancel(req.body.token)));
  }));
- router.get('/public/:slug',wrap(async(req,res)=>{
+ const navigationLimit=createPublicLimiter(db,'navigation');
+ const navigationGlobalLimit=createPublicLimiter(db,'navigationGlobal');
+ router.get('/public/:slug',navigationGlobalLimit,wrap(async(req,res)=>{
   const a=await publicTenant(req.params.slug);
+  if(!(await navigationLimit.check(res,{tenantId:a.id})))return;
   const data=await tx(async s=>{await s.ensure(a.id);return {servicos:(await s.services(a.id)).filter(x=>x.ativo),profissionais:(await s.professionals(a.id)).filter(x=>x.ativo)};});
   res.json({...page(a),...data});
  }));
- router.get('/public/:slug/horarios',wrap(async(req,res)=>{
+ router.get('/public/:slug/horarios',navigationGlobalLimit,wrap(async(req,res)=>{
   const a=await publicTenant(req.params.slug);
+  if(!(await navigationLimit.check(res,{tenantId:a.id})))return;
   res.json(await createStudio(db).times(a.id,req.query.data,req.query.servico_id,req.query.profissional_id));
  }));
- router.post('/public/:slug/agendamentos',wrap(async(req,res)=>{
+ const bookingLimit=createPublicLimiter(db,'booking');
+ router.post('/public/:slug/agendamentos',createPublicLimiter(db,'bookingGlobal'),wrap(async(req,res)=>{
   const a=await publicTenant(req.params.slug);
+  if(!(await bookingLimit.check(res,{tenantId:a.id})))return;
   res.status(201).json(await tx(async(s,c)=>{
-   const booking=await s.book(a.id,req.body),publicBookings=createPublicBookings(c);
-   const token=await publicBookings.issue(booking.id);
-   return {token,agendamento:await publicBookings.get(token)};
+   const current=await c.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR SHARE',[a.id]);
+   if(!current || !require('./services/access').avaliarAcessoAssinatura(current).liberado) fail('Página indisponível.',404);
+   return confirmBooking(c,s,a.id,req.body,req.headers['idempotency-key']);
   }));
  }));
  router.use(auth);
@@ -76,11 +95,11 @@ module.exports=function studioRoutes(db,auth,access) {
  }));
  router.put('/servicos/:id',wrap(async(req,res)=>{
   const s=await serviceInput(req.body);
-  const r=await db.runAsync('UPDATE servicos_assinatura SET nome=$1,descricao=$2,preco=$3,duracao=$4,foto=$5,ativo=$6,categoria=COALESCE($9,categoria) WHERE id=$7 AND assinatura_id=$8',[s.nome,s.descricao,s.preco,s.duracao,s.foto,s.ativo,req.params.id,req.assinatura.id,s.categoria??null]);
+  const r=await db.transaction(c=>c.runAsync('UPDATE servicos_assinatura SET nome=$1,descricao=$2,preco=$3,duracao=$4,foto=$5,ativo=$6,categoria=COALESCE($9,categoria) WHERE id=$7 AND assinatura_id=$8',[s.nome,s.descricao,s.preco,s.duracao,s.foto,s.ativo,req.params.id,req.assinatura.id,s.categoria??null]));
   if(!r.changes)fail('Serviço não encontrado.',404);res.json({ok:true});
  }));
  router.delete('/servicos/:id',wrap(async(req,res)=>{
-  const r=await db.runAsync('UPDATE servicos_assinatura SET ativo=false WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]);
+  const r=await db.transaction(c=>c.runAsync('UPDATE servicos_assinatura SET ativo=false WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]));
   if(!r.changes)fail('Serviço não encontrado.',404);res.json({ok:true});
  }));
  async function professional(req,res) {
@@ -110,7 +129,7 @@ module.exports=function studioRoutes(db,auth,access) {
   });
   res.json({ok:true});
  }));
- router.put('/horarios',wrap(async(req,res)=>{const hours=validateHours(req.body.horarios);await db.runAsync('UPDATE assinaturas SET weekly_hours=$1 WHERE id=$2',[JSON.stringify(hours),req.assinatura.id]);res.json({ok:true});}));
+ router.put('/horarios',wrap(async(req,res)=>{const hours=validateHours(req.body.horarios);await db.transaction(c=>c.runAsync('UPDATE assinaturas SET weekly_hours=$1 WHERE id=$2',[JSON.stringify(hours),req.assinatura.id]));res.json({ok:true});}));
  router.post('/bloqueios',wrap(async(req,res)=>{
   const b=req.body;if(!validDate(b.data) || (b.hora && (!time(b.hora) || !time(b.fim) || b.fim<=b.hora)))fail('Bloqueio inválido.');
   await tx(async(s,c)=>{
@@ -118,7 +137,7 @@ module.exports=function studioRoutes(db,auth,access) {
    await c.runAsync('INSERT INTO bloqueios (assinatura_id,data,hora,fim,profissional_id) VALUES ($1,$2,$3,$4,$5)',[req.assinatura.id,b.data,b.hora || null,b.hora?b.fim:null,b.profissional_id || null]);
   });res.status(201).json({ok:true});
  }));
- router.delete('/bloqueios/:id',wrap(async(req,res)=>{await db.runAsync('DELETE FROM bloqueios WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]);res.json({ok:true});}));
+ router.delete('/bloqueios/:id',wrap(async(req,res)=>{await db.transaction(c=>c.runAsync('DELETE FROM bloqueios WHERE id=$1 AND assinatura_id=$2',[req.params.id,req.assinatura.id]));res.json({ok:true});}));
  router.get('/horarios',wrap(async(req,res)=>{
   const serviceId=appointmentId(req.query.servico_id),professionalId=appointmentId(req.query.profissional_id);
   let excludeId=0,duration=null;

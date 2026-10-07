@@ -23,6 +23,15 @@ let enviando = false;
 let monitorLiberacao = null;
 let checkoutUrl = null;
 let planoAtual = null;
+let cadastroRetryUntil = 0, cadastroRateTimer;
+function cadastroRateControls() {
+  clearTimeout(cadastroRateTimer);
+  const waiting = Date.now() < cadastroRetryUntil;
+  submitButton.disabled = enviando || waiting;
+  const retry = document.getElementById('retryConfig');
+  if (retry) retry.disabled = waiting;
+  if (waiting) cadastroRateTimer = setTimeout(cadastroRateControls, Math.min(1000, cadastroRetryUntil - Date.now()));
+}
 
 document.querySelectorAll('[data-toggle-password]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -77,6 +86,7 @@ function getHeaders(extra = {}) {
 }
 
 async function buscarJson(url, options = {}) {
+  if (Date.now() < cadastroRetryUntil) throw Object.assign(new Error('Muitas tentativas. Aguarde um pouco antes de tentar novamente.'), {status: 429});
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
@@ -85,13 +95,23 @@ async function buscarJson(url, options = {}) {
     headers: getHeaders(options.headers || {}),
       signal: controller.signal,
     });
+    if (response.status === 429) {
+      const value = response.headers.get('Retry-After'), seconds = Number(value);
+      const until = value && Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(value);
+      cadastroRetryUntil = Math.max(cadastroRetryUntil, Number.isFinite(until) ? until : Date.now() + 60000);
+      cadastroRateControls();
+      throw Object.assign(new Error('Muitas tentativas. Aguarde ' + Math.max(1, Math.ceil((cadastroRetryUntil - Date.now()) / 1000)) + ' segundos antes de tentar novamente.'), {status:429});
+    }
     let payload;
     try { payload = await response.json(); } catch {
-      throw new Error(`O servidor retornou uma resposta invalida (HTTP ${response.status}). Tente novamente.`);
+      throw new Error(`O servidor retornou uma resposta invalida. Tente novamente.`);
     }
     if (!response.ok) {
-      const message = typeof payload?.error === 'string' ? payload.error : 'Nao foi possivel concluir a solicitacao.';
-      const error = new Error(`${message} (HTTP ${response.status})`);
+      let message = response.status === 409 ? 'Os dados informados pertencem a uma assinatura existente. Entre na sua conta para continuar.' :
+        response.status === 400 ? 'Confira os campos obrigatorios, o email e a senha.' :
+        response.status === 404 ? 'Este cadastro está temporariamente indisponível. Tente novamente mais tarde.' :
+        'O serviço está temporariamente indisponível. Tente novamente em instantes.';
+      const error = new Error(message);
       error.code = payload?.code;
       error.status = response.status;
       throw error;
@@ -212,7 +232,8 @@ async function carregarConfiguracao() {
   try {
     const config = await buscarJson('/api/publico/assinatura-config');
     if (!checkoutUrl) exibirPlano(config.plan);
-    supportNumberLabel.textContent = `Suporte: ${config.suporteNumero || '--'}`;
+    supportNumberLabel.textContent = config.suporteNumero ? `Suporte: ${config.suporteNumero}` : '';
+    cadastroConfigMessage.textContent = '';document.getElementById('retryConfig')?.remove();
     metodoPagamentoInput.innerHTML = '<option value="mercado_pago">Mercado Pago</option>';
     if (!Array.isArray(config.diasVencimento) || !config.diasVencimento.length) throw new Error('Configuracao de vencimento indisponivel.');
     diaVencimentoInput.innerHTML = config.diasVencimento
@@ -223,6 +244,10 @@ async function carregarConfiguracao() {
     }
   } catch (error) {
     cadastroConfigMessage.textContent = `Nao consegui carregar a configuracao do cadastro. ${error.message}`;
+    let retry = document.getElementById('retryConfig');
+    if (!retry) { retry = document.createElement('button');retry.id = 'retryConfig';retry.type = 'button';retry.textContent = 'Tentar novamente';cadastroConfigMessage.after(retry); }
+    retry.onclick = async () => { retry.disabled = true;try { await carregarConfiguracao(); } finally { cadastroRateControls(); } };
+    cadastroRateControls();
   }
 }
 
@@ -232,7 +257,7 @@ metodoPagamentoInput?.addEventListener('change', () => {
 
 assinaturaForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (enviando) return;
+  if (enviando || Date.now() < cadastroRetryUntil) return;
   enviando = true;
   submitButton.disabled = true;
   submitButton.textContent = 'Cadastrando...';
@@ -287,14 +312,14 @@ assinaturaForm.addEventListener('submit', async (event) => {
     mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo. Entre pela página de Login. ' : ''}${error.message}`, true);
   } finally {
     enviando = false;
-    submitButton.disabled = false;
+    cadastroRateControls();
     submitButton.textContent = 'Criar minha conta';
     assinaturaForm.removeAttribute('aria-busy');
   }
 });
 
 assinaturaForm.addEventListener('invalid', () => {
-  mostrarMensagem('Confira os campos obrigatorios, o email e a senha de pelo menos 4 caracteres.');
+  mostrarMensagem('Confira os campos obrigatorios, o email e a senha de 8 a 128 caracteres, sem contar espaços nas extremidades.');
 }, true);
 
 carregarConfiguracao();

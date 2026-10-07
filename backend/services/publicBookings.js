@@ -7,8 +7,9 @@ function tokenHash(token){
  return hash(token);
 }
 function createPublicBookings(db,clock=()=>new Date()){
- async function issue(appointmentId){
-  const token=crypto.randomBytes(32).toString('hex');
+ async function issue(appointmentId,capability){
+  const token=capability ?? crypto.randomBytes(32).toString('hex');
+  tokenHash(token);
   await db.runAsync('INSERT INTO public_booking_access (appointment_id,token_hash) VALUES ($1,$2)',[appointmentId,hash(token)]);
   return token;
  }
@@ -35,6 +36,7 @@ function createPublicBookings(db,clock=()=>new Date()){
    antecedencia_minutos:row.cancellation_notice_minutes};
  }
  async function get(token){return summary(await find(token));}
+ async function context(token){const row=await find(token);return {tenantId:row.assinatura_id,reservationId:row.id};}
  // Called inside the same serialized transaction used by booking and rescheduling.
  async function cancel(token){
   if(db.transaction)return db.transaction(c=>createPublicBookings(c,clock).cancel(token));
@@ -44,6 +46,6 @@ function createPublicBookings(db,clock=()=>new Date()){
   // The existing reminder trigger cancels pending/sending reminders atomically.
   return summary({...row,status:'cancelado'});
  }
- return {issue,get,cancel};
+ return {issue,get,cancel,context};
 }
 module.exports={createPublicBookings};

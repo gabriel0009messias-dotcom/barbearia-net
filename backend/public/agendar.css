@@ -1,0 +1,46 @@
+/* Public booking only: preserve the establishment's accent and the owner panel. */
+.booking-page{--booking-accent-text:#fff}
+.booking-page .primary{background:var(--blue);border-color:var(--blue);color:var(--booking-accent-text)}
+.booking-page .public-shell{width:100%;min-width:0}
+.booking-page .public-title,.booking-page #booking{overflow-wrap:anywhere}
+.booking-page button,.booking-page .button{min-height:44px;white-space:normal}
+.booking-page input,.booking-page select{min-height:48px;font-size:16px;max-width:100%;min-width:0}
+.booking-page label{min-width:0}
+.booking-page #booking .row{display:flex;flex-wrap:wrap}
+.booking-page #booking .row>button{flex:1 1 145px}
+.booking-page #slots{display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:8px}
+.booking-page #slots button{padding:10px 8px}
+.booking-page #slots button.selected{background:var(--blue);border-color:var(--blue);color:var(--booking-accent-text);outline:2px solid currentColor;outline-offset:-5px}
+.booking-page #slots:has(#retrySlots){display:block}
+.booking-page button:disabled{opacity:.55;cursor:not-allowed}
+.booking-page #booking>.grid>.card{grid-template-columns:minmax(0,1fr) auto}
+.booking-page #booking>.grid>.card button{min-width:88px}
+.booking-page #booking>.grid>.card h3{line-height:1.5}
+.booking-page #privateBookingLink{font-size:14px}
+.booking-page .public-title .button{margin:4px}
+.booking-page .cancel-dialog{max-height:90vh;overflow:auto}
+@media(max-width:480px){
+ .booking-page .public-shell{padding:16px}
+ .booking-page .public-topbar{align-items:center;gap:10px}
+ .booking-page .public-topbar .brand{font-size:23px}
+ .booking-page #booking>.grid>.card{display:flex;flex-direction:column;align-items:stretch;gap:8px}
+ .booking-page #booking>.grid>.card button{width:100%;margin-top:4px}
+ .booking-page #booking>.grid>.card .service-photo{width:100%;height:150px;object-fit:cover}
+ .booking-page .public-title h1{font-size:25px}
+}
+
+/* The scrollable page ends above the chat lane, at every scroll position. */
+.booking-page{--chat-lane:84px;height:100dvh;overflow:hidden}
+body.booking-page .public-shell{height:calc(100dvh - var(--chat-lane) - env(safe-area-inset-bottom));overflow-y:auto;overscroll-behavior-y:contain;padding-bottom:24px;scroll-padding:16px}
+.booking-page .sc-launcher{max-width:calc(100vw - 32px);max-height:60px;bottom:calc(12px + env(safe-area-inset-bottom))}
+.booking-page .public-title,.booking-page .message,.booking-page .card,.booking-page .cancel-dialog{overflow-wrap:anywhere;min-width:0}
+.booking-page .cover{background:linear-gradient(135deg,#263746,#121c25)}
+.booking-page .image-fallback{display:grid;place-items:center;background:#1d2c38;color:#a5b6c5;font-size:12px;text-align:center}
+.booking-page .logo.image-fallback{font-size:28px;font-weight:700}
+.booking-page .cancel-dialog{width:min(520px,calc(100vw - 32px));padding:20px;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:12px}
+.booking-page .cancel-dialog .row{align-items:stretch}
+.booking-page .cancel-dialog button{flex:1 1 160px}
+.booking-page input[type=date]{width:100%;max-width:100%;display:block}
+.booking-page [data-rate-disabled]{cursor:wait}
+.booking-page .public-title a,.booking-page .saved-booking button{max-width:100%}
+@media(max-width:480px){.booking-page .public-topbar>button{flex:1 1 140px}.booking-page .card{padding:16px}.booking-page #booking h2{font-size:20px}.booking-page .public-shell .cover{height:170px}}

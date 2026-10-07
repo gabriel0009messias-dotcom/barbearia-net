@@ -37,7 +37,7 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  await page.waitForFunction(()=>!document.querySelector('[name=removeCover]').checked && document.querySelector('#preview .cover').style.backgroundImage.includes('data:image/jpeg'));
  await page.click('[name=removeCover]');await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
  assert.equal((await fetch(base+'/api/studiofy/public/studio-bella').then(r=>r.json())).capa,null);
- await publicPreview.reload();await publicPreview.waitForSelector('#cover');assert.match(await publicPreview.$eval('#cover',el=>getComputedStyle(el).backgroundImage),/studiofy-interior/);await publicPreview.close();
+ await publicPreview.reload();await publicPreview.waitForSelector('#cover');assert.match(await publicPreview.$eval('#cover',el=>getComputedStyle(el).backgroundImage),/linear-gradient/);await publicPreview.close();
  await page.click('[data-section="Dashboard"]');
  const artifacts=path.resolve(__dirname,'../../.tmp/studiofy-preview');fs.mkdirSync(artifacts,{recursive:true});await page.screenshot({path:path.join(artifacts,'dashboard-desktop.png'),fullPage:true});
  const mobile=await browser.newPage();mobile.on('pageerror',e=>errors.push(e.message));await mobile.setViewport({width:390,height:844,isMobile:true,hasTouch:true});await mobile.goto(base+'/agendar/studio-bella');await mobile.waitForSelector('[data-service]');await mobile.screenshot({path:path.join(artifacts,'agendamento-mobile.png'),fullPage:true});

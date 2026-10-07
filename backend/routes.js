@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const { accountView } = require('./services/accountView');
+const { subscriptionView } = require('./services/subscriptionView');
+const { servicePrice, signupPassword, phoneIdentitySql, loginIdentity, legacyHours } = require('./services/signupInput');
 const { transitionAppointment } = require('./services/agenda');
 
 require('./loadEnv');
@@ -141,7 +143,7 @@ function serializarDiasFuncionamento(dias) {
 }
 
 function desserializarDiasFuncionamento(valor) {
-  if (!valor) {
+  if (valor === undefined || valor === null) {
     return diasFuncionamentoPadrao();
   }
 
@@ -161,7 +163,7 @@ function mapearAssinatura(assinatura) {
   const bloqueado = Number(assinatura.bloqueado || 0) === 1;
 
   return {
-    ...assinatura,
+    ...subscriptionView(assinatura),
     nome: assinatura.barbearia_nome,
     plano: assinatura.plano || NOME_PLANO_PADRAO,
     valor_plano: subscriptionPlan(assinatura).amountCents / 100,
@@ -1714,44 +1716,25 @@ router.post('/webhook/evolution', async (req, res) => {
   }
 });
 
-router.post('/bloqueios', requirePainelOuBridge, (req, res) => {
+// All availability writers use the same transaction lock as bookings.
+router.post('/bloqueios', requirePainelOuBridge, async (req, res) => {
   const { data, hora } = req.body;
-
-  if (!data || !hora) {
-    res.status(400).json({ error: 'Data e hora sao obrigatorias.' });
-    return;
-  }
-
-  db.run(
-    "INSERT INTO bloqueios (assinatura_id, data, hora) VALUES ($1, $2, $3)",
-    [req.assinatura.id, data, hora],
-    function onInsert(err) {
-      if (err) {
-        res.status(500).json({ error: err.message });
-        return;
-      }
-
-      res.status(201).json({ id: this.lastID, data, hora });
-    }
-  );
+  const { validDate, time } = require('./services/studiofy');
+  if (!validDate(data) || !time(hora)) return res.status(400).json({ error: 'Informe data e horário válidos.' });
+  try {
+    const result = await db.transaction(c => c.runAsync(
+      'INSERT INTO bloqueios (assinatura_id,data,hora) VALUES ($1,$2,$3)', [req.assinatura.id,data,hora]));
+    res.status(201).json({ id:result.lastID,data,hora });
+  } catch { res.status(500).json({ error:'Não foi possível salvar o bloqueio.' }); }
 });
 
-router.delete('/bloqueios/:id', requirePainelOuBridge, (req, res) => {
-  const { id } = req.params;
-
-  db.run("DELETE FROM bloqueios WHERE id = $1 AND assinatura_id = $2", [id, req.assinatura.id], function onDelete(err) {
-    if (err) {
-      res.status(500).json({ error: err.message });
-      return;
-    }
-
-    if (this.changes === 0) {
-      res.status(404).json({ error: 'Bloqueio nao encontrado.' });
-      return;
-    }
-
-    res.json({ success: true });
-  });
+router.delete('/bloqueios/:id', requirePainelOuBridge, async (req, res) => {
+  try {
+    const result = await db.transaction(c => c.runAsync(
+      'DELETE FROM bloqueios WHERE id=$1 AND assinatura_id=$2', [req.params.id,req.assinatura.id]));
+    if (!result.changes) return res.status(404).json({ error:'Bloqueio nao encontrado.' });
+    res.json({ success:true });
+  } catch { res.status(500).json({ error:'Não foi possível remover o bloqueio.' }); }
 });
 
 router.get('/servicos', (req, res) => {
@@ -1804,7 +1787,7 @@ router.get('/publico/assinatura-config', async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível consultar a configuração do cadastro.' });
   }
 });
 
@@ -1836,7 +1819,7 @@ router.get('/publico/assinaturas/:id/status', async (req, res) => {
       ...montarEstadoPagamento(assinatura),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível consultar o estado da conta.' });
   }
 });
 
@@ -1878,16 +1861,15 @@ router.post('/barbeiro/login', async (req, res) => {
   }
 
   try {
-    const assinaturaEncontrada = await getAsync(
-      `SELECT *
-       FROM assinaturas
-       WHERE telefone = $1
-          OR whatsapp_numero = $2
-          OR email = $3
-       ORDER BY id DESC
-       LIMIT 1`,
-      [identificador, identificador, identificador]
+    const identifier = loginIdentity(identificador);
+    const candidates = await allAsync(
+      `SELECT * FROM assinaturas
+       WHERE ${phoneIdentitySql('telefone')} = $1
+          OR ${phoneIdentitySql('whatsapp_numero')} = $1
+          OR lower(btrim(email)) = $1 ORDER BY id DESC LIMIT 2`, [identifier]
     );
+    if (candidates.length > 1) return res.status(409).json({ error: 'Mais de uma conta corresponde a estes dados. Entre em contato com o suporte.' });
+    const assinaturaEncontrada = candidates[0];
     const assinatura = await sincronizarStatusPorVencimento(assinaturaEncontrada);
 
     if (!assinatura || !verificarSenha(senha, assinatura)) {
@@ -1903,7 +1885,7 @@ router.post('/barbeiro/login', async (req, res) => {
       assinatura: await montarRespostaAssinatura(assinatura.id),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Não foi possível entrar na conta.' });
   }
 });
 
@@ -2069,8 +2051,8 @@ router.get('/publico/business-types', async (_req,res) => {
   catch { res.status(500).json({error:'Não foi possível carregar os tipos de negócio.'}); }
 });
 
-router.post('/publico/assinaturas', async (req, res) => {
-  const {
+router.post('/publico/assinaturas', require('./services/publicLimits').createPublicLimiter(db,'signup'), async (req, res) => {
+  let {
     establishmentName,
     barbeariaNome: legacyName,
     responsavelNome,
@@ -2087,7 +2069,7 @@ router.post('/publico/assinaturas', async (req, res) => {
     horarioFechamento,
     servicos,
   } = req.body;
-  const barbeariaNome = establishmentName ?? legacyName;
+  let barbeariaNome = establishmentName ?? legacyName;
 
   if (!barbeariaNome || !responsavelNome || !telefone || !senha || !metodoPagamento || !diaVencimento) {
     res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
@@ -2099,9 +2081,8 @@ router.post('/publico/assinaturas', async (req, res) => {
     return;
   }
 
-  if (String(senha).length < 4) {
-    res.status(400).json({ error: 'A senha precisa ter pelo menos 4 caracteres.' });
-    return;
+  try { signupPassword(senha); } catch (error) {
+    return res.status(400).json({ error: error.message });
   }
 
   if (!Array.isArray(servicos) || servicos.length === 0) {
@@ -2109,7 +2090,7 @@ router.post('/publico/assinaturas', async (req, res) => {
     return;
   }
 
-  const dia = Number.parseInt(diaVencimento, 10);
+  const dia = ['number','string'].includes(typeof diaVencimento) && /^\d+$/.test(String(diaVencimento)) ? Number(diaVencimento) : NaN;
 
   if (!DIAS_VENCIMENTO.includes(dia)) {
     res.status(400).json({ error: 'Dia de vencimento invalido.' });
@@ -2122,10 +2103,22 @@ router.post('/publico/assinaturas', async (req, res) => {
   }
 
   try {
+    if (typeof email !== 'string' || typeof telefone !== 'string' || (whatsappNumero !== undefined && typeof whatsappNumero !== 'string')) {
+      throw Object.assign(new Error('Informe e-mail e telefones válidos.'), { statusCode:400 });
+    }
+    if (![telefone,whatsappNumero || telefone].every(value => /^[+()\d.\s-]+$/.test(value.trim()))) {
+      throw Object.assign(new Error('Informe telefones válidos, com DDD.'), { statusCode:400 });
+    }
     const trialIdentities = identities(req.body);
+    email = trialIdentities.email;
+    telefone = require('./services/trial').normalizePhone(telefone);
+    whatsappNumero = require('./services/trial').normalizePhone(whatsappNumero || telefone);
+    const hours = legacyHours(req.body);
     const {profileInput,saveProfile}=require('./services/establishment');
     const {serviceInput,image,text,fail}=require('./services/studiofy');
-    if(!text(barbeariaNome) || !text(responsavelNome))fail('Informe estabelecimento e responsável.');
+    barbeariaNome = text(barbeariaNome);
+    responsavelNome = text(responsavelNome);
+    if(!barbeariaNome || !responsavelNome)fail('Informe estabelecimento e responsável.');
     const profile=await profileInput(db,req.body);
     if(establishmentName!==undefined && (!profile.businessType || !profile.city || !profile.state))fail('Informe tipo de negócio, cidade e estado.');
     const logo=await image(req.body.logo),cover=await image(req.body.cover);
@@ -2138,10 +2131,10 @@ router.post('/publico/assinaturas', async (req, res) => {
     const assinaturaExistente = await getAsync(
       `SELECT *
        FROM assinaturas
-       WHERE telefone = $1
-          OR whatsapp_numero = $2
-          OR (email <> '' AND email = $3)
-          OR barbearia_nome = $4
+       WHERE ${phoneIdentitySql('telefone')} IN ($1,$2)
+          OR ${phoneIdentitySql('whatsapp_numero')} IN ($1,$2)
+          OR lower(btrim(email)) = $3
+          OR btrim(barbearia_nome) = $4
        LIMIT 1`,
       [telefone, whatsappNumero || telefone, email || '', barbeariaNome]
     );
@@ -2154,10 +2147,20 @@ router.post('/publico/assinaturas', async (req, res) => {
     }
 
     const suporteNumero = await getConfiguracao('suporte_numero');
-    const diasSerializados = serializarDiasFuncionamento(diasFuncionamento);
+    const diasSerializados = hours.days;
     const credenciais = criarCredenciaisSenha(senha);
 
     const result = await db.transaction(async connection => {
+      // The optimistic check above provides an early response; repeat it under
+      // the write lock so concurrent canonical identities/names cannot slip in.
+      const duplicate = await connection.getAsync(
+        `SELECT id FROM assinaturas
+         WHERE ${phoneIdentitySql('telefone')} IN ($1,$2)
+            OR ${phoneIdentitySql('whatsapp_numero')} IN ($1,$2)
+            OR lower(btrim(email))=$3 OR btrim(barbearia_nome)=$4 LIMIT 1`,
+        [telefone,whatsappNumero,email,barbeariaNome]);
+      if (duplicate) throw Object.assign(new Error('Os dados informados pertencem a uma assinatura existente. Nenhum novo cadastro foi criado.'),
+        { statusCode:409,code:'ASSINATURA_EXISTENTE' });
       const result = await connection.runAsync(
         `INSERT INTO assinaturas (
           barbearia_nome,
@@ -2204,10 +2207,10 @@ router.post('/publico/assinaturas', async (req, res) => {
           null,
           null,
           diasSerializados,
-          horarioAbertura || '08:00',
-          horarioAlmocoInicio || '12:00',
-          horarioAlmocoFim || '13:00',
-          horarioFechamento || '18:00',
+          hours.opening,
+          hours.lunchStart,
+          hours.lunchEnd,
+          hours.closing,
           credenciais.hash,
           credenciais.salt,
           NOME_PLANO_PADRAO,
@@ -2244,7 +2247,10 @@ router.post('/publico/assinaturas', async (req, res) => {
       assinatura: assinaturaCriada,
     });
   } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.publicMessage || ([400,409].includes(error.statusCode) ? error.message : 'Nao foi possivel salvar o cadastro. Tente novamente.') });
+    res.status(error.statusCode || 500).json({
+      error: error.publicMessage || ([400,409].includes(error.statusCode) ? error.message : 'Nao foi possivel salvar o cadastro. Tente novamente.'),
+      ...(error.code === 'ASSINATURA_EXISTENTE' ? { code:error.code } : {}),
+    });
   }
 });
 
@@ -2513,7 +2519,7 @@ router.get('/publico/assinaturas/:id/acesso', requireContaOuBridge, async (req, 
       assinatura: mapearAssinatura(assinatura),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível consultar o acesso da conta.' });
   }
 });
 
@@ -2537,7 +2543,7 @@ router.get('/publico/assinaturas/:id', requireContaOuBridge, async (req, res) =>
       servicos: await listarServicosDaAssinatura(id),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível consultar a conta.' });
   }
 });
 
@@ -2567,48 +2573,33 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
       return;
     }
 
-    await runAsync(
-      `UPDATE assinaturas
-       SET dias_funcionamento = $1,
-           horario_abertura = $2,
-           horario_almoco_inicio = $3,
-           horario_almoco_fim = $4,
-           horario_fechamento = $5,
-           localizacao_cidade = $6,
-           localizacao_rua = $7,
-           localizacao_referencia = $8,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $9`,
-      [
-        serializarDiasFuncionamento(diasFuncionamento),
-        horarioAbertura || assinatura.horario_abertura || '08:00',
-        horarioAlmocoInicio || assinatura.horario_almoco_inicio || '12:00',
-        horarioAlmocoFim || assinatura.horario_almoco_fim || '13:00',
-        horarioFechamento || assinatura.horario_fechamento || '18:00',
-        String(localizacaoCidade || assinatura.localizacao_cidade || '').trim(),
-        String(localizacaoRua || assinatura.localizacao_rua || '').trim(),
-        String(localizacaoReferencia || assinatura.localizacao_referencia || '').trim(),
-        id,
-      ]
-    );
-
-    if (Array.isArray(servicos)) {
-      const servicosValidos = servicos
-        .map((item) => ({
-          nome: String(item.nome || '').trim(),
-          preco: Number(item.preco),
-        }))
-        .filter((item) => item.nome && Number.isFinite(item.preco) && item.preco > 0);
-
-      if (!servicosValidos.length) {
-        res.status(400).json({ error: 'Cadastre pelo menos um servico com preco valido.' });
-        return;
-      }
-
-      await db.transaction(async c => {
+    const hours = legacyHours(req.body, assinatura);
+    const { text, fail } = require('./services/studiofy');
+    const location = [
+      ['localizacaoCidade','localizacao_cidade',100],
+      ['localizacaoRua','localizacao_rua',250],
+      ['localizacaoReferencia','localizacao_referencia',250],
+    ].map(([input,stored,max]) => text(req.body[input] === undefined ? (assinatura[stored] || '') : req.body[input],max));
+    let validServices;
+    if (servicos !== undefined) {
+      if (!Array.isArray(servicos) || !servicos.length || servicos.length > 100) fail('Cadastre entre 1 e 100 serviços válidos.');
+      validServices = servicos.map(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) fail('Serviço inválido.');
+        const nome = text(item.nome);
+        if (!nome) fail('Informe o nome do serviço.');
+        return { nome, preco: servicePrice(item.preco) };
+      });
+    }
+    await db.transaction(async c => {
+      await c.runAsync(`UPDATE assinaturas SET dias_funcionamento=$1,horario_abertura=$2,
+        horario_almoco_inicio=$3,horario_almoco_fim=$4,horario_fechamento=$5,
+        localizacao_cidade=$6,localizacao_rua=$7,localizacao_referencia=$8,
+        updated_at=CURRENT_TIMESTAMP WHERE id=$9`,
+        [hours.days,hours.opening,hours.lunchStart,hours.lunchEnd,hours.closing,...location,id]);
+      if (validServices) {
         const existing = await c.allAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1', [id]);
         const retained = [];
-        for (const servico of servicosValidos) {
+        for (const servico of validServices) {
           const old = existing.find(item => item.nome === servico.nome);
           if (old) {
             await c.runAsync('UPDATE servicos_assinatura SET preco=$1,ativo=true WHERE id=$2 AND assinatura_id=$3', [servico.preco, old.id, id]);
@@ -2621,12 +2612,12 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
           }
         }
         for (const old of existing) if (!retained.includes(old.id)) await c.runAsync('UPDATE servicos_assinatura SET ativo=false WHERE assinatura_id=$1 AND id=$2', [id,old.id]);
-      });
-    }
+      }
+    });
 
     res.json(await montarRespostaAssinatura(id));
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Não foi possível salvar a configuração.' });
   }
 });
 

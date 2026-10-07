@@ -61,6 +61,24 @@ test('upgrade Studiofy preserva contas, serviços, pagamentos e reservas anterio
    await assert.rejects(c.query('UPDATE agendamentos SET preco=1 WHERE id=$1',[id]),error=>error.code==='23514');
   }
   assert.deepEqual((await c.query('SELECT * FROM agendamentos ORDER BY id')).rows,beforeFinal);
+  const before012={};
+  for(const table of tables)before012[table]=(await c.query('SELECT * FROM "'+table+'" ORDER BY 1')).rows;
+  await c.query('BEGIN');await c.query(fs.readFileSync(path.join(__dirname,'../database/migrations/012_public_booking_requests.sql'),'utf8'));await c.query('COMMIT');
+  for(const table of tables)assert.deepEqual((await c.query('SELECT * FROM "'+table+'" ORDER BY 1')).rows,before012[table], '012 preserves '+table);
+  assert.equal((await c.query("SELECT count(*)::int AS n FROM information_schema.columns WHERE table_schema=$1 AND column_name='bloqueio_admin'",[environment.schema])).rows[0].n,0);
+  const indices=(await c.query('SELECT indexname FROM pg_indexes WHERE schemaname=$1',[environment.schema])).rows.map(r=>r.indexname);
+  for(const name of ['public_booking_requests_pkey','public_booking_request_recovery','public_request_limits_pkey','public_request_limits_expiry'])assert.ok(indices.includes(name),name);
+  const hash='a'.repeat(64),requestHash='b'.repeat(64);
+  await c.query('INSERT INTO public_booking_requests(assinatura_id,key_hash,request_hash,appointment_id) VALUES(42,$1,$2,94)',[hash,requestHash]);
+  await assert.rejects(c.query('INSERT INTO public_booking_requests(assinatura_id,key_hash,request_hash,appointment_id) VALUES(42,$1,$2,94)',[hash,requestHash]),e=>e.code==='23505');
+  await assert.rejects(c.query('INSERT INTO public_booking_requests(assinatura_id,key_hash,request_hash,appointment_id) VALUES(42,$1,$2,94)',['invalid',requestHash]),e=>e.code==='23514');
+  await assert.rejects(c.query('INSERT INTO public_booking_requests(assinatura_id,key_hash,request_hash,appointment_id) VALUES(999,$1,$2,94)',['c'.repeat(64),requestHash]),e=>e.code==='23503');
+  await assert.rejects(c.query('INSERT INTO public_booking_requests(assinatura_id,key_hash,request_hash,appointment_id) VALUES(42,$1,$2,999)',['c'.repeat(64),requestHash]),e=>e.code==='23503');
+  await c.query('DELETE FROM agendamentos WHERE id=94');
+  assert.equal((await c.query('SELECT count(*)::int AS n FROM public_booking_requests')).rows[0].n,0);
+  await c.query('INSERT INTO public_request_limits(key_hash,window_start,hits,expires_at) VALUES($1,1,1,CURRENT_TIMESTAMP)',[hash]);
+  await assert.rejects(c.query('INSERT INTO public_request_limits(key_hash,window_start,hits,expires_at) VALUES($1,1,1,CURRENT_TIMESTAMP)',[hash]),e=>e.code==='23505');
+  await assert.rejects(c.query('INSERT INTO public_request_limits(key_hash,window_start,hits,expires_at) VALUES($1,2,1,CURRENT_TIMESTAMP)',['bad']),e=>e.code==='23514');
  }finally{c.release();}
 });
 
@@ -94,7 +112,7 @@ test('migrations e importacao preservam dados, IDs e pagamentos', async t => {
     await Promise.all([migrate(pool), migrate(pool)]);
     assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(row => row.name), [
       '001_current_backend.sql', '002_professional_plan_price.sql', '003_account_delete_relations.sql',
-      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql', '009_studiofy_chat.sql', '011_appointment_final_states.sql',
+      '004_manual_access.sql', '005_studiofy.sql', '006_public_cancellation.sql', '007_multisegment.sql', '008_seven_day_trial.sql', '009_studiofy_chat.sql', '011_appointment_final_states.sql', '012_public_booking_requests.sql',
     ]);
     await pool.query("UPDATE configuracoes SET valor='preservar' WHERE chave='admin_pin'");
     await migrate(pool);

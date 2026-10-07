@@ -1,0 +1,9 @@
+/* Signup only; keep completed login and recovery screens unchanged. */
+.auth-signup .auth-layout,.auth-signup .auth-form-side,.auth-signup .auth-signup-content,.auth-signup .auth-fields,.auth-signup .auth-fieldset,.auth-signup label{min-width:0}
+.auth-signup .auth-fieldset{margin-inline:0;max-width:100%}
+.auth-signup .form-message,.auth-signup .auth-plan,.auth-signup .auth-footer,.auth-signup #assinaturaExistenteActions{overflow-wrap:anywhere}
+.auth-signup input,.auth-signup select{max-width:100%;min-width:0;min-height:44px}
+.auth-signup button,.auth-signup .auth-back{min-height:44px}
+.auth-signup .auth-header,.auth-signup .auth-footer{flex-wrap:wrap;gap:12px}
+.auth-signup input[type=file]{width:100%}
+@media(max-width:390px){.auth-signup .auth-showcase{padding-inline:12px}.auth-signup .demo-orbit{width:260px;height:260px}.auth-signup .demo-phone{max-width:100%}.auth-signup .auth-form-side{padding-inline:16px}.auth-signup .auth-fields{grid-template-columns:minmax(0,1fr)}}
