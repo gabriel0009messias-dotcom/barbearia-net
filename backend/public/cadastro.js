@@ -13,6 +13,9 @@ const pixCopiaColaLabel = document.getElementById('pixCopiaColaLabel');
 const diaVencimentoInput = document.getElementById('diaVencimentoInput');
 const assinaturaForm = document.getElementById('assinaturaForm');
 const assinaturaExistenteActions = document.getElementById('assinaturaExistenteActions');
+const trialUtilizadoActions = document.getElementById('trialUtilizadoActions');
+const contratarSemTrialButton = document.getElementById('contratarSemTrialButton');
+let contratarSemTrial = false;
 const assinaturaFormMessage = document.getElementById('assinaturaFormMessage');
 
 const submitButton = assinaturaForm.querySelector('button[type="submit"]');
@@ -28,6 +31,7 @@ function cadastroRateControls() {
   clearTimeout(cadastroRateTimer);
   const waiting = Date.now() < cadastroRetryUntil;
   submitButton.disabled = enviando || waiting;
+  contratarSemTrialButton.disabled = enviando || waiting;
   const retry = document.getElementById('retryConfig');
   if (retry) retry.disabled = waiting;
   if (waiting) cadastroRateTimer = setTimeout(cadastroRateControls, Math.min(1000, cadastroRetryUntil - Date.now()));
@@ -107,7 +111,11 @@ async function buscarJson(url, options = {}) {
       throw new Error(`O servidor retornou uma resposta invalida. Tente novamente.`);
     }
     if (!response.ok) {
-      let message = response.status === 409 ? 'Os dados informados pertencem a uma assinatura existente. Entre na sua conta para continuar.' :
+      let message = response.status === 409 ? (
+        payload?.code === 'ASSINATURA_EXISTENTE' ? 'Os dados informados pertencem a uma assinatura existente. Entre na sua conta ou recupere sua senha para continuar.' :
+        payload?.code === 'TRIAL_JA_UTILIZADO' ? 'Os 7 dias grátis já foram utilizados com estes dados. Você pode contratar sem um novo teste grátis.' :
+        'Não foi possível concluir esta solicitação. Confira os dados ou entre em contato com o suporte.'
+      ) :
         response.status === 400 ? 'Confira os campos obrigatorios, o email e a senha.' :
         response.status === 404 ? 'Este cadastro está temporariamente indisponível. Tente novamente mais tarde.' :
         'O serviço está temporariamente indisponível. Tente novamente em instantes.';
@@ -255,16 +263,25 @@ metodoPagamentoInput?.addEventListener('change', () => {
   metodoPagamentoInput.value = 'mercado_pago';
 });
 
+contratarSemTrialButton.addEventListener('click', () => {
+  if (enviando || Date.now() < cadastroRetryUntil || trialUtilizadoActions.hidden) return;
+  contratarSemTrial = true;
+  try { assinaturaForm.requestSubmit(); } finally { contratarSemTrial = false; }
+});
+
 assinaturaForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (enviando || Date.now() < cadastroRetryUntil) return;
   enviando = true;
+  const cadastroSemTrial = contratarSemTrial;
   submitButton.disabled = true;
   submitButton.textContent = 'Cadastrando...';
   assinaturaForm.setAttribute('aria-busy', 'true');
   limparMonitorLiberacao();
   renderizarCheckout();
   assinaturaExistenteActions.hidden = true;
+  trialUtilizadoActions.hidden = true;
+  contratarSemTrialButton.disabled = true;
   mostrarMensagem('Salvando seu cadastro...');
   let cadastroSalvo = false;
 
@@ -276,6 +293,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         establishmentName: document.getElementById('barbeariaNomeInput').value.trim(),
+        contratarSemTrial: cadastroSemTrial,
         businessType: document.getElementById('businessTypeInput').value,
         city: document.getElementById('cityInput').value.trim(),
         state: document.getElementById('stateInput').value.trim(),
@@ -302,12 +320,26 @@ assinaturaForm.addEventListener('submit', async (event) => {
     authToken = null;
     gravarStorage(TOKEN_STORAGE_KEY, null);
     salvarCadastroPendente({ assinaturaId: resposta.assinatura.id, email: emailCadastro });
+    if (cadastroSemTrial) {
+      if (resposta.trialIniciado !== false) throw new Error('Não foi possível confirmar a contratação sem teste. Entre na sua conta para consultar o cadastro.');
+      const checkout = await buscarJson(`/api/publico/assinaturas/${resposta.assinatura.id}/checkout`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ senha: senhaCadastro }),
+      });
+      exibirPlano(checkout.plan);
+      if (!checkout.checkoutUrl) throw new Error('O pagamento está temporariamente indisponível. Entre na sua conta para continuar.');
+      renderizarCheckout(checkout.checkoutUrl);
+      mostrarMensagem('Conta criada sem novo teste grátis. Confirme o pagamento para liberar o acesso.');
+      iniciarMonitorLiberacao(resposta.assinatura.id, emailCadastro, senhaCadastro);
+      return;
+    }
     mostrarMensagem('Seu teste grátis de 7 dias começou. Entrando no Studiofy...');
     await fazerLoginAutomatico(emailCadastro, senhaCadastro);
   } catch (error) {
     if (!cadastroSalvo && error.status === 409) {
       gravarStorage(PENDING_SIGNUP_STORAGE_KEY, null);
-      assinaturaExistenteActions.hidden = false;
+      assinaturaExistenteActions.hidden = error.code !== 'ASSINATURA_EXISTENTE';
+      trialUtilizadoActions.hidden = error.code !== 'TRIAL_JA_UTILIZADO';
     }
     mostrarMensagem(`${cadastroSalvo ? 'Cadastro salvo. Entre pela página de Login. ' : ''}${error.message}`, true);
   } finally {

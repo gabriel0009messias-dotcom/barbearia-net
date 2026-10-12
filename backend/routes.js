@@ -2071,6 +2071,10 @@ router.post('/publico/assinaturas', require('./services/publicLimits').createPub
   } = req.body;
   let barbeariaNome = establishmentName ?? legacyName;
 
+  if (req.body.contratarSemTrial !== undefined && typeof req.body.contratarSemTrial !== 'boolean') {
+    return res.status(400).json({ error: 'Informe uma opção de contratação válida.' });
+  }
+
   if (!barbeariaNome || !responsavelNome || !telefone || !senha || !metodoPagamento || !diaVencimento) {
     res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
     return;
@@ -2134,9 +2138,8 @@ router.post('/publico/assinaturas', require('./services/publicLimits').createPub
        WHERE ${phoneIdentitySql('telefone')} IN ($1,$2)
           OR ${phoneIdentitySql('whatsapp_numero')} IN ($1,$2)
           OR lower(btrim(email)) = $3
-          OR btrim(barbearia_nome) = $4
        LIMIT 1`,
-      [telefone, whatsappNumero || telefone, email || '', barbeariaNome]
+      [telefone, whatsappNumero || telefone, email || '']
     );
 
     if (assinaturaExistente) {
@@ -2152,13 +2155,13 @@ router.post('/publico/assinaturas', require('./services/publicLimits').createPub
 
     const result = await db.transaction(async connection => {
       // The optimistic check above provides an early response; repeat it under
-      // the write lock so concurrent canonical identities/names cannot slip in.
+      // the write lock so concurrent canonical identities cannot slip in.
       const duplicate = await connection.getAsync(
         `SELECT id FROM assinaturas
          WHERE ${phoneIdentitySql('telefone')} IN ($1,$2)
             OR ${phoneIdentitySql('whatsapp_numero')} IN ($1,$2)
-            OR lower(btrim(email))=$3 OR btrim(barbearia_nome)=$4 LIMIT 1`,
-        [telefone,whatsappNumero,email,barbeariaNome]);
+            OR lower(btrim(email))=$3 LIMIT 1`,
+        [telefone,whatsappNumero,email]);
       if (duplicate) throw Object.assign(new Error('Os dados informados pertencem a uma assinatura existente. Nenhum novo cadastro foi criado.'),
         { statusCode:409,code:'ASSINATURA_EXISTENTE' });
       const result = await connection.runAsync(
@@ -2217,7 +2220,11 @@ router.post('/publico/assinaturas', require('./services/publicLimits').createPub
         ]
       );
 
-      await startTrial(connection, result.lastID, trialIdentities);
+      // Only an explicit paid signup bypasses trial creation. Existing account
+      // identities remain protected by both checks above; claims are preserved.
+      if (req.body.contratarSemTrial !== true) {
+        await startTrial(connection, result.lastID, trialIdentities);
+      }
 
       for (const servico of servicosValidos) {
         await connection.runAsync(
@@ -2242,14 +2249,17 @@ router.post('/publico/assinaturas', require('./services/publicLimits').createPub
     const assinaturaCriada = await montarRespostaAssinatura(result.lastID);
 
     res.status(201).json({
-      mensagem: 'Cadastro concluído. Seu teste grátis de 7 dias começou.',
+      mensagem: req.body.contratarSemTrial === true
+        ? 'Cadastro concluído. Confirme o pagamento para liberar o acesso.'
+        : 'Cadastro concluído. Seu teste grátis de 7 dias começou.',
+      trialIniciado: req.body.contratarSemTrial !== true,
       pix: assinaturaCriada.pix,
       assinatura: assinaturaCriada,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({
       error: error.publicMessage || ([400,409].includes(error.statusCode) ? error.message : 'Nao foi possivel salvar o cadastro. Tente novamente.'),
-      ...(error.code === 'ASSINATURA_EXISTENTE' ? { code:error.code } : {}),
+      ...(['ASSINATURA_EXISTENTE', 'TRIAL_JA_UTILIZADO'].includes(error.code) ? { code:error.code } : {}),
     });
   }
 });

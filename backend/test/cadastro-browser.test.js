@@ -30,12 +30,14 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
     assert.equal(req.body.servicos[0].duracao,45);
     assert.equal(req.body.servicos[0].categoria,'Unhas');
     if (failure === 'existing') return res.status(409).json({ code: 'ASSINATURA_EXISTENTE', error: 'Os dados informados pertencem a uma assinatura existente.', assinatura: { id: 17 } });
+    if (failure === 'trial' && req.body.contratarSemTrial !== true) return res.status(409).json({ code: 'TRIAL_JA_UTILIZADO' });
+    if (failure === 'unknown-conflict') return res.status(409).json({ error: 'Conflito fictício' });
     if (failure === 'signup') return res.status(400).json({ error: 'Preencha todos os campos obrigatorios.' });
     if (failure === 'missing') return res.status(404).json({ error: 'Rota nao encontrada.' });
     if (failure === 'server') return res.status(500).json({ error: 'Nao foi possivel salvar o cadastro. Tente novamente.' });
     if (failure === 'html') return res.status(502).type('html').send('<h1>Bad Gateway</h1>');
     if (failure === 'json') return res.type('json').send('invalid-json');
-    res.status(201).json({ assinatura: { id: 17 } });
+    res.status(201).json({ assinatura: { id: 17 }, trialIniciado: req.body.contratarSemTrial !== true });
   });
   app.post('/api/publico/assinaturas/17/checkout', (req, res) => {
     checkoutCalls++;
@@ -93,6 +95,7 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
   });
   for (const [scenario, expected] of [
     ['existing', 'assinatura existente'],
+    ['trial', '7 dias grátis já foram utilizados'], ['unknown-conflict', 'Confira os dados'],
     ['signup', 'Confira os campos'], ['missing', 'temporariamente indisponível'], ['server', 'temporariamente indisponível'],
     ['html', 'resposta invalida'], ['json', 'resposta invalida'],
     ['login', 'Cadastro salvo.'],
@@ -118,11 +121,33 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
           assert.equal(await page.$eval('#assinaturaExistenteActions a', element => element.getAttribute('href')), '/login.html');
           assert.equal(await page.$eval('#gatewayCheckoutButton', element => element.hidden), true);
           assert.equal(await page.evaluate(() => localStorage.getItem('barbearia_pending_signup')), null);
+          assert.equal(await page.$eval('#trialUtilizadoActions', element => element.hidden), true);
+          assert.equal(await page.$eval('#assinaturaExistenteActions a[href="/recuperar-senha.html"]', element => element.textContent), 'Recuperar senha');
+        }
+        if (scenario === 'trial' || scenario === 'unknown-conflict') {
+          assert.equal(await page.$eval('#assinaturaExistenteActions', element => element.hidden), true);
+          assert.equal(await page.$eval('#trialUtilizadoActions', element => element.hidden), scenario !== 'trial');
+          assert.doesNotMatch(await page.$eval('#assinaturaFormMessage', element => element.textContent), /assinatura existente|Entre na sua conta/);
         }
         assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('test-password')), false);
       } finally { await page.close(); failure = null; }
     });
   }
+  await t.test('trial usado oferece contratação explícita e checkout sem prometer novo trial', async () => {
+    failure = 'trial'; const page = await openForm(); const priorCheckouts = checkoutCalls;
+    try {
+      await page.click('button[type=submit]');
+      await page.waitForFunction(() => !document.querySelector('#trialUtilizadoActions').hidden);
+      assert.equal(checkoutCalls, priorCheckouts);
+      await page.click('#contratarSemTrialButton');
+      await page.waitForFunction(() => document.querySelector('#assinaturaFormMessage').textContent.includes('Conta criada sem novo teste'));
+      assert.equal(checkoutCalls, priorCheckouts + 1);
+      assert.equal(page.url(), `${base}/cadastro.html`);
+      assert.equal(await page.$eval('#gatewayCheckoutButton', element => element.hidden), false);
+      assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('test-password')), false);
+      assert.equal(await page.$eval('#trialUtilizadoActions', element => element.hidden), true);
+    } finally { await page.close(); failure = null; }
+  });
   await t.test('storage bloqueado nao impede cadastro e redirecionamento', async () => {
     const page = await openForm({ storageBlocked: true });
     try {

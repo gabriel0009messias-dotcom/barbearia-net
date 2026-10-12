@@ -124,18 +124,18 @@ test('Cadastro etapa 1: DTO, entradas, disputa de catálogo e integração públ
     }
   });
 
-  await t.test('duplicidade por nome normalizado é revalidada sob lock com identidades distintas', async subtest => {
+  await t.test('duplicidade por email normalizado é revalidada sob lock', async subtest => {
     const original = db.get, waiting = [];
     subtest.mock.method(db, 'get', function (sql, params, callback) {
-      if (!sql.includes('OR btrim(barbearia_nome) = $4')) return original.call(db, sql, params, callback);
+      if (!sql.includes('OR lower(btrim(email)) = $3')) return original.call(db, sql, params, callback);
       return original.call(db, sql, params, (error, row) => {
         waiting.push(() => callback(error, row));
         if (waiting.length === 2) waiting.forEach(deliver => deliver());
       });
     });
-    const results = await Promise.all([1, 2].map(() => request('/publico/assinaturas', signupBody({ establishmentName: '  Nome simultâneo  ' }))));
+    const results = await Promise.all([1, 2].map(() => request('/publico/assinaturas', signupBody({ email: ' CONCURRENT@example.test ' }))));
     assert.deepEqual(results.map(r => r.status).sort(), [201, 409]);
-    assert.equal((await db.getAsync("SELECT count(*)::int AS n FROM assinaturas WHERE barbearia_nome='Nome simultâneo'")).n, 1);
+    assert.equal((await db.getAsync("SELECT count(*)::int AS n FROM assinaturas WHERE email='concurrent@example.test'")).n, 1);
     assert.equal(results.find(r => r.status === 409).data.code, 'ASSINATURA_EXISTENTE');
   });
 

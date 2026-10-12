@@ -53,7 +53,7 @@ test('cadastro novo nao assume contratos existentes', async t => {
     payments: await db.allAsync('SELECT * FROM mercado_pago_payments WHERE assinatura_id=$1', [id]),
     services: await db.allAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1', [id]),
   });
-  for (const field of ['telefone', 'whatsappNumero', 'email', 'barbeariaNome']) {
+  for (const field of ['telefone', 'whatsappNumero', 'email']) {
     await t.test(`coincidencia apenas em ${field} retorna 409 sem alterar contrato ou historico`, async () => {
       const before = await snapshot();
       const response = await post('/publico/assinaturas', { ...fresh, [field]: old[field] });

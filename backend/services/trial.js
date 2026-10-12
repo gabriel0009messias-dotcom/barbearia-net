@@ -27,7 +27,7 @@ function identities(body) {
 async function startTrial(connection, id, keys) {
   for (const hash of keys.hashes) {
     const result = await connection.runAsync('INSERT INTO trial_claims (identity_hash) VALUES ($1) ON CONFLICT DO NOTHING', [hash]);
-    if (!result.changes) throw Object.assign(new Error('Estes dados já utilizaram o teste grátis. Entre na sua conta para assinar.'), { statusCode: 409 });
+    if (!result.changes) throw Object.assign(new Error('Os 7 dias grátis já foram utilizados com estes dados. Você pode contratar sem um novo teste grátis.'), { statusCode: 409, code: 'TRIAL_JA_UTILIZADO' });
   }
   // Database clock, captured once; interval is 168 hours even across DST changes.
   const result = await connection.runAsync(`WITH moment AS (SELECT clock_timestamp() AS at)
