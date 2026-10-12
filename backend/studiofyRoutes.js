@@ -1,5 +1,8 @@
 const {profileInput,saveProfile,publicProfile}=require('./services/establishment');
 const express=require('express');
+const {phoneIdentitySql}=require('./services/signupInput');
+const {normalizePhone}=require('./services/trial');
+const {publicService,publicProfessional}=require('./services/publicCatalog');
 const {createPublicLimiter}=require('./services/publicLimits');
 const {confirmBooking,recoverBooking}=require('./services/bookingRequests');
 const {createPublicBookings}=require('./services/publicBookings');
@@ -8,7 +11,7 @@ const {localMoment,appointmentPermissions,appointmentId,transitionAppointment}=r
 const {createStudio,serviceInput,image,validateHours,validDate,time,text,fail,effectiveHours}=require('./services/studiofy');
 module.exports=function studioRoutes(db,auth,access) {
  const router=express.Router();
- const wrap=fn=>async(req,res)=>{try{await fn(req,res);}catch(e){res.status(e.code==='23505'?409:e.statusCode || 500).json({error:e.code==='23505'?'Horário ou link já utilizado.':e.statusCode?e.message:'Não foi possível concluir a operação.'});}};
+ const wrap=fn=>async(req,res)=>{try{await fn(req,res);}catch(e){res.status(e.code==='23505'?409:e.statusCode || 500).json({error:e.code==='23505'?'Horário ou link já utilizado.':e.statusCode?e.message:'Não foi possível concluir a operação.',...(e.publicCode==='TELEFONE_JA_UTILIZADO'?{code:e.publicCode}:{})});}};
  const tx=fn=>db.transaction(c=>fn(createStudio(c),c));
  const publicTenant=async slug=>{
   const a=await db.getAsync("SELECT * FROM assinaturas WHERE COALESCE(public_slug,'studio-' || id)=$1",[slug]);
@@ -42,7 +45,7 @@ module.exports=function studioRoutes(db,auth,access) {
  router.get('/public/:slug',navigationGlobalLimit,wrap(async(req,res)=>{
   const a=await publicTenant(req.params.slug);
   if(!(await navigationLimit.check(res,{tenantId:a.id})))return;
-  const data=await tx(async s=>{await s.ensure(a.id);return {servicos:(await s.services(a.id)).filter(x=>x.ativo),profissionais:(await s.professionals(a.id)).filter(x=>x.ativo)};});
+  const data=await tx(async s=>{await s.ensure(a.id);return {servicos:(await s.services(a.id)).filter(x=>x.ativo).map(publicService),profissionais:(await s.professionals(a.id)).filter(x=>x.ativo).map(publicProfessional)};});
   res.json({...page(a),...data});
  }));
  router.get('/public/:slug/horarios',navigationGlobalLimit,wrap(async(req,res)=>{
@@ -118,12 +121,20 @@ module.exports=function studioRoutes(db,auth,access) {
  }
  router.post('/profissionais',wrap(professional));router.put('/profissionais/:id',wrap(professional));
  router.put('/pagina',wrap(async(req,res)=>{
-  const b=req.body,nome=text(b.nome),descricao=text(b.descricao || '',1000),telefone=text(b.telefone || '',30),slug=text(b.slug,80);
-  if(!nome || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || !/^#[a-fA-F0-9]{6}$/.test(b.cor) || (telefone && !/^[+()\d\s-]{8,30}$/.test(telefone)))fail('Revise nome, link, telefone e cor.');
+  const b=req.body,nome=text(b.nome),descricao=text(b.descricao || '',1000),telefoneInput=text(b.telefone || '',30),telefone=normalizePhone(telefoneInput),slug=text(b.slug,80);
+  if(!nome || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || !/^#[a-fA-F0-9]{6}$/.test(b.cor) || (telefoneInput && (!/^[+()\d.\s-]+$/.test(telefoneInput) || !/^\d{10,11}$/.test(telefone))))fail('Revise nome, link, telefone e cor.');
   if(/^studio-\d+$/.test(slug) && slug!=='studio-'+req.assinatura.id)fail('Este formato de link está reservado. Escolha outro nome.');
   const profile=await profileInput(db,b);
   const capa=await image(b.capa),logo=await image(b.logo);
   await db.transaction(async connection=>{
+  // The same serialized transaction lock protects signup and page identity writes.
+  if(telefone){
+   const other=await connection.getAsync(
+    `SELECT id FROM assinaturas WHERE id<>$1 AND
+     (${phoneIdentitySql('telefone')}=$2 OR ${phoneIdentitySql('whatsapp_numero')}=$2) LIMIT 1`,
+    [req.assinatura.id,telefone]);
+   if(other)throw Object.assign(Error('Este telefone já está vinculado a outra conta.'),{statusCode:409,publicCode:'TELEFONE_JA_UTILIZADO'});
+  }
   await connection.runAsync('UPDATE assinaturas SET barbearia_nome=$1,page_description=$2,telefone=$3,public_slug=$4,page_color=$5,cover_image=$6,logo_image=$7 WHERE id=$8',[nome,descricao,telefone,slug,b.cor,capa,logo,req.assinatura.id]);
   await saveProfile(connection,req.assinatura.id,profile);
   });

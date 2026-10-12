@@ -17,6 +17,8 @@ test('backend inicia sem credenciais de pagamento e serve painel e API', { timeo
     env: { ...process.env, PORT: String(port), MERCADO_PAGO_ACCESS_TOKEN: '', MERCADO_PAGO_WEBHOOK_SECRET: '', EVOLUTION_API_URL: '', EVOLUTION_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let diagnostics='';
+  child.stderr.on('data',data=>{diagnostics+=String(data);});
   const exited = new Promise(resolve => child.once('exit', resolve));
   t.after(async () => {
     if (child.exitCode === null) child.kill();
@@ -34,6 +36,15 @@ test('backend inicia sem credenciais de pagamento e serve painel e API', { timeo
   const base = `http://127.0.0.1:${port}`;
   await require('./helpers/frontend').assertFrontend(base);
   assert.equal((await fetch(`${base}/api/health`)).status, 200);
+  const markers=['synthetic-password','synthetic-token','synthetic-authorization','synthetic-cookie'];
+  const malformed=await fetch(base+'/api/publico/assinaturas',{method:'POST',headers:{'Content-Type':'application/json',Authorization:markers[2],Cookie:markers[3]},body:JSON.stringify({senha:markers[0],token:markers[1],Authorization:markers[2]})+','});
+  assert.equal(malformed.status,400);
+  assert.equal(malformed.headers.get('cache-control'),'no-store');
+  const invalidBody=JSON.stringify(await malformed.json());
+  await new Promise(resolve=>setTimeout(resolve,50));
+  assert.ok(diagnostics.includes('invalid_json'));
+  for(const marker of markers){assert.equal(diagnostics.includes(marker),false);assert.equal(invalidBody.includes(marker),false);}
+
   const config = await (await fetch(`${base}/api/publico/assinatura-config`)).json();
   assert.equal(config.gateway.provider, 'mercado_pago');
   assert.equal(config.gateway.enabled, false);

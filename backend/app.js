@@ -1202,23 +1202,7 @@ app.post('/webhook', (req, res) => {
 });
 
 // Mantem as rotas legadas acima e expõe os endpoints novos do backend modular.
-app.use((err, req, res, next) => {
-  console.error('Erro no servidor:', err);
-
-  if (res.headersSent) {
-    next(err);
-    return;
-  }
-
-  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
-    res.status(400).json({ error: 'JSON invalido na requisicao.' });
-    return;
-  }
-
-  res.status(err.status || 500).json({
-    error: err.message || 'Erro interno do servidor.',
-  });
-});
+app.use(require('./services/httpErrors').createHttpErrorHandler());
 
 require('./database').ready.then(() => {
   require('./evolutionWebhook').startWorker();

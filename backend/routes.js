@@ -1801,29 +1801,46 @@ router.post('/mercadopago/webhook', async (req, res) => {
   }
 });
 
-router.get('/publico/assinaturas/:id/status', async (req, res) => {
-  const { id } = req.params;
-
+function privateNoStore(_req,res,next){res.set('Cache-Control','no-store');next();}
+function privateAuthentication(auth){
+  return (req,res,next)=>{
+    const json=res.json;
+    res.json=function(payload){
+      return json.call(this,this.statusCode>=500?{error:'Não foi possível concluir a solicitação.'}:payload);
+    };
+    return auth(req,res,()=>{res.json=json;next();});
+  };
+}
+async function requireStatusAccount(req,res,next){
   try {
-    const assinatura = await carregarAssinaturaAtualizada(id);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
+    const assinatura=await carregarAssinaturaPorToken(req.headers['x-barbeiro-token']);
+    if(!assinatura)return res.status(401).json({error:'Login do barbeiro obrigatório.'});
+    req.assinatura=assinatura;
+    next();
+  } catch {
+    res.status(500).json({error:'Não foi possível consultar o estado da conta.'});
+  }
+}
+const subscriptionStatusLimit=require('./services/publicLimits').createPublicLimiter(db,'subscriptionStatus');
+router.get('/publico/assinaturas/:id/status', privateNoStore,
+  require('./services/publicLimits').createPublicLimiter(db,'subscriptionStatusGlobal'), requireStatusAccount, async (req, res) => {
+  try {
+    if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(Number(req.params.id))) {
+      return res.status(400).json({error:'Assinatura inválida.'});
     }
-
-    const acesso = avaliarAcessoAssinatura(assinatura);
-
-    res.json({
-      id: assinatura.id,
-      ...montarEstadoPagamento(assinatura),
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Não foi possível consultar o estado da conta.' });
+    if (Number(req.params.id)!==Number(req.assinatura.id)) {
+      return res.status(403).json({error:'Consulta não autorizada.'});
+    }
+    if (!(await subscriptionStatusLimit.check(res,{tenantId:req.assinatura.id}))) return;
+    const assinatura=await carregarAssinaturaAtualizada(req.assinatura.id);
+    if (!assinatura) return res.status(404).json({error:'Assinatura não encontrada.'});
+    res.json({id:assinatura.id,liberado:avaliarAcessoAssinatura(assinatura).liberado});
+  } catch {
+    res.status(500).json({error:'Não foi possível consultar o estado da conta.'});
   }
 });
 
-router.post('/publico/assinaturas/:id/checkout', async (req, res) => {
+router.post('/publico/assinaturas/:id/checkout', privateNoStore, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2505,7 +2522,7 @@ router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, a
   }
 });
 
-router.get('/publico/assinaturas/:id/acesso', requireContaOuBridge, async (req, res) => {
+router.get('/publico/assinaturas/:id/acesso', privateNoStore, privateAuthentication(requireContaOuBridge), async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2533,7 +2550,7 @@ router.get('/publico/assinaturas/:id/acesso', requireContaOuBridge, async (req, 
   }
 });
 
-router.get('/publico/assinaturas/:id', requireContaOuBridge, async (req, res) => {
+router.get('/publico/assinaturas/:id', privateNoStore, privateAuthentication(requireContaOuBridge), async (req, res) => {
   const { id } = req.params;
 
   try {

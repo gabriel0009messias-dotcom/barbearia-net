@@ -196,7 +196,7 @@ gatewayCheckoutButton.addEventListener('click', () => {
   if (checkoutUrl) window.location.assign(checkoutUrl);
 });
 
-async function fazerLoginAutomatico(email, senha) {
+async function autenticarCadastro(email, senha) {
   const payload = await buscarJson('/api/barbeiro/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -207,14 +207,22 @@ async function fazerLoginAutomatico(email, senha) {
   });
 
   authToken = payload.token;
-  limparCadastroPendente();
   gravarStorage(TOKEN_STORAGE_KEY, payload.token);
+}
+
+async function fazerLoginAutomatico(email, senha) {
+  await autenticarCadastro(email, senha);
+  limparCadastroPendente();
   window.location.href = '/studiofy.html';
 }
 
 function iniciarMonitorLiberacao(assinaturaId, email, senha) {
   limparMonitorLiberacao();
   salvarCadastroPendente({ assinaturaId, email });
+  if (!authToken) {
+    mostrarMensagem('Entre na sua conta para acompanhar o pagamento com segurança.');
+    return;
+  }
 
   monitorLiberacao = setInterval(async () => {
     try {
@@ -231,7 +239,10 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
         }
       }
     } catch (error) {
-      mostrarMensagem(`Nao foi possivel verificar a liberacao: ${error.message}`);
+      if ([401,403].includes(error.status)) {
+        limparMonitorLiberacao();
+        mostrarMensagem('Entre na sua conta para acompanhar o pagamento com segurança.');
+      } else mostrarMensagem(`Nao foi possivel verificar a liberacao: ${error.message}`);
     }
   }, 5000);
 }
@@ -322,6 +333,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
     salvarCadastroPendente({ assinaturaId: resposta.assinatura.id, email: emailCadastro });
     if (cadastroSemTrial) {
       if (resposta.trialIniciado !== false) throw new Error('Não foi possível confirmar a contratação sem teste. Entre na sua conta para consultar o cadastro.');
+      await autenticarCadastro(emailCadastro, senhaCadastro);
       const checkout = await buscarJson(`/api/publico/assinaturas/${resposta.assinatura.id}/checkout`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ senha: senhaCadastro }),

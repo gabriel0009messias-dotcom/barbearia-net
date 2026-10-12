@@ -82,7 +82,7 @@ test('trial: cadastro, isolamento, expiracao, sessao e pagamento', { skip: !proc
   }
   assert.equal((await login()).status,200);
   assert.equal((await request('/publico/assinatura-config')).status,200);
-  assert.equal((await request(`/publico/assinaturas/${id}/status`)).body.acesso.status,'trial_expired');
+  assert.deepEqual((await request(`/publico/assinaturas/${id}/status`,'GET',null,token)).body,{id,liberado:false});
   assert.equal((await request(`/publico/assinaturas/${id}/checkout`,'POST',{},token)).status,200);
   assert.deepEqual(await db.allAsync('SELECT * FROM servicos_assinatura WHERE assinatura_id=$1',[id]),services);
   assert.deepEqual(await db.allAsync('SELECT * FROM agendamentos WHERE assinatura_id=$1',[id]),bookings);

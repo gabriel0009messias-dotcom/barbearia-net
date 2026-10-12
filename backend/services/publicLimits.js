@@ -2,6 +2,8 @@ const crypto = require('node:crypto');
 
 const POLICIES = Object.freeze({
  signup:{limit:600,windowMs:900000},
+ subscriptionStatusGlobal:{limit:6000,windowMs:60000},
+ subscriptionStatus:{limit:120,windowMs:60000,context:'tenant'},
  booking:{limit:300,windowMs:900000,context:'tenant'},
  bookingGlobal:{limit:3000,windowMs:900000},
  navigation:{limit:1200,windowMs:60000,context:'tenant'},

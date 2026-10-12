@@ -15,6 +15,7 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
   let plan = { name: 'Plano Profissional', amountCents: 6500, currency: 'BRL', durationDays: 30 };
   let signupCalls = 0;
   let checkoutCalls = 0;
+  let statusCalls = 0, statusMode = 'pending';
   const paymentUrl = 'https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=browser-test';
   app.get('/api/publico/assinatura-config', (req, res) => {
     if (failure === 'config') return res.status(503).json({ error: 'Configuracao indisponivel.' });
@@ -47,7 +48,12 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
   });
   app.post('/api/barbeiro/login',(_req,res)=>failure==='login'?res.status(503).json({error:'Login indisponivel'}):res.json({token:'trial-token'}));
   app.get('/studiofy.html',(_req,res)=>res.send('<h1>Studiofy</h1>'));
-  app.get('/api/publico/assinaturas/17/status', (req, res) => res.json({ liberado: false }));
+  app.get('/api/publico/assinaturas/17/status', (req, res) => {
+    statusCalls++;
+    assert.equal(req.headers['x-barbeiro-token'], 'trial-token');
+    if(statusMode==='unauthorized')return res.status(401).json({error:'Sessão expirada.'});
+    res.json({id:17,liberado:statusMode==='released'});
+  });
   app.use(express.static(path.resolve(__dirname, '../public')));
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
@@ -55,7 +61,7 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
   const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
   t.after(() => browser.close());
   const base = `http://127.0.0.1:${server.address().port}`;
-  async function openForm({ storageBlocked = false, timeoutFast = false } = {}) {
+  async function openForm({ storageBlocked = false, timeoutFast = false, fastPolling = false } = {}) {
     const page = await browser.newPage();
     await page.setRequestInterception(true);
     page.on('request', request => {
@@ -73,6 +79,11 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
       const originalTimeout = window.setTimeout;
       window.setTimeout = (callback, delay, ...args) => originalTimeout(callback, delay === 30000 ? 150 : delay, ...args);
     });
+    if(fastPolling)await page.evaluateOnNewDocument(()=>{
+      const interval=window.setInterval.bind(window);
+      window.fastStatusPolling=false;
+      window.setInterval=(fn,ms,...args)=>interval(fn,ms===5000&&window.fastStatusPolling?50:ms,...args);
+    });
     await page.goto(`${base}/cadastro.html`);
     await page.waitForNetworkIdle({ idleTime: 100 });
     await page.waitForFunction(() => document.querySelector('#diaVencimentoInput').options.length > 0);
@@ -80,6 +91,7 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
       const values = { cityInput:'Salvador',stateInput:'BA',serviceNameInput:'Manicure',servicePriceInput:'40',serviceDurationInput:'45',serviceCategoryInput:'Unhas',barbeariaNomeInput: 'Salao teste', responsavelNomeInput: 'Teste', telefoneAssinaturaInput: '11999998888', emailAssinaturaInput: 'buyer@example.test', cpfTitularInput: '12345678909', senhaAssinaturaInput: 'test-password', whatsappNumeroInput: '11999998888' };
       for (const [id, value] of Object.entries(values)) document.getElementById(id).value = value;
     });
+    if(fastPolling)await page.evaluate(()=>{window.fastStatusPolling=true;});
     return page;
   }
   await t.test('campos visiveis preenchidos permitem submit e entram no Studiofy sem pagamento', async () => {
@@ -147,6 +159,33 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
       assert.equal(await page.evaluate(() => JSON.stringify(localStorage).includes('test-password')), false);
       assert.equal(await page.$eval('#trialUtilizadoActions', element => element.hidden), true);
     } finally { await page.close(); failure = null; }
+  });
+  await t.test('contratação acompanha status autenticado e libera painel com resposta mínima', async () => {
+    failure='trial';statusMode='pending';const page=await openForm({fastPolling:true}),prior=statusCalls;
+    try {
+      await page.click('button[type=submit]');
+      await page.waitForFunction(()=>!document.querySelector('#trialUtilizadoActions').hidden);
+      await page.click('#contratarSemTrialButton');
+      await page.waitForFunction(()=>document.querySelector('#assinaturaFormMessage').textContent.includes('Conta criada sem novo teste'));
+      await page.waitForResponse(r=>r.url().endsWith('/17/status'),{timeout:5000}).catch(()=>{throw Error('Acompanhamento não enviou status; calls='+statusCalls);});
+      assert.ok(statusCalls>prior);
+      assert.equal(await page.evaluate(()=>JSON.stringify(localStorage).includes('test-password')),false);
+      statusMode='released';await page.waitForFunction(()=>location.pathname==='/studiofy.html',{timeout:5000});
+      assert.equal(page.url(),base+'/studiofy.html');
+      assert.equal(await page.evaluate(()=>localStorage.getItem('barbearia_pending_signup')),null);
+    } finally {await page.close();failure=null;statusMode='pending';}
+  });
+  await t.test('sessão expirada interrompe acompanhamento; pendência sem sessão não consulta anonimamente', async () => {
+    failure='trial';statusMode='unauthorized';const page=await openForm({fastPolling:true});
+    try {
+      await page.click('button[type=submit]');await page.waitForFunction(()=>!document.querySelector('#trialUtilizadoActions').hidden);
+      await page.click('#contratarSemTrialButton');
+      await page.waitForFunction(()=>document.querySelector('#assinaturaFormMessage').textContent.includes('acompanhar o pagamento com segurança'));
+      const prior=statusCalls;await new Promise(resolve=>setTimeout(resolve,200));assert.equal(statusCalls,prior);
+      await page.evaluate(()=>{localStorage.removeItem('barbearia_auth_token');localStorage.setItem('barbearia_pending_signup',JSON.stringify({assinaturaId:17,email:'buyer@example.test'}));});
+      await page.reload();await page.waitForFunction(()=>document.querySelector('#assinaturaFormMessage').textContent.includes('acompanhar o pagamento com segurança'));
+      await new Promise(resolve=>setTimeout(resolve,200));assert.equal(statusCalls,prior);
+    } finally {await page.close();failure=null;statusMode='pending';}
   });
   await t.test('storage bloqueado nao impede cadastro e redirecionamento', async () => {
     const page = await openForm({ storageBlocked: true });
