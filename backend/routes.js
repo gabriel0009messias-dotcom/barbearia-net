@@ -2047,10 +2047,7 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
   }
 });
 
-router.get('/barbeiro/me', (req, res, next) => {
-  res.set('Cache-Control', 'no-store');
-  next();
-}, requireConta, async (req, res) => {
+router.get('/barbeiro/me', require('./services/privateAccountHttp').privateAccountResponse, requireConta, async (req, res) => {
   try {
     res.json(accountView(await montarRespostaAssinatura(req.assinatura.id)));
   } catch (error) {

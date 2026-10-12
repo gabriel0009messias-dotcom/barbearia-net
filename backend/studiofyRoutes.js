@@ -63,6 +63,7 @@ module.exports=function studioRoutes(db,auth,access) {
    return confirmBooking(c,s,a.id,req.body,req.headers['idempotency-key']);
   }));
  }));
+ router.get('/painel',require('./services/privateAccountHttp').privateAccountResponse);
  router.use(auth);
  router.put('/politica-cancelamento',wrap(async(req,res)=>{
   const minutes=req.body.antecedencia_minutos;
