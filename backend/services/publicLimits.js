@@ -40,7 +40,7 @@ function createPublicLimiter(db, scope, options = {}) {
     DO UPDATE SET hits=LEAST(public_request_limits.hits::bigint+1,2147483647)::integer RETURNING hits`,[key,windowStart,new Date(expiry)]);
    if (now-lastCleanup>60000) {
     lastCleanup=now;
-    await store.runAsync('DELETE FROM public_request_limits WHERE (key_hash,window_start) IN (SELECT key_hash,window_start FROM public_request_limits WHERE expires_at<$1 LIMIT 1000)',[new Date(now)]);
+    await store.runAsync('DELETE FROM public_request_limits WHERE (key_hash,window_start) IN (SELECT key_hash,window_start FROM public_request_limits WHERE expires_at<clock_timestamp() LIMIT 1000)');
    }
    if (row.hits>policy.limit) {
     res.set('Retry-After',String(Math.max(1,Math.ceil((expiry-now)/1000))));

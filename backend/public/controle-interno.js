@@ -1,4 +1,14 @@
-const adminTokenKey = 'admin_token_salaoflix';
+function rotuloAcesso(account) {
+  if (account.bloqueio_admin || account.acesso?.status === 'admin_blocked') return 'Bloqueada administrativamente';
+  return ({ trial_active: 'Trial ativo', trial_expired: 'Trial expirado', subscription_active: 'Assinatura ativa', grace_period: 'Tolerância', manual_access: 'Liberação manual', subscription_irregular: 'Assinatura requer regularização' })[account.acesso?.status] || (account.acesso?.motivo === 'subscription_expired' ? 'Assinatura expirada' : 'Aguardando pagamento');
+}
+let adminToken = '';
+// Discard persistence from previous versions; never read or reuse its token.
+try {
+  window.localStorage.removeItem('admin_token_salaoflix');
+  window.localStorage.removeItem('barbearia_admin_token');
+  window.localStorage.removeItem('admin_token_salaoflix_inline');
+} catch {}
 
 const adminLoginCard = document.getElementById('adminLoginCard');
 const adminPanel = document.getElementById('adminPanel');
@@ -22,15 +32,15 @@ adminSuporteInput?.addEventListener('input', () => { adminSuporteInput.dataset.a
 
 
 function getAdminToken() {
-  return window.localStorage.getItem(adminTokenKey) || '';
+  return adminToken;
 }
 
 function setAdminToken(token) {
-  window.localStorage.setItem(adminTokenKey, token);
+  adminToken = token;
 }
 
 function clearAdminToken() {
-  window.localStorage.removeItem(adminTokenKey);
+  adminToken = '';
 }
 
 async function buscarJson(url, options = {}) {
@@ -61,9 +71,12 @@ function contarStatus(assinaturas) {
     ativo: 0,
     pendente: 0,
     bloqueado: 0,
+    regularizacao: 0,
   };
 
   for (const assinatura of assinaturas) {
+    if (assinatura.bloqueio_admin || assinatura.acesso?.status === 'admin_blocked') { resumo.bloqueado += 1; continue; }
+    if (assinatura.acesso?.status === 'subscription_irregular') { resumo.regularizacao += 1; continue; }
     const original = String(assinatura.status || '').toLowerCase();
     const status = ({ ativa: 'ativo', bloqueada: 'bloqueado' })[original] || original;
     if (status in resumo) {
@@ -82,6 +95,7 @@ function renderResumo(assinaturas) {
     <li>Ativos: <strong>${resumo.ativo}</strong></li>
     <li>Pendentes: <strong>${resumo.pendente}</strong></li>
     <li>Bloqueados: <strong>${resumo.bloqueado}</strong></li>
+    <li>Requerem regularização: <strong>${resumo.regularizacao}</strong></li>
   `;
 }
 
@@ -108,6 +122,7 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
     <td><button class="table-action danger-button save-status" type="button">Salvar</button> <button class="table-action grant-days" type="button">Liberar dias</button> <button class="table-action danger-button delete-account" type="button">Excluir</button></td>
   `;
 
+  if (!pendente) { const label = document.createElement('small'); label.style.display = 'block'; label.textContent = rotuloAcesso(assinatura); tr.cells[4].appendChild(label); }
   let values = [assinatura.barbearia_nome, assinatura.responsavel_nome, contato, pagamento];
   if (pendente) {
     tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>' +
@@ -117,7 +132,7 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
     values = [assinatura.barbearia_nome, assinatura.responsavel_nome, assinatura.email,
       telefones,
       assinatura.metodo_pagamento === 'mercado_pago' ? 'Mercado Pago' : assinatura.metodo_pagamento,
-      'Aguardando pagamento', assinatura.created_at && Number.isFinite(cadastro.getTime()) ? cadastro.toLocaleString('pt-BR') : '--'];
+      rotuloAcesso(assinatura), assinatura.created_at && Number.isFinite(cadastro.getTime()) ? cadastro.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '--'];
   }
   values.forEach((value, index) => {
     tr.cells[index].textContent = value || '--';
@@ -125,12 +140,12 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
   if (Date.parse(assinatura.acesso_manual_ate || '') > Date.now()) {
     const prazo = document.createElement('small');
     prazo.style.display = 'block';
-    prazo.textContent = `Acesso gratuito ate ${new Date(assinatura.acesso_manual_ate).toLocaleString('pt-BR')}`;
+    prazo.textContent = `Acesso gratuito ate ${new Date(assinatura.acesso_manual_ate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
     tr.cells[4].appendChild(prazo);
   }
   const grantButton = tr.querySelector('.grant-days');
   async function liberarDias() {
-    const value = window.prompt(`Liberar acesso sem pagamento para ${assinatura.barbearia_nome || 'esta conta'} por quantos dias a partir de agora? (1 a 365)`, '1');
+    const value = window.prompt(`Registrar dias sem pagamento para ${assinatura.barbearia_nome || 'esta conta'} por quantos dias a partir de agora? (1 a 365)\nEsta ação não retira bloqueio administrativo.`, '1');
     if (value === null) return;
     const dias = Number(value);
     if (!/^\d+$/.test(value.trim()) || !Number.isInteger(dias) || dias < 1 || dias > 365) {
@@ -144,7 +159,7 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
         method: 'POST', body: JSON.stringify({ dias }),
       });
       if (result.sucesso !== true || result.id !== assinatura.id) throw new Error('Atualize a lista para conferir a liberacao.');
-      adminTableMessage.textContent = `Acesso liberado sem pagamento ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR')}.`;
+      adminTableMessage.textContent = `Dias registrados ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.${result.bloqueio_admin ? ' O bloqueio administrativo permanece.' : ''}`;
       try { await carregarPainelAdmin(); } catch { adminTableMessage.textContent = 'Acesso liberado. Recarregue a lista para ver o prazo.'; }
     } catch (error) {
       adminTableMessage.textContent = error.message;
@@ -153,6 +168,23 @@ function montarLinhaAssinatura(assinatura, pendente = false) {
     }
   }
   grantButton.addEventListener('click', liberarDias);
+  if (assinatura.bloqueio_admin) {
+    const unlock = document.createElement('button');
+    unlock.type = 'button';
+    unlock.className = 'table-action unlock-account';
+    unlock.textContent = 'Retirar bloqueio administrativo';
+    tr.lastElementChild.appendChild(unlock);
+    unlock.addEventListener('click', async () => {
+      if (!window.confirm('Retirar somente o bloqueio administrativo? O acesso ainda depende do trial, pagamento ou prazo manual.')) return;
+      unlock.disabled = true;
+      try {
+        await buscarJson(`/api/admin/assinaturas/${assinatura.id}/desbloquear`, { method: 'POST' });
+        adminTableMessage.textContent = 'Bloqueio administrativo retirado.';
+        await carregarPainelAdmin();
+      } catch (error) { adminTableMessage.textContent = error.message; }
+      finally { unlock.disabled = false; }
+    });
+  }
   const deleteButton = tr.querySelector('.delete-account');
   deleteButton.addEventListener('click', async () => {
     if (!window.confirm('Tem certeza que deseja excluir esta conta? Esta ação não poderá ser desfeita.')) return;
@@ -263,7 +295,7 @@ adminLiberacaoForm?.addEventListener('submit', async event => {
       method: 'POST', body: JSON.stringify({ dias }),
     });
     if (result.sucesso !== true || result.id !== account.id) throw new Error('Atualize a lista para conferir a liberacao.');
-    adminLiberacaoMessage.textContent = `Acesso liberado ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR')}.`;
+    adminLiberacaoMessage.textContent = `Dias registrados ate ${new Date(result.acesso_manual_ate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.${result.bloqueio_admin ? ' O bloqueio administrativo permanece.' : ''}`;
     try { await carregarPainelAdmin(); } catch { adminLiberacaoMessage.textContent = 'Acesso liberado. Recarregue a lista para ver o cliente.'; }
   } catch (error) {
     adminLiberacaoMessage.textContent = error.message;
@@ -313,6 +345,8 @@ adminLoginForm?.addEventListener('submit', async (event) => {
     await fazerLoginAdmin(adminEmailInput.value.trim(), adminSenhaInput.value);
   } catch (error) {
     adminLoginMessage.textContent = error.message;
+  } finally {
+    adminSenhaInput.value = '';
   }
 });
 
@@ -344,7 +378,8 @@ recarregarAdminButton?.addEventListener('click', async () => {
   }
 });
 
-sairAdminButton?.addEventListener('click', () => {
+sairAdminButton?.addEventListener('click', async () => {
+  try { await buscarJson('/api/admin/logout', { method: 'POST' }); } catch {}
   clearAdminToken();
   adminPanel.hidden = true;
   adminLoginCard.hidden = false;
@@ -353,6 +388,5 @@ sairAdminButton?.addEventListener('click', () => {
   adminSenhaInput.value = '';
 });
 
-if (getAdminToken()) {
-  iniciarSessaoAdmin();
-}
+adminEmailInput.value = '';
+adminSenhaInput.value = '';

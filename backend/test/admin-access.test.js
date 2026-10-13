@@ -73,10 +73,15 @@ test('liberacao manual: autorizacao, prazo, pagamento preservado e revogacao', a
   await request(endpoint, 'POST', { dias: 1 }, admin);
   assert.equal((await customerLogin()).status, 200);
   assert.equal((await request(`/admin/assinaturas/${ids[0]}`, 'PATCH', { status: 'bloqueado' }, admin)).status, 200);
-  assert.equal((await stored(ids[0])).acesso_manual_ate, null);
+  assert.ok((await stored(ids[0])).acesso_manual_ate);
   assert.equal((await customerLogin()).status, 200);
   await request(endpoint, 'POST', { dias: 1 }, admin);
   assert.equal((await customerLogin()).status, 200);
   await request(`/admin/assinaturas/${ids[0]}/bloquear`, 'POST', {}, admin);
   assert.equal((await customerLogin()).status, 200);
+  assert.equal((await request('/agendamentos', 'GET', undefined, { 'x-barbeiro-token': token })).status, 403);
+  await request(`/admin/assinaturas/${ids[0]}/liberar-dias`, 'POST', { dias: 30 }, admin);
+  assert.equal((await request('/agendamentos', 'GET', undefined, { 'x-barbeiro-token': token })).status, 403);
+  assert.equal((await request(`/admin/assinaturas/${ids[0]}/desbloquear`, 'POST', {}, admin)).status, 200);
+  assert.equal((await request('/agendamentos', 'GET', undefined, { 'x-barbeiro-token': token })).status, 200);
 });

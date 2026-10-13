@@ -69,7 +69,7 @@ async function loadPanel(){
  const access=account.acesso;
  let banner=$('#trialBanner');if(!banner){banner=document.createElement('div');banner.id='trialBanner';banner.className='card dashboard-access';$('#view').before(banner);}
  banner.hidden=access?.status==='subscription_active';
- banner.textContent=access?.status==='trial_active'?`7 dias grátis: termina em ${new Date(access.trial.endsAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})} (${access.trial.daysRemaining} dia(s) restantes).`:access?.mensagem || '';
+ banner.textContent=access?.status==='grace_period'?`Tolerância: ${Math.ceil(access.toleranciaRestanteMs/60000)} minuto(s) restantes. Termina em ${new Date(access.toleranciaAte).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})}.`:access?.status==='trial_active'?`7 dias grátis: termina em ${new Date(access.trial.endsAt).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo'})} (${access.trial.daysRemaining} dia(s) restantes).`:access?.mensagem || '';
  if(access && !access.liberado){
   await showAccessRequired();return;
  }

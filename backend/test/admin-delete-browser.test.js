@@ -9,6 +9,7 @@ const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:
 test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por email', { skip: !executablePath }, async t => {
   const app = express();
   app.use(express.json());
+  app.post('/api/admin/login', (_req,res) => res.json({token:'fake-admin-session'}));
   let rows = [];
   let grants = 0;
   let listRequests = 0;
@@ -33,7 +34,6 @@ test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por ema
   t.after(async () => { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const page = await browser.newPage();
   await page.evaluateOnNewDocument(() => {
-    localStorage.setItem('admin_token_salaoflix', 'fake-admin-session');
     const original = window.setInterval;
     window.setInterval = (callback, delay, ...args) => {
       if (delay === 30000) { window.refreshAdminForTest = callback; return 0; }
@@ -41,6 +41,9 @@ test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por ema
     };
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/controle-interno.html`);
+  await page.type('#adminEmailInput', 'fixture-admin@example.test');
+  await page.type('#adminSenhaInput', 'fixture-only-password');
+  await page.click('#adminLoginForm button');
   await page.waitForFunction(() => document.querySelector('#adminResumo').textContent.startsWith('0 assinaturas'));
   assert.equal(await page.$eval('#adminAssinaturasBody', node => node.textContent.includes('Cliente oculto')), false);
   await page.type('#adminSuporteInput', '5511999999999');
@@ -69,6 +72,7 @@ test('listagem atualiza apos aprovacao e permite liberar cadastro oculto por ema
 test('botao Excluir: confirmacao, erro e linha correta', { skip: !executablePath }, async t => {
   const app = express();
   app.use(express.json());
+  app.post('/api/admin/login', (_req,res) => res.json({token:'fake-admin-session'}));
   let rows = [1, 2].map(id => ({ id, barbearia_nome: id === 1 ? '<img src=x onerror=alert(1)>' : 'Outra conta', status: 'pendente', deleteConfirmationToken: `confirm-${id}` }));
   let requests = 0;
   let fail = false;
@@ -99,8 +103,10 @@ test('botao Excluir: confirmacao, erro e linha correta', { skip: !executablePath
   const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
   t.after(async () => { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const page = await browser.newPage();
-  await page.evaluateOnNewDocument(() => localStorage.setItem('admin_token_salaoflix', 'fake-admin-session'));
   await page.goto(`http://127.0.0.1:${server.address().port}/controle-interno.html`);
+  await page.type('#adminEmailInput', 'fixture-admin@example.test');
+  await page.type('#adminSenhaInput', 'fixture-only-password');
+  await page.click('#adminLoginForm button');
   await page.waitForSelector('.delete-account');
   assert.equal(await page.$$eval('#adminAssinaturasBody img', nodes => nodes.length), 0);
   await t.test('liberar dias permite cancelar, valida o prazo e atualiza status e resumo', async () => {

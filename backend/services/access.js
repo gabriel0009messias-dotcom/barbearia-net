@@ -1,219 +1,51 @@
-const { accessState } = require('./trial');
-const TOLERANCIA_ATRASO_DIAS = 4;
-
-function criarDataLocal(data) {
-  if (!data) {
-    return null;
-  }
-
-  const [ano, mes, dia] = String(data)
-    .slice(0, 10)
-    .split('-')
-    .map((item) => Number.parseInt(item, 10));
-
-  if (!ano || !mes || !dia) {
-    return null;
-  }
-
-  return new Date(ano, mes - 1, dia);
+const { accessState, adminBlockState } = require('./trial');
+const { DAY_MS, GRACE_MS, expiryInstant } = require('./billingTime');
+function acessoManualAtivo(account, now = Date.now()) {
+  return !adminBlockState(account, now) && Date.parse(account?.acesso_manual_ate || '') > now;
 }
-
-function calcularDiferencaEmDias(dataInicial, dataFinal) {
-  const inicio = new Date(dataInicial.getFullYear(), dataInicial.getMonth(), dataInicial.getDate());
-  const fim = new Date(dataFinal.getFullYear(), dataFinal.getMonth(), dataFinal.getDate());
-  return Math.round((fim.getTime() - inicio.getTime()) / (24 * 60 * 60 * 1000));
+function calcularResumoPagamento(account, now = Date.now()) {
+  const administrative = adminBlockState(account, now);
+  const due = expiryInstant(account), valid = Number.isFinite(due);
+  const elapsed = valid ? now - due : 0;
+  const grace = valid && elapsed > 0 && elapsed < GRACE_MS;
+  const expired = valid && elapsed >= GRACE_MS;
+  const canceled = ['cancelled','canceled','refunded','charged_back'].includes(String(account?.gateway_status || '').toLowerCase()) || account?.status === 'cancelada' || account?.status_assinatura === 'CANCELADA';
+  const manual = acessoManualAtivo(account, now);
+  const eligible = ['ativo','ativa','atrasada'].includes(account?.status);
+  const irregular = !valid && (eligible || Boolean(account?.payment_id || account?.ultimo_pagamento) || String(account?.status_assinatura || '').toUpperCase() === 'ATIVA');
+  let status = account?.status || 'pendente', blocked = Number(account?.bloqueado || 0) === 1;
+  let message = 'Pagamento pendente. Conclua a assinatura para liberar o sistema.';
+  let indicator = valid ? 'Pagamento pendente' : 'Sem vencimento valido';
+  if (administrative) { status = 'bloqueado'; blocked = true; message = administrative.mensagem; indicator = 'Bloqueado pelo administrador'; }
+  else if (manual) { status = 'ativa'; blocked = false; message = 'Seu acesso temporario esta liberado.'; indicator = 'Acesso liberado pelo administrador'; }
+  else if (canceled) { status = 'cancelada'; blocked = true; message = 'Sua assinatura foi cancelada ou o pagamento estornado. Regularize para voltar a usar o sistema.'; indicator = 'Cancelada'; }
+  else if (expired) { status = 'bloqueada'; blocked = true; message = 'Sua assinatura expirou apos as 96 horas de tolerancia. Seus dados continuam salvos.'; indicator = 'Assinatura expirada'; }
+  else if (irregular) { message = 'Sua assinatura requer regularizacao. Seus dados continuam salvos. Entre em contato com o suporte ou realize um novo pagamento.'; indicator = 'Assinatura requer regularizacao'; }
+  else if (eligible && !blocked && valid) {
+    status = grace ? 'atrasada' : 'ativa';
+    message = grace ? 'Sua assinatura esta em tolerancia. Regularize antes do fim das 96 horas.' : 'Assinatura ativa.';
+    indicator = grace ? 'Tolerancia de 96 horas' : 'Em dia';
+  }
+  return { diasAtraso: Math.max(0, Math.floor(elapsed / DAY_MS)), diasParaVencer: valid ? Math.max(0, Math.ceil(-elapsed / DAY_MS)) : 0,
+    atrasado: elapsed > 0, venceHoje: valid && elapsed <= 0 && -elapsed < DAY_MS,
+    bloqueiaHoje: grace && GRACE_MS - elapsed <= DAY_MS, bloqueadoAutomatico: expired,
+    statusSugerido: status, statusAssinaturaSugerido: ({ ativa: 'ATIVA', ativo: 'ATIVA', atrasada: 'ATRASADA', bloqueada: 'BLOQUEADA', bloqueado: 'BLOQUEADA', cancelada: 'CANCELADA' })[status] || String(account?.status_assinatura || 'PENDENTE').toUpperCase(),
+    bloqueado: blocked, requerRegularizacao: irregular && !administrative && !manual && !canceled,
+    indicadorAtraso: indicator, mensagemAdmin: message, mensagemCliente: message,
+    vencimentoEm: valid ? new Date(due).toISOString() : null,
+    toleranciaAte: valid ? new Date(due + GRACE_MS).toISOString() : null,
+    toleranciaRestanteMs: grace ? GRACE_MS - elapsed : 0 };
 }
-
-function acessoManualAtivo(assinatura) {
-  return Date.parse(assinatura?.acesso_manual_ate || '') > Date.now();
+function avaliarAcessoAssinatura(account, now = Date.now()) {
+  const administrative = adminBlockState(account, now);
+  if (administrative) return administrative;
+  const summary = calcularResumoPagamento(account, now);
+  const manual = acessoManualAtivo(account, now);
+  const allowed = !summary.bloqueado && (manual || summary.vencimentoEm !== null) && ['ativa','ativo','atrasada'].includes(summary.statusSugerido);
+  const billing = { liberado: allowed, motivo: manual ? 'manual_access' : allowed ? summary.statusSugerido === 'atrasada' ? 'grace_period' : 'assinatura_ativa' : summary.requerRegularizacao ? 'subscription_requires_regularization' : summary.bloqueadoAutomatico ? 'subscription_expired' : 'pagamento_pendente',
+    mensagem: summary.mensagemCliente, vencimentoEm: summary.vencimentoEm, toleranciaAte: summary.toleranciaAte, toleranciaRestanteMs: allowed && !manual ? summary.toleranciaRestanteMs : 0 };
+  // Keep the stored status for legacy suspension detection. Financial projection
+  // may display 'bloqueada', but must never manufacture an Admin suspension.
+  return accessState(account ? { ...account, bloqueado: summary.bloqueado ? 1 : 0 } : account, billing, now);
 }
-
-function calcularResumoPagamento(assinatura) {
-  if (acessoManualAtivo(assinatura)) {
-    return {
-      diasAtraso: 0, atrasado: false, venceHoje: false, bloqueiaHoje: false,
-      bloqueado: false, statusSugerido: 'ativa', statusAssinaturaSugerido: 'ATIVA',
-      indicadorAtraso: 'Acesso liberado pelo administrador',
-      mensagemAdmin: 'Acesso temporario sem confirmacao de pagamento.',
-      mensagemCliente: 'Seu acesso temporario esta liberado.',
-    };
-  }
-  if (!assinatura?.proximo_vencimento) {
-    return {
-      diasAtraso: 0,
-      atrasado: false,
-      venceHoje: false,
-      bloqueiaHoje: false,
-      statusSugerido: assinatura?.status || 'pendente',
-      statusAssinaturaSugerido: assinatura?.status_assinatura || 'PENDENTE',
-      bloqueado: Number(assinatura?.bloqueado || 0) === 1,
-      indicadorAtraso: 'Sem vencimento definido',
-      mensagemAdmin: 'Sem vencimento definido.',
-      mensagemCliente: 'Pagamento pendente. Conclua a assinatura para liberar o sistema.',
-    };
-  }
-
-  const hoje = new Date();
-  const vencimento = criarDataLocal(assinatura.proximo_vencimento);
-
-  if (!vencimento) {
-    return {
-      diasAtraso: 0,
-      atrasado: false,
-      venceHoje: false,
-      bloqueiaHoje: false,
-      statusSugerido: assinatura.status,
-      statusAssinaturaSugerido: assinatura.status_assinatura || 'PENDENTE',
-      bloqueado: Number(assinatura?.bloqueado || 0) === 1,
-      indicadorAtraso: 'Data invalida',
-      mensagemAdmin: 'Data de vencimento invalida.',
-      mensagemCliente: 'Nao foi possivel verificar o vencimento da assinatura.',
-    };
-  }
-
-  const diasAtraso = Math.max(0, calcularDiferencaEmDias(vencimento, hoje));
-  const diasParaVencer = calcularDiferencaEmDias(hoje, vencimento);
-  const atrasado = diasAtraso > 0;
-  const venceHoje = diasParaVencer === 0;
-  const bloqueiaHoje = diasAtraso === TOLERANCIA_ATRASO_DIAS;
-  const bloqueadoAutomatico = diasAtraso > TOLERANCIA_ATRASO_DIAS;
-  const statusGateway = String(assinatura.gateway_status || '').toLowerCase();
-  const cancelada = ['cancelled', 'canceled'].includes(statusGateway) || String(assinatura.status_assinatura || '').toUpperCase() === 'CANCELADA';
-
-  let statusSugerido = assinatura.status;
-  let statusAssinaturaSugerido = String(assinatura.status_assinatura || '').toUpperCase() || 'PENDENTE';
-  let bloqueado = Number(assinatura.bloqueado || 0) === 1;
-
-  if (cancelada) {
-    statusSugerido = 'cancelada';
-    statusAssinaturaSugerido = 'CANCELADA';
-    bloqueado = true;
-  } else if (String(assinatura.status || '').toLowerCase() === 'ativa' || String(assinatura.status || '').toLowerCase() === 'ativo') {
-    if (bloqueadoAutomatico) {
-      statusSugerido = 'bloqueada';
-      statusAssinaturaSugerido = 'BLOQUEADA';
-      bloqueado = true;
-    } else if (atrasado || venceHoje) {
-      statusSugerido = 'atrasada';
-      statusAssinaturaSugerido = 'ATRASADA';
-      bloqueado = false;
-    } else {
-      statusSugerido = 'ativa';
-      statusAssinaturaSugerido = 'ATIVA';
-      bloqueado = false;
-    }
-  } else if (bloqueadoAutomatico) {
-    statusSugerido = 'bloqueada';
-    statusAssinaturaSugerido = 'BLOQUEADA';
-    bloqueado = true;
-  }
-
-  let indicadorAtraso = 'Em dia';
-  let mensagemAdmin = 'Pagamento em dia.';
-  let mensagemCliente = 'Seu acesso esta ativo.';
-
-  if (cancelada) {
-    indicadorAtraso = 'Cancelada';
-    mensagemAdmin = 'Assinatura cancelada no Mercado Pago.';
-    mensagemCliente = 'Sua assinatura foi cancelada. Regularize para voltar a usar o sistema.';
-  } else if (bloqueadoAutomatico) {
-    indicadorAtraso = `${diasAtraso} dias atrasado`;
-    mensagemAdmin = `Pagamento atrasado ha ${diasAtraso} dias. O sistema deve permanecer bloqueado.`;
-    mensagemCliente = 'Sua assinatura esta em atraso. Regularize o pagamento para voltar a usar o sistema.';
-  } else if (bloqueiaHoje) {
-    indicadorAtraso = '4 dias (bloquear hoje)';
-    mensagemAdmin = 'Cliente no ultimo dia de tolerancia. Se o Mercado Pago nao aprovar, o bloqueio acontece hoje.';
-    mensagemCliente = 'Sua assinatura esta no ultimo dia de tolerancia. Regularize hoje para evitar o bloqueio.';
-  } else if (diasAtraso === 2) {
-    indicadorAtraso = '2 dias atrasado';
-    mensagemAdmin = 'Cliente com 2 dias de atraso.';
-    mensagemCliente = 'Seu pagamento esta com 2 dias de atraso. Regularize para evitar bloqueio.';
-  } else if (diasAtraso === 1) {
-    indicadorAtraso = '1 dia atrasado';
-    mensagemAdmin = 'Cliente com 1 dia de atraso.';
-    mensagemCliente = 'Seu pagamento esta com 1 dia de atraso. Regularize para evitar bloqueio.';
-  } else if (venceHoje) {
-    indicadorAtraso = 'Vence hoje';
-    mensagemAdmin = 'Pagamento vence hoje. Status deve ficar pendente ate a confirmacao do Mercado Pago.';
-    mensagemCliente = 'Seu pagamento vence hoje.';
-  } else if (diasParaVencer > 0 && diasParaVencer <= 3) {
-    indicadorAtraso = `Vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}`;
-    mensagemAdmin = `Pagamento vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}.`;
-    mensagemCliente = `Seu pagamento vence em ${diasParaVencer} dia${diasParaVencer === 1 ? '' : 's'}.`;
-  }
-
-  return {
-    diasAtraso,
-    diasParaVencer,
-    atrasado,
-    venceHoje,
-    bloqueiaHoje,
-    bloqueadoAutomatico,
-    statusSugerido,
-    statusAssinaturaSugerido,
-    bloqueado,
-    indicadorAtraso,
-    mensagemAdmin,
-    mensagemCliente,
-  };
-}
-
-function avaliarAcessoAssinatura(assinatura) {
-  if (assinatura) {
-    const resumo = calcularResumoPagamento(assinatura);
-    assinatura = { ...assinatura, status: resumo.statusSugerido, bloqueado: resumo.bloqueado ? 1 : 0 };
-  }
-  return accessState(assinatura, avaliarAcessoPago(assinatura));
-}
-
-function avaliarAcessoPago(assinatura) {
-  if (!assinatura) {
-    return {
-      liberado: false,
-      motivo: 'nao_encontrada',
-      mensagem: 'Assinatura nao encontrada.',
-    };
-  }
-
-  const resumo = calcularResumoPagamento(assinatura);
-
-  if (assinatura.bloqueado || assinatura.status === 'bloqueada' || assinatura.status === 'cancelada') {
-    return {
-      liberado: false,
-      motivo: 'bloqueado',
-      mensagem: resumo.mensagemCliente,
-    };
-  }
-
-  if (assinatura.status === 'ativa' || assinatura.status === 'ativo') {
-    return {
-      liberado: true,
-      motivo: 'assinatura_ativa',
-      mensagem: 'Assinatura ativa.',
-    };
-  }
-
-  if (assinatura.status === 'atrasada') {
-    return {
-      liberado: true,
-      motivo: 'grace_period',
-      mensagem: resumo.mensagemCliente,
-    };
-  }
-
-  if (assinatura.status === 'teste' || assinatura.status === 'pendente' || assinatura.status === 'autorizada' || assinatura.status === 'pausada') {
-    return {
-      liberado: false,
-      motivo: 'pagamento_pendente',
-      mensagem: 'Cadastro concluido. Finalize a assinatura para liberar o sistema.',
-    };
-  }
-
-  return {
-    liberado: false,
-    motivo: 'bloqueado',
-    mensagem: resumo.mensagemCliente,
-  };
-}
-
-module.exports = { criarDataLocal, calcularDiferencaEmDias, acessoManualAtivo, calcularResumoPagamento, avaliarAcessoAssinatura };
+module.exports = { acessoManualAtivo, calcularResumoPagamento, avaliarAcessoAssinatura };

@@ -71,7 +71,7 @@ test('Etapa 2: recibos idempotentes, perda de resposta, isolamento e limites per
  await t.test('recuperação privada funciona após bloqueio ou mudança de slug sem liberar nova reserva',async()=>{
   const privateRoot='/api/studiofy/public/reservas/recuperar',payload={chave:first.key,solicitacao:body()};
   const accessBefore=await db.getAsync('SELECT status,status_assinatura,bloqueado,proximo_vencimento,acesso_manual_ate FROM assinaturas WHERE id=$1',[a.id]);
-  await db.runAsync("UPDATE assinaturas SET status='bloqueada',status_assinatura='BLOQUEADA',bloqueado=1,proximo_vencimento=NULL,acesso_manual_ate=NULL,public_slug='requests-renamed' WHERE id=$1",[a.id]);
+  await db.runAsync("UPDATE assinaturas SET status='atrasada',status_assinatura='BLOQUEADA',bloqueado=1,proximo_vencimento=NULL,acesso_manual_ate=NULL,public_slug='requests-renamed' WHERE id=$1",[a.id]);
   try{
    const recovered=await request(privateRoot,payload);assert.equal(recovered.status,200);assert.equal(recovered.data.token,first.token);assert.equal(recovered.data.agendamento.slug,'requests-renamed');
    assert.equal((await request(root(a),body(),first.key)).status,404);

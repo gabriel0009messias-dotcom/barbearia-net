@@ -35,6 +35,11 @@ test('backend inicia sem credenciais de pagamento e serve painel e API', { timeo
   });
   const base = `http://127.0.0.1:${port}`;
   await require('./helpers/frontend').assertFrontend(base);
+  const adminAlias=await fetch(base+'/controle-interno',{redirect:'manual'});
+  assert.equal(adminAlias.status,302);
+  assert.equal(adminAlias.headers.get('location'),'/controle-interno.html');
+  assert.equal(adminAlias.headers.get('cache-control'),'no-store');
+  assert.doesNotMatch(await adminAlias.text(),/localStorage|admin_token/);
   assert.equal((await fetch(`${base}/api/health`)).status, 200);
   const markers=['synthetic-password','synthetic-token','synthetic-authorization','synthetic-cookie'];
   const malformed=await fetch(base+'/api/publico/assinaturas',{method:'POST',headers:{'Content-Type':'application/json',Authorization:markers[2],Cookie:markers[3]},body:JSON.stringify({senha:markers[0],token:markers[1],Authorization:markers[2]})+','});

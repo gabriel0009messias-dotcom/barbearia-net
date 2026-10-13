@@ -211,7 +211,7 @@ test('Cadastro etapa 1: DTO, entradas, disputa de catálogo e integração públ
   await t.test('bloqueio após leitura pública é revalidado dentro da transação de confirmação', async subtest => {
     await reset(); const accessBefore=await db.getAsync('SELECT status,status_assinatura,bloqueado,proximo_vencimento,acesso_manual_ate FROM assinaturas WHERE id=$1',[a.id]); const original = db.transaction; let transactions = 0;
     subtest.mock.method(db, 'transaction', async function (callback, options) {
-      if (++transactions === 1) await db.runAsync("UPDATE assinaturas SET status='bloqueada',status_assinatura='BLOQUEADA',bloqueado=1,proximo_vencimento=NULL,acesso_manual_ate=NULL WHERE id=$1", [a.id]);
+      if (++transactions === 1) await db.runAsync("UPDATE assinaturas SET status='atrasada',status_assinatura='BLOQUEADA',bloqueado=1,proximo_vencimento=NULL,acesso_manual_ate=NULL WHERE id=$1", [a.id]);
       return original.call(db, callback, options);
     });
     try {

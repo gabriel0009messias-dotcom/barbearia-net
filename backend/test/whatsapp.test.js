@@ -82,8 +82,8 @@ test('WhatsApp: rotas reais, banco isolado e Evolution simulada', async (t) => {
   const salt = 'test-salt';
   const hash = crypto.scryptSync('test-password', salt, 64).toString('hex');
   for (const id of [1, 2]) {
-    await db.runAsync(`INSERT INTO assinaturas (id, barbearia_nome, responsavel_nome, telefone, email, metodo_pagamento, dia_vencimento, suporte_numero, status, senha_hash, senha_salt)
-      VALUES ($1, 'Teste', 'Teste', $2, $3, 'mercado_pago', 5, '', 'ativo', $4, $5)`, [id, `7599999999${id}`, `test${id}@example.test`, hash, salt]);
+    await db.runAsync(`INSERT INTO assinaturas (id, barbearia_nome, responsavel_nome, telefone, email, metodo_pagamento, dia_vencimento, suporte_numero, status, senha_hash, senha_salt, proximo_vencimento)
+      VALUES ($1, 'Teste', 'Teste', $2, $3, 'mercado_pago', 5, '', 'ativo', $4, $5, '2099-01-01')`, [id, `7599999999${id}`, `test${id}@example.test`, hash, salt]);
   }
   const request = async (route, token, body, method = body ? 'POST' : 'GET') => {
     const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { 'x-barbeiro-token': token } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });

@@ -9,6 +9,7 @@ const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:
 test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos pagamento', { skip: !executablePath }, async t => {
   const app = express();
   app.use(express.json());
+  app.post('/api/admin/login', (_req,res) => res.json({token:'fake-admin-session'}));
   const assinaturas = [];
   let pendentes = [1, 2, 3].map(id => ({ id, barbearia_nome: `Salao ${id}`, responsavel_nome: '<img src=x onerror=alert(1)>',
     email: `pending${id}@example.test`, telefone: '5511888888888', whatsapp_numero: '5511999999999', metodo_pagamento: 'mercado_pago',
@@ -49,7 +50,6 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
   t.after(async () => { await browser.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   const page = await browser.newPage();
   await page.evaluateOnNewDocument(() => {
-    localStorage.setItem('admin_token_salaoflix', 'fake-admin-session');
     const original = window.setInterval;
     window.setInterval = (callback, delay, ...args) => {
       if (delay === 30000) { window.refreshAdminForTest = callback; return 0; }
@@ -57,6 +57,9 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
     };
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/controle-interno.html`);
+  await page.type('#adminEmailInput', 'fixture-admin@example.test');
+  await page.type('#adminSenhaInput', 'fixture-only-password');
+  await page.click('#adminLoginForm button');
   await page.waitForSelector('#adminPendentesBody .grant-days');
   await t.test('pendentes separados, campos seguros, data opcional e sem controle de status', async () => {
     assert.equal(await page.$$eval('#adminAssinaturasBody .grant-days', nodes => nodes.length), 0);
@@ -78,7 +81,7 @@ test('pendentes no navegador: dados, liberacao, exclusao e atualizacao apos paga
     const contact = await page.$eval('#adminAssinaturasBody tr:first-child td:nth-child(3)', node => node.textContent);
     assert.equal(contact, 'pending1@example.test / Telefone: 5511888888888 / WhatsApp: 5511999999999');
     assert.equal(await page.$eval('#adminPendentesBody', node => node.textContent.includes('Salao 1')), false);
-    assert.match(await page.$eval('#adminPendentesMessage', node => node.textContent), /Acesso liberado/);
+    assert.match(await page.$eval('#adminPendentesMessage', node => node.textContent), /Dias registrados/);
   });
   await t.test('exclusao pode ser cancelada, erro preserva cadastro e sucesso remove so o escolhido', async () => {
     page.once('dialog', dialog => dialog.dismiss());

@@ -11,6 +11,17 @@ function trialState(account, now = Date.now()) {
     endsAt: valid ? new Date(ends).toISOString() : null,
     daysRemaining: active ? Math.ceil((ends - now) / 86400000) : 0 };
 }
+function adminBlockState(account, now = Date.now()) {
+  if (account?.bloqueio_admin !== true && !legacyAdminBlock(account)) return null;
+  return { liberado: false, status: 'admin_blocked', motivo: 'bloqueio_administrativo',
+    mensagem: 'Seu estabelecimento foi bloqueado pelo administrador. Entre em contato com o suporte.',
+    trial: trialState(account, now) };
+}
+// Both spellings were accepted by the historical Admin PATCH. Their origin
+// cannot be recovered safely. Only explicit Admin unlock may clear them.
+function legacyAdminBlock(account) {
+  return ['bloqueado', 'bloqueada'].includes(String(account?.status || '').trim().toLowerCase());
+}
 function normalizePhone(value) {
   let phone = String(value || '').replace(/\D/g, '');
   if (phone.length === 12 || phone.length === 13) { if (phone.startsWith('55')) phone = phone.slice(2); }
@@ -39,11 +50,14 @@ async function startTrial(connection, id, keys) {
 }
 // Billing access is evaluated first, preserving existing subscriptions and grace periods.
 function accessState(account, billing, now = Date.now()) {
+  const administrative = adminBlockState(account, now);
+  if (administrative) return administrative;
   const trial = trialState(account, now);
-  if (billing.liberado) return { ...billing, status: 'subscription_active', trial };
+  if (billing.liberado) return { ...billing, status: billing.motivo === 'grace_period' ? 'grace_period' : billing.motivo === 'manual_access' ? 'manual_access' : 'subscription_active', trial };
   const blocked = Number(account?.bloqueado) === 1 || ['bloqueada', 'cancelada'].includes(account?.status);
   if (!blocked && trial.status === 'active') return { liberado: true, status: 'trial_active', motivo: 'trial_active', mensagem: 'Teste grátis ativo.', trial };
+  if (billing.motivo === 'subscription_requires_regularization') return { ...billing, status: 'subscription_irregular', trial };
   if (trial.status === 'expired') return { liberado: false, status: 'trial_expired', motivo: 'trial_expired', mensagem: 'Seu teste grátis terminou. Seus dados continuam salvos.', trial };
   return { ...billing, status: 'payment_required', trial };
 }
-module.exports = { TRIAL_MS, trialState, normalizePhone, identities, startTrial, accessState };
+module.exports = { TRIAL_MS, trialState, normalizePhone, identities, startTrial, accessState, adminBlockState, legacyAdminBlock };

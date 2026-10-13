@@ -104,7 +104,7 @@ test('Conta privada: autenticação segura e no-store antes de qualquer resposta
   }
 
   await t.test('conta bloqueada: painel continua 403/no-store e consulta de conta continua 200/no-store', async () => {
-    await db.runAsync("UPDATE assinaturas SET bloqueado=1,status='bloqueada' WHERE id=$1", [id]);
+    await db.runAsync("UPDATE assinaturas SET bloqueado=1,status='atrasada' WHERE id=$1", [id]);
     try {
       const panel = await request('/studiofy/painel', token);
       assert.equal(panel.status, 403);

@@ -9,7 +9,14 @@ const { transitionAppointment } = require('./services/agenda');
 require('./loadEnv');
 
 const db = require('./database');
-const { startTrial, identities } = require('./services/trial');
+const securityLimits = require('./services/securityLimits').createSecurityLimits(db);
+function securityGate(scope, identify) {
+  return async (req,res,next) => {
+    let identity; try { identity=identify(req); } catch { identity='invalid'; }
+    if(await securityLimits.check(res,scope,identity)) next();
+  };
+}
+const { startTrial, identities, adminBlockState, legacyAdminBlock } = require('./services/trial');
 const { acessoManualAtivo, calcularResumoPagamento, avaliarAcessoAssinatura } = require('./services/access');
 const {
   getEvolutionConfig,
@@ -45,6 +52,7 @@ const router = express.Router();
 router.use(require('./evolutionContext').whatsappRequestContext);
 // Temporary, fixed-instance maintenance endpoint; remove after verification.
 require('./temporaryEvolutionWebhookAdmin').registerTemporaryEvolutionWebhookAdmin(router, requireAdmin);
+router.use('/admin', require('./services/privateAccountHttp').privateAccountResponse);
 const DIAS_VENCIMENTO = [5, 12, 24];
 const METODOS_PAGAMENTO = ['mercado_pago'];
 // O painel legado usa "ativo"; mantemos "ativa" para registros antigos.
@@ -159,11 +167,13 @@ function mapearAssinatura(assinatura) {
     return assinatura;
   }
 
-  const statusAssinatura = String(assinatura.status_assinatura || assinatura.status || 'pendente').toUpperCase();
-  const bloqueado = Number(assinatura.bloqueado || 0) === 1;
+  const administrative = Boolean(adminBlockState(assinatura));
+  const statusAssinatura = administrative ? 'BLOQUEADA' : String(assinatura.status_assinatura || assinatura.status || 'pendente').toUpperCase();
+  const bloqueado = administrative || Number(assinatura.bloqueado || 0) === 1;
 
   return {
     ...subscriptionView(assinatura),
+    status: administrative ? 'bloqueado' : assinatura.status,
     nome: assinatura.barbearia_nome,
     plano: assinatura.plano || NOME_PLANO_PADRAO,
     valor_plano: subscriptionPlan(assinatura).amountCents / 100,
@@ -225,6 +235,17 @@ function criarLembretePagamento(assinatura) {
 }
 
 async function sincronizarStatusPorVencimento(assinatura) {
+  if (!assinatura) return assinatura;
+  return db.transaction(async connection => {
+  assinatura = await connection.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR UPDATE', [assinatura.id]);
+  // Suspension is projected separately; never persist it over the billing state.
+  if (adminBlockState(assinatura)) {
+    if (assinatura.bloqueio_admin !== true) {
+      await connection.runAsync('UPDATE assinaturas SET bloqueio_admin=TRUE WHERE id=$1', [assinatura.id]);
+      assinatura.bloqueio_admin = true;
+    }
+    return assinatura;
+  }
   // Temporary access is projected in responses; billing state stays unchanged in storage.
   if (acessoManualAtivo(assinatura)) {
     return { ...assinatura, status: 'ativa', status_assinatura: 'ATIVA', bloqueado: 0 };
@@ -234,14 +255,17 @@ async function sincronizarStatusPorVencimento(assinatura) {
   }
 
   const resumo = calcularResumoPagamento(assinatura);
+  // Financial expiry keeps the existing overdue status and numeric block.
+  // Historical blocked spellings remain reserved for Admin compatibility.
+  const storedStatus = resumo.statusSugerido === 'bloqueada' ? 'atrasada' : resumo.statusSugerido;
 
   if (
-    resumo.statusSugerido !== assinatura.status ||
+    storedStatus !== assinatura.status ||
     resumo.statusAssinaturaSugerido !== String(assinatura.status_assinatura || '').toUpperCase() ||
     Number(assinatura.dias_atraso || 0) !== resumo.diasAtraso ||
     Number(assinatura.bloqueado || 0) !== (resumo.bloqueado ? 1 : 0)
   ) {
-    await runAsync(
+    await connection.runAsync(
       `UPDATE assinaturas
        SET status = $1,
            status_assinatura = $2,
@@ -254,9 +278,9 @@ async function sincronizarStatusPorVencimento(assinatura) {
            END,
            data_vencimento = COALESCE(proximo_vencimento, data_vencimento),
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $7`,
+       WHERE id = $7 AND bloqueio_admin = FALSE`,
       [
-        resumo.statusSugerido,
+        storedStatus,
         resumo.statusAssinaturaSugerido,
         resumo.diasAtraso,
         resumo.bloqueado ? 1 : 0,
@@ -266,10 +290,11 @@ async function sincronizarStatusPorVencimento(assinatura) {
       ]
     );
 
-    return getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinatura.id]);
+    return connection.getAsync("SELECT * FROM assinaturas WHERE id = $1", [assinatura.id]);
   }
 
   return assinatura;
+  });
 }
 
 async function enriquecerAssinatura(assinatura) {
@@ -592,7 +617,7 @@ async function listarAssinaturasComServicos() {
       // Showing a pending registration must not change its access or billing state.
       const { id, barbearia_nome, responsavel_nome, email, telefone, whatsapp_numero, metodo_pagamento, created_at } = assinatura;
       pendentes.push({ id, barbearia_nome, responsavel_nome, email, telefone, whatsapp_numero, metodo_pagamento, created_at,
-        status: 'aguardando_pagamento' });
+        bloqueio_admin: assinatura.bloqueio_admin, acesso: avaliarAcessoAssinatura(assinatura), status: 'aguardando_pagamento' });
     }
   }
   const detalhadas = await Promise.all(
@@ -1070,8 +1095,6 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
   }
 
   console.info('[recuperacao-email] iniciando envio', {
-    to: email,
-    from,
     hosted: emAmbienteHospedado(),
     provider: apiConfig?.provider || 'smtp',
   });
@@ -1099,11 +1122,7 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
   });
 
   console.info('[recuperacao-email] envio concluido', {
-    to: email,
-    messageId: info?.messageId || null,
-    accepted: Array.isArray(info?.accepted) ? info.accepted : [],
-    rejected: Array.isArray(info?.rejected) ? info.rejected : [],
-    response: ocultarDadosRecuperacaoNosLogs(info?.response || ''),
+    success: true,
   });
 }
 
@@ -1841,35 +1860,28 @@ router.get('/publico/assinaturas/:id/status', privateNoStore,
 });
 
 router.post('/publico/assinaturas/:id/checkout', privateNoStore, async (req, res) => {
-  const { id } = req.params;
-
+  const rawId = req.params.id, id=Number(rawId);
+  limparSessoesBarbeiroExpiradas();
+  const session=barberSessions.get(String(req.headers['x-barbeiro-token'] || ''));
+  const validId=/^[1-9][0-9]*$/.test(rawId) && Number.isSafeInteger(id);
+  const ownerSession=validId && session?.assinaturaId === id;
+  // Unknown and other-account sessions cannot spend the owner's private budget.
+  if (!ownerSession && !(await securityLimits.check(res,'checkoutPassword',validId?String(id):'invalid'))) return;
   try {
-    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
+    const assinatura=validId ? await getAsync('SELECT * FROM assinaturas WHERE id=$1',[id]) : null;
+    if (!assinatura || (!ownerSession && !verificarSenha(req.body?.senha || '',assinatura))) {
+      return res.status(401).json({error:'Credenciais invalidas para gerar o pagamento.'});
     }
-
-    limparSessoesBarbeiroExpiradas();
-    const session = barberSessions.get(String(req.headers['x-barbeiro-token'] || ''));
-    if (Number(session?.assinaturaId) !== Number(id) && !verificarSenha(req.body?.senha || '', assinatura)) {
-      return res.status(401).json({ error: 'Informe a senha da conta para gerar o pagamento.' });
-    }
-    const checkout = await payments.checkout(assinatura);
-
-    res.json({
-      checkoutUrl: checkout.init_point || checkout.sandbox_init_point || null,
-      plan: checkout.plan,
-      gatewayStatus: checkout.status || 'pending',
-      provider: 'mercado_pago',
-    });
-  } catch (error) {
-    res.status(error.statusCode || 500).json({ error: error.publicMessage || 'Nao foi possivel gerar o pagamento. Tente novamente.' });
+    if (!(await securityLimits.check(res,'checkoutOwner',assinatura.id))) return;
+    const checkout=await payments.checkout(assinatura);
+    res.json({checkoutUrl:checkout.init_point || checkout.sandbox_init_point || null,
+      plan:checkout.plan,gatewayStatus:checkout.status || 'pending',provider:'mercado_pago'});
+  } catch(error) {
+    res.status(error.statusCode || 500).json({error:error.publicMessage || 'Nao foi possivel gerar o pagamento. Tente novamente.'});
   }
 });
 
-router.post('/barbeiro/login', async (req, res) => {
+router.post('/barbeiro/login', securityGate('ownerLogin',req=>loginIdentity(req.body?.identificador)), async (req, res) => {
   const { identificador, senha } = req.body;
 
   if (!identificador || !senha) {
@@ -1885,7 +1897,7 @@ router.post('/barbeiro/login', async (req, res) => {
           OR ${phoneIdentitySql('whatsapp_numero')} = $1
           OR lower(btrim(email)) = $1 ORDER BY id DESC LIMIT 2`, [identifier]
     );
-    if (candidates.length > 1) return res.status(409).json({ error: 'Mais de uma conta corresponde a estes dados. Entre em contato com o suporte.' });
+    if (candidates.length > 1) return res.status(401).json({ error: 'Login invalido.' });
     const assinaturaEncontrada = candidates[0];
     const assinatura = await sincronizarStatusPorVencimento(assinaturaEncontrada);
 
@@ -1906,7 +1918,7 @@ router.post('/barbeiro/login', async (req, res) => {
   }
 });
 
-router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
+router.post('/barbeiro/recuperar-senha/solicitar', securityGate('recoveryRequest',req=>normalizarEmail(req.body?.email || req.body?.identificador || '')), async (req, res) => {
   const email = normalizarEmail(req.body.email || req.body.identificador);
 
   if (!email) {
@@ -1915,18 +1927,6 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
   }
 
   try {
-    const assinatura = await buscarAssinaturaPorEmailRecuperacao(email);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Nao encontrei uma conta com esse Gmail.' });
-      return;
-    }
-
-    if (!assinatura.email) {
-      res.status(400).json({ error: 'Essa conta nao possui Gmail cadastrado para recuperar a senha.' });
-      return;
-    }
-
     if (!emailRecuperacaoConfigurado()) {
       const error = new Error(
         'Recuperacao por e-mail ainda nao esta configurada neste servidor. Adicione RESEND_API_KEY, BREVO_API_KEY ou credenciais SMTP.'
@@ -1939,6 +1939,10 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
       throw criarErroConfiguracaoEmailHospedado();
     }
 
+    const acknowledgement = { ok: true, mensagem: 'Se os dados corresponderem a uma conta Studiofy, enviaremos um link de recuperação para o e-mail cadastrado.' };
+    const assinatura = await buscarAssinaturaPorEmailRecuperacao(email);
+    if (!assinatura?.email) return res.json(acknowledgement);
+
     const token = criarTokenRecuperacaoSeguro();
     const tokenHash = gerarHashTokenRecuperacaoSeguro(token);
     const expiresAt = calcularExpiracaoRecuperacaoSenha(60);
@@ -1947,22 +1951,16 @@ router.post('/barbeiro/recuperar-senha/solicitar', async (req, res) => {
     await salvarTokenRecuperacaoSenha(assinatura.id, tokenHash, expiresAt);
     await enviarLinkRecuperacaoPorEmailSeguro(assinatura.email, linkRecuperacao);
 
-    res.json({
-      ok: true,
-      mensagem: 'Enviamos um link de recuperação da sua conta Studiofy para o seu e-mail.',
-    });
+    res.json(acknowledgement);
   } catch (error) {
     console.error('[recuperacao-email] falha ao solicitar link', {
-      email,
       statusCode: error.statusCode || 500,
-      message: ocultarDadosRecuperacaoNosLogs(error.message),
-      stack: ocultarDadosRecuperacaoNosLogs(error.stack),
     });
-    res.status(error.statusCode || 500).json({ error: ocultarDadosRecuperacaoNosLogs(error.message) });
+    res.status(error.statusCode || 500).json({ error: 'Não foi possível solicitar a recuperação. Tente novamente em instantes.' });
   }
 });
 
-router.get('/barbeiro/recuperar-senha/token-status', async (req, res) => {
+router.get('/barbeiro/recuperar-senha/token-status', securityGate('recoveryStatus',req=>String(req.query.token || '').trim()), async (req, res) => {
   const token = String(req.query.token || '').trim();
 
   if (!token) {
@@ -1990,11 +1988,11 @@ router.get('/barbeiro/recuperar-senha/token-status', async (req, res) => {
       expiresAt: recovery.expires_at,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível consultar a recuperação.' });
   }
 });
 
-router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
+router.post('/barbeiro/recuperar-senha/redefinir', securityGate('recoveryReset',req=>String(req.body?.token || '').trim()), async (req, res) => {
   const token = String(req.body.token || '').trim();
   const novaSenha = String(req.body.novaSenha || '');
   const confirmarSenha = String(req.body.confirmarSenha || '');
@@ -2043,7 +2041,7 @@ router.post('/barbeiro/recuperar-senha/redefinir', async (req, res) => {
 
     res.json({ ok: true, mensagem: 'Senha da sua conta Studiofy atualizada com sucesso. Agora você já pode entrar no painel.' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Não foi possível concluir a recuperação.' });
   }
 });
 
@@ -2719,7 +2717,7 @@ router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async
   }
 });
 
-router.post('/admin/login', async (req, res) => {
+router.post('/admin/login', securityGate('adminLogin',req=>normalizarEmail(req.body?.email || '')), async (req, res) => {
   const email = normalizarEmail(req.body?.email || '');
   const senha = String(req.body?.senha || '');
 
@@ -2746,6 +2744,11 @@ router.post('/admin/login', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+router.post('/admin/logout', requireAdmin, (req, res) => {
+  adminSessions.delete(req.headers['x-admin-token']);
+  res.json({ sucesso: true });
 });
 
 router.get('/admin/assinatura-config', requireAdmin, async (req, res) => {
@@ -2854,13 +2857,13 @@ router.post('/admin/assinaturas/:id/liberar-dias', requireAdmin, async (req, res
   }
   try {
     const result = await db.transaction(async connection => {
-      const account = await connection.getAsync('SELECT id, acesso_manual_ate FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      const account = await connection.getAsync('SELECT id, acesso_manual_ate, bloqueio_admin FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
       if (!account) return null;
       const ate = new Date(Math.max(Date.now() + dias * 86400000, Date.parse(account.acesso_manual_ate || '') || 0)).toISOString();
       await connection.runAsync(`UPDATE assinaturas SET acesso_manual_ate=$1,
         observacoes=concat_ws(E'\\n', NULLIF(observacoes,''), $2::text), updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
       [ate, `Liberacao administrativa sem pagamento: ${dias} dia(s) a partir de agora, ate ${ate}.`, id]);
-      return { sucesso: true, id, acesso_manual_ate: ate };
+      return { sucesso: true, id, acesso_manual_ate: ate, bloqueio_admin: account.bloqueio_admin };
     });
     if (!result) return res.status(404).json({ error: 'Conta nao encontrada.' });
     res.json(result);
@@ -2870,54 +2873,38 @@ router.post('/admin/assinaturas/:id/liberar-dias', requireAdmin, async (req, res
 });
 
 router.patch('/admin/assinaturas/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { status, observacoes } = req.body;
-
-  if (!STATUS_ASSINATURA.includes(status)) {
-    res.status(400).json({ error: 'Status invalido.' });
-    return;
+  const id = Number(req.params.id), { status, observacoes } = req.body;
+  if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(id) || !STATUS_ASSINATURA.includes(status)) {
+    return res.status(400).json({ error: 'Conta ou status invalido.' });
   }
-
   if (['ativo', 'ativa', 'atrasada'].includes(status)) {
     return res.status(400).json({ error: 'Para liberar acesso, consulte um pagamento aprovado pelo Mercado Pago.' });
   }
-
   try {
-    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
-    }
-
-    const proximoVencimento = assinatura.proximo_vencimento;
-
-    await runAsync(
-      `UPDATE assinaturas
-       SET status = $1,
-           acesso_manual_ate = NULL,
-           ultimo_pagamento = $2,
-           proximo_vencimento = $3,
-           observacoes = $4,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5`,
-      [
-        status,
-        assinatura.ultimo_pagamento || null,
-        proximoVencimento,
-        observacoes || assinatura.observacoes || '',
-        id,
-      ]
-    );
-
+    const found = await db.transaction(async connection => {
+      const account = await connection.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      if (!account) return false;
+      if (adminBlockState(account) && account.bloqueio_admin !== true) {
+        await connection.runAsync('UPDATE assinaturas SET bloqueio_admin=TRUE WHERE id=$1', [id]);
+      }
+      if (['bloqueado', 'bloqueada'].includes(status)) {
+        await connection.runAsync('UPDATE assinaturas SET bloqueio_admin=TRUE,observacoes=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2',
+          [observacoes || account.observacoes || '', id]);
+      } else {
+        // Admin edits never re-write payment dates from an earlier snapshot.
+        await connection.runAsync('UPDATE assinaturas SET status=$1,acesso_manual_ate=NULL,observacoes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3',
+          [status, observacoes || account.observacoes || '', id]);
+      }
+      return true;
+    });
+    if (!found) return res.status(404).json({ error: 'Assinatura nao encontrada.' });
     res.json(await montarRespostaAssinatura(id));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch { res.status(500).json({ error: 'Nao foi possivel atualizar a assinatura.' }); }
 });
 
 router.post('/admin/assinaturas/:id/confirmar-pagamento', requireAdmin, async (req, res) => {
   const { id } = req.params;
+  if (!/^[1-9][0-9]*$/.test(id) || !Number.isSafeInteger(Number(id))) return res.status(400).json({error:'Conta invalida.'});
   try {
     const paymentId = String(req.body?.paymentId || '');
     if (!/^\d+$/.test(paymentId)) return res.status(400).json({ error: 'Informe paymentId do Mercado Pago para verificar o pagamento.' });
@@ -2929,30 +2916,46 @@ router.post('/admin/assinaturas/:id/confirmar-pagamento', requireAdmin, async (r
 });
 
 router.post('/admin/assinaturas/:id/bloquear', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const observacoes = String(req.body?.observacoes || '').trim();
-
+  const id = Number(req.params.id);
+  if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(id)) return res.status(400).json({error:'Conta invalida.'});
   try {
-    const assinatura = await getAsync("SELECT * FROM assinaturas WHERE id = $1", [id]);
-
-    if (!assinatura) {
-      res.status(404).json({ error: 'Assinatura nao encontrada.' });
-      return;
-    }
-
-    await runAsync(
-      `UPDATE assinaturas
-       SET status = 'bloqueado',
-           acesso_manual_ate = NULL,
-           observacoes = $1,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
-      [observacoes || assinatura.observacoes || '', id]
-    );
-
+    const found = await db.transaction(async connection => {
+      const account = await connection.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      if (!account) return false;
+      await connection.runAsync('UPDATE assinaturas SET bloqueio_admin=TRUE,observacoes=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2',
+        [String(req.body?.observacoes || '').trim() || account.observacoes || '', id]);
+      return true;
+    });
+    if (!found) return res.status(404).json({error:'Assinatura nao encontrada.'});
     res.json(await montarRespostaAssinatura(id));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch { res.status(500).json({error:'Nao foi possivel bloquear a assinatura.'}); }
+});
+
+router.post('/admin/assinaturas/:id/desbloquear', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!/^[1-9][0-9]*$/.test(req.params.id) || !Number.isSafeInteger(id)) {
+    return res.status(400).json({ error: 'Conta invalida.' });
+  }
+  try {
+    const found = await db.transaction(async connection => {
+      const account = await connection.getAsync('SELECT * FROM assinaturas WHERE id=$1 FOR UPDATE', [id]);
+      if (!account) return false;
+      // Both historical spellings may encode an Admin block. Keep paid dates,
+      // provider revocations and trial state intact when restoring that account.
+      const revoked = ['refunded', 'charged_back', 'cancelled', 'canceled'].includes(account.gateway_status)
+        || account.status_assinatura === 'CANCELADA';
+      const legacy = legacyAdminBlock(account);
+      const status = legacy ? (revoked ? 'cancelada' : account.ultimo_pagamento && account.proximo_vencimento ? 'ativo' : 'pendente') : account.status;
+      await connection.runAsync(`UPDATE assinaturas SET bloqueio_admin=FALSE, status=$1,
+        status_assinatura=CASE WHEN $2 THEN $3 ELSE status_assinatura END,
+        bloqueado=CASE WHEN $2 THEN $4 ELSE bloqueado END, updated_at=CURRENT_TIMESTAMP WHERE id=$5`,
+      [status, legacy, revoked ? 'BLOQUEADA' : status === 'ativo' ? 'ATIVA' : 'PENDENTE', revoked ? 1 : 0, id]);
+      return true;
+    });
+    if (!found) return res.status(404).json({ error: 'Assinatura nao encontrada.' });
+    res.json(await montarRespostaAssinatura(id));
+  } catch {
+    res.status(500).json({ error: 'Nao foi possivel retirar o bloqueio administrativo.' });
   }
 });
 

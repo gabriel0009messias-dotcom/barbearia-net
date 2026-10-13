@@ -75,9 +75,9 @@ test('preco do plano: migration protege contratos e historico', async t => {
   });
   await t.test('historico aprovado de 50 e contratos protegidos permanecem identicos', async () => {
     assert.deepEqual((await pool.query('SELECT * FROM assinaturas WHERE id = ANY($1) ORDER BY id', [protectedIds])).rows, protectedRows);
-    assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows, history);
+    assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows.map(({ period_base, period_ends, ...row }) => row), history);
     assert.deepEqual((await pool.query("SELECT * FROM mercado_pago_orders WHERE reference='paid'")).rows[0], paidOrder);
-    assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows, history);
+    assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows.map(({ period_base, period_ends, ...row }) => row), history);
   });
   await t.test('pagamento em transito, checkout expirado e pedido sem resposta ficam protegidos', async () => {
     assert.deepEqual((await pool.query('SELECT * FROM assinaturas WHERE id = ANY($1) ORDER BY id', [riskyIds])).rows, riskyRows);
@@ -135,7 +135,7 @@ test('preco do plano: migration protege contratos e historico', async t => {
       assert.equal(sent.length, 1);
       await payments.checkout((await pool.query('SELECT * FROM assinaturas WHERE id=2')).rows[0]);
       assert.equal(sent[1].items[0].unit_price, 50);
-      assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows, history);
+      assert.deepEqual((await pool.query('SELECT * FROM mercado_pago_payments ORDER BY payment_id')).rows.map(({ period_base, period_ends, ...row }) => row), history);
     } finally { global.fetch = nativeFetch; }
   });
   await t.test('webhook tardio credita 50 como 50; divergencia de 50 para 65 exige revisao', async () => {
@@ -171,7 +171,7 @@ test('preco do plano: migration protege contratos e historico', async t => {
       assert.deepEqual((await pool.query('SELECT * FROM assinaturas WHERE id=13')).rows[0], before);
       assert.equal((await pool.query("SELECT count(*) FROM mercado_pago_payments WHERE payment_id='988'")).rows[0].count, 0);
       assert.equal((await pool.query("SELECT credited_payment_id FROM mercado_pago_orders WHERE reference='old-65'")).rows[0].credited_payment_id, null);
-      assert.deepEqual((await pool.query("SELECT * FROM mercado_pago_payments WHERE payment_id IN ('123','789') ORDER BY payment_id")).rows, history);
+      assert.deepEqual((await pool.query("SELECT * FROM mercado_pago_payments WHERE payment_id IN ('123','789') ORDER BY payment_id")).rows.map(({ period_base, period_ends, ...row }) => row), history);
     } finally { global.fetch = nativeFetch; await db.close(); }
   });
 });

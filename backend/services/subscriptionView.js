@@ -3,7 +3,7 @@
 const SUBSCRIPTION_FIELDS = Object.freeze([
   'id', 'barbearia_nome', 'responsavel_nome', 'telefone', 'email',
   'metodo_pagamento', 'dia_vencimento', 'valor_mensal', 'status',
-  'suporte_numero', 'ultimo_pagamento', 'proximo_vencimento', 'observacoes',
+  'suporte_numero', 'ultimo_pagamento', 'proximo_vencimento', 'vencimento_em', 'observacoes',
   'whatsapp_numero', 'whatsapp_status', 'whatsapp_session',
   'whatsapp_ultimo_erro', 'whatsapp_ultimo_check_em', 'whatsapp_ultimo_qr_em',
   'created_at', 'updated_at', 'trial_usado', 'trial_started_at', 'trial_expires_at',
@@ -12,7 +12,7 @@ const SUBSCRIPTION_FIELDS = Object.freeze([
   'localizacao_cidade', 'localizacao_rua', 'localizacao_referencia',
   'plano', 'valor_plano', 'status_assinatura', 'subscription_id', 'customer_id',
   'payment_id', 'dias_atraso', 'bloqueado', 'data_bloqueio', 'data_vencimento',
-  'acesso_manual_ate', 'business_type_code', 'state_code',
+  'acesso_manual_ate', 'bloqueio_admin', 'business_type_code', 'state_code',
   'instagram_handle', 'public_slug', 'page_description', 'page_color',
   'cover_image', 'logo_image', 'cancellation_notice_minutes',
   'gateway_provider', 'gateway_status', 'gateway_checkout_url',

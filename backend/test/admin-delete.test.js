@@ -99,8 +99,9 @@ test('exclusao administrativa isolada e atomica', async t => {
   });
   await t.test('tabelas anteriormente sem FK rejeitam gravacoes orfas apos exclusao', async () => {
     for (const table of ['mercado_pago_orders', 'mercado_pago_payments', 'whatsapp_messages']) {
-      await assert.rejects(db.runAsync(`UPDATE ${table} SET assinatura_id=$1 WHERE assinatura_id=$2`, [ids[0], ids[1]]), { code: '23503' });
+      await assert.rejects(db.runAsync(`UPDATE ${table} SET assinatura_id=$1 WHERE assinatura_id=$2`, [ids[0], ids[1]]), { code: table === 'mercado_pago_payments' ? '23514' : '23503' });
     }
+    await assert.rejects(db.runAsync("INSERT INTO mercado_pago_payments(payment_id,order_reference,assinatura_id,status,amount_cents) VALUES('synthetic-orphan','synthetic-order',$1,'pending',6500)", [ids[0]]), { code: '23503' });
     assert.deepEqual(await snapshot(ids[1]), other);
   });
 });

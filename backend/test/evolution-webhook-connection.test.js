@@ -16,7 +16,7 @@ test('webhook real: autenticacao, repeticao, QR, open/close e ausencia de loop/4
   let upstream = 0;
   t.mock.method(global, 'fetch', async () => { upstream++; throw Error('webhook must not call Evolution'); });
   t.after(async () => { server.closeAllConnections(); await new Promise(r => server.close(r)); await db.close(); await environment.cleanup(); });
-  await db.runAsync("INSERT INTO assinaturas (id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,whatsapp_session,status) VALUES (6,'Studio Teste','Teste','11999999999','mercado_pago',5,'','barbearia-6','ativo')");
+  await db.runAsync("INSERT INTO assinaturas (id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,whatsapp_session,status,proximo_vencimento) VALUES (6,'Studio Teste','Teste','11999999999','mercado_pago',5,'','barbearia-6','ativo','2099-01-01')");
   const post = async (payload, secret = 'synthetic-webhook-secret') => {
     const res = await nativeFetch(`http://127.0.0.1:${server.address().port}/api/webhook/evolution`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret }, body: JSON.stringify(payload),

@@ -1,0 +1,32 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const express=require('express');
+const fs=require('node:fs');
+const path=require('node:path');
+const puppeteer=require('puppeteer');
+const executablePath=[process.env.CHROME_PATH,puppeteer.executablePath(),'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(p=>p&&fs.existsSync(p));
+test('Etapa 4: painel e Controle Interno distinguem regularizacao de assinatura ativa',{skip:!executablePath,timeout:60000},async t=>{
+  let blocked=false,operational=0;const app=express();app.use(express.json());
+  const access=()=>({status:blocked?'admin_blocked':'subscription_irregular',liberado:false,motivo:blocked?'bloqueio_administrativo':'subscription_requires_regularization',mensagem:blocked?'Bloqueado pelo administrador.':'Sua assinatura requer regularizacao. Seus dados continuam salvos.'});
+  app.get('/api/barbeiro/me',(_req,res)=>res.json({id:17,barbearia_nome:'Legacy fixture',acesso:access()}));
+  app.get('/api/studiofy/painel',(_req,res)=>{operational++;res.status(403).json({acesso:access()});});
+  app.get('/api/publico/assinatura-config',(_req,res)=>res.json({plan:{amountCents:6500,durationDays:30}}));
+  app.post('/api/admin/login',(_req,res)=>res.json({token:'synthetic-session'}));
+  app.get('/api/admin/assinatura-config',(_req,res)=>res.json({}));
+  app.get('/api/admin/assinaturas',(_req,res)=>{const row={id:17,status:'ativo',barbearia_nome:'Legacy fixture',bloqueio_admin:blocked,acesso:access()};res.json({assinaturas:[row],pendentes:[{...row,id:18,status:'aguardando_pagamento'}]});});
+  app.use(express.static(path.resolve(__dirname,'../public')));
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  const browser=await puppeteer.launch({executablePath,headless:true,args:['--no-sandbox']});t.after(async()=>{await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+  const page=await browser.newPage();await page.emulateTimezone('America/New_York');await page.evaluateOnNewDocument(()=>localStorage.setItem('barbearia_auth_token','synthetic-owner'));
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));const base=`http://127.0.0.1:${server.address().port}`;
+  for(const administrative of [false,true])await t.test(administrative?'Admin tem prioridade':'Legado requer regularizacao nas duas secoes',async()=>{
+    blocked=administrative;await page.goto(base+'/studiofy.html');await page.waitForSelector('#subscribe');assert.equal(await page.$eval('#trialBanner',e=>e.textContent),access().mensagem);assert.equal(operational,0);
+    await page.goto(base+'/controle-interno.html');await page.type('#adminEmailInput','synthetic@example.test');await page.type('#adminSenhaInput','synthetic-password');await page.click('#adminLoginForm button');await page.waitForSelector('#adminPendentesBody .grant-days');
+    const label=blocked?'Bloqueada administrativamente':'Assinatura requer regularização';
+    assert.match(await page.$eval('#adminAssinaturasBody tr',e=>e.textContent),new RegExp(label));assert.equal(await page.$eval('#adminPendentesBody tr td:nth-child(6)',e=>e.textContent),label);
+    const summary=await page.$eval('#adminResumoLista',e=>e.textContent);
+    assert.match(summary,/Ativos:\s*0/);
+    assert.match(summary,new RegExp('Requerem regularização:\\s*'+(blocked?0:1)));
+  });
+  assert.deepEqual(errors,[]);
+});
