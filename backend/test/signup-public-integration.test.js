@@ -49,7 +49,8 @@ test('Cadastro etapa 1: DTO, entradas, disputa de catálogo e integração públ
   const catalog = extra => ({ nome: 'Manicure', preco: 35.20, duracao: 30, ativo: true, ...extra });
   const edit = extra => request(`/studiofy/servicos/${a.service.id}`, catalog(extra), a.token, 'PUT');
   const reset = async () => {
-    await db.runAsync('DELETE FROM agendamentos WHERE assinatura_id=$1', [a.id]);
+    // Fixture reset in the disposable schema, without operational deletion of return history.
+    await db.runAsync('TRUNCATE TABLE agendamentos CASCADE');
     assert.equal((await edit({})).status, 200);
     assert.equal((await request('/studiofy/horarios', { horarios: Array.from({ length: 7 }, () => [['08:00', '18:00']]) }, a.token, 'PUT')).status, 200);
   };

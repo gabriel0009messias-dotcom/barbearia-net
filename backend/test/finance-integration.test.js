@@ -20,7 +20,7 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
   return {status:response.status,data:await response.json(),cache:response.headers.get('cache-control')};
  };
  const owners=[];
- for(let i=0;i<2;i++){
+ for(let i=0;i<3;i++){
   const email=`finance-${i}@example.test`;
   const signup=await request('/publico/assinaturas',null,{barbeariaNome:'Financeiro '+i,responsavelNome:'Ana',telefone:'1199999000'+i,email,senha:'test-password',metodoPagamento:'mercado_pago',diaVencimento:5,servicos:[{nome:'Corte',preco:30}]});
   assert.equal(signup.status,201);
@@ -30,7 +30,7 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
   const panel=await request('/studiofy/painel',login.data.token);
   owners.push({id,token:login.data.token,service:panel.data.servicos[0],professional:panel.data.profissionais[0].id});
  }
- const [a,b]=owners;
+ const [a,b,empty]=owners;
  const future=new Date(Date.now()+2*86400000).toISOString().slice(0,10);
  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo'}).format(new Date());
  const book=async(owner,hour,name)=>{
@@ -166,8 +166,8 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
    assert.match(await page.$eval('[data-finance="hoje"] .stat',e=>e.textContent),/R\$\s1\.250,00/);
    assert.equal((await request('/studiofy/agendamentos/'+other,b.token,{status:'cancelado'},'PATCH')).status,409);
    assert.equal((await request('/studiofy/painel',b.token)).data.financeiro.total.valor_centavos,125000);
-   // Clear this isolated fixture to exercise an empty account; finalized revenue cannot be cancelled away.
-   await db.runAsync('DELETE FROM agendamentos WHERE assinatura_id=$1',[b.id]);
+   // Use a separate empty account; finalized history must remain persistent.
+   await page.evaluate(token=>localStorage.setItem('barbearia_auth_token',token),empty.token);
    await page.reload();await page.waitForSelector('[data-section="Financeiro"]');await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
    assert.match(await page.$eval('[data-finance="hoje"] .stat',e=>e.textContent),/R\$\s0,00/);
    assert.match(await page.$eval('#financeHistory',e=>e.textContent),/Nenhum registro/);

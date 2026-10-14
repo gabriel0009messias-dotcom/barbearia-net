@@ -54,7 +54,8 @@ test('Agenda etapa 1: autorização pública, estados finais e histórico financ
   const row = id => db.getAsync('SELECT * FROM agendamentos WHERE id=$1', [id]);
   const patch = (id, status, owner = a, extra = {}) => api('/studiofy/agendamentos/' + id, owner, { status, ...extra }, 'PATCH');
   const reset = async () => {
-    await db.runAsync('DELETE FROM agendamentos WHERE assinatura_id IN ($1,$2)', [a.id, b.id]);
+    // Fixture reset in this disposable schema; operational DELETE preserves return history.
+    await db.runAsync('TRUNCATE TABLE agendamentos CASCADE');
     for (const owner of owners) await db.runAsync('UPDATE servicos_assinatura SET nome=$1,preco=30,duracao=30,ativo=true WHERE id=$2', ['Corte', owner.service]);
   };
   const publicBooking = async () => {

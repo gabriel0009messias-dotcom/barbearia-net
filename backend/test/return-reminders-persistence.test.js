@@ -59,10 +59,13 @@ test('return opportunities: durable completion, snapshots, isolation and atomici
     await assert.rejects(finish(a), e => e.statusCode === 409);
     await db.runAsync("UPDATE agendamentos SET status='concluido' WHERE id=$1", [a.id]);
     assert.deepEqual(await reminders(a), [r]);
-    await assert.rejects(db.runAsync(`INSERT INTO return_reminders(assinatura_id,appointment_id,service_identity,customer_key,
+    await assert.rejects(db.transaction(async c => {
+      await c.runAsync('SELECT studiofy_return_group_lock($1,$2,$3)', [r.assinatura_id, r.customer_key, r.service_identity]);
+      return c.runAsync(`INSERT INTO return_reminders(assinatura_id,appointment_id,service_identity,customer_key,
       customer_name_snapshot,phone_snapshot,service_name_snapshot,completed_at,eligible_at,next_attempt_at)
       SELECT assinatura_id,appointment_id,service_identity,customer_key,customer_name_snapshot,phone_snapshot,
-      service_name_snapshot,completed_at,eligible_at,next_attempt_at FROM return_reminders WHERE id=$1`, [r.id]), e => e.code === '23505');
+      service_name_snapshot,completed_at,eligible_at,next_attempt_at FROM return_reminders WHERE id=$1`, [r.id]);
+    }), e => e.code === '23505');
   });
   for (const status of ['confirmado', 'cancelado', 'falta']) await t.test(status + ' does not create an opportunity', async () => {
     const a = await book();
