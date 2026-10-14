@@ -72,7 +72,8 @@ test('Cancelamento público: capacidades individuais, regras e lembretes',async 
  await t.test('concluído e falta não podem ser cancelados',async()=>{
   for(const [hour,status] of [['11:00','concluido'],['12:00','falta']]){
    const booking=await book(a,hour),id=await internalId(booking.token);
-   await db.runAsync('UPDATE agendamentos SET status=$1 WHERE id=$2',[status,id]);
+   // Completion is a past appointment; keep testing cancellation of terminal states.
+   await db.runAsync('UPDATE agendamentos SET status=$1,data=$3 WHERE id=$2',[status,id,new Date(Date.now()-2*86400000).toISOString().slice(0,10)]);
    assert.equal((await req('/public/reservas/consultar',{token:booking.token})).data.cancelavel,false);
    assert.equal((await req('/public/reservas/cancelar',{token:booking.token,confirmar:true})).status,409);
   }

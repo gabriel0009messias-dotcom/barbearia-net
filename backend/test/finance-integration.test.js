@@ -54,7 +54,11 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
   await db.runAsync("UPDATE agendamentos SET status='cancelado',data=$1 WHERE id=$2",[today,cancelled]);
   await book(a,'11:00','Confirmado futuro');
   const futureCompleted=await book(a,'12:00','Concluído futuro');
-  await db.runAsync("UPDATE agendamentos SET status='concluido' WHERE id=$1",[futureCompleted]);
+  await assert.rejects(db.runAsync("UPDATE agendamentos SET status='concluido' WHERE id=$1",[futureCompleted]),e=>e.code==='23514');
+  // A historical corrupt record still must not enter revenue or return opportunities.
+  await db.runAsync(`INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status,profissional_id,duracao,studio_service_id)
+   SELECT assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,'concluido',profissional_id,duracao,studio_service_id
+   FROM agendamentos WHERE id=$1`,[futureCompleted]);
   const f=(await request('/studiofy/painel',a.token)).data.financeiro;
   assert.equal(f.hoje.valor_centavos,7000);assert.equal(f.semana.valor_centavos,7000);assert.equal(f.mes.valor_centavos,7000);
   assert.equal(f.total.atendimentos,2);assert.equal(f.servicos[0].valor_centavos,7000);
