@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const express=require('express');
@@ -20,13 +21,13 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.setViewport({width:1440,height:1000});await page.goto(base+'/login.html');
  await page.type('#loginIdentificadorInput','browser@example.test');await page.type('#loginSenhaInput','test-password');await Promise.all([page.waitForNavigation(),page.click('[type=submit]')]);await page.waitForSelector('[data-section="Meus serviços"]');
- await page.click('[data-section="Meus serviços"]');await page.click('#addService');await page.type('[name=nome]','Design de sobrancelhas');await page.type('[name=preco]','35');await page.$eval('[name=duracao]',el=>el.value='40');await page.click('#editor [type=submit]');await page.waitForSelector('[data-edit-service]');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Design de sobrancelhas'));
- await page.click('[data-section="Minha página"]');await page.$eval('[name=slug]',el=>el.value='studio-bella');await page.type('[name=descricao]','Um momento de cuidado, pensado para você.');await page.click('#previewButton');await page.waitForSelector('#preview:not([hidden])');assert.match(await page.$eval('#preview',el=>el.textContent),/Studio Bella/);await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
+ await openMobileMenu(page);await page.click('[data-section="Meus serviços"]');await page.click('#addService');await page.type('[name=nome]','Design de sobrancelhas');await page.type('[name=preco]','35');await page.$eval('[name=duracao]',el=>el.value='40');await page.click('#editor [type=submit]');await page.waitForSelector('[data-edit-service]');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Design de sobrancelhas'));
+ await openMobileMenu(page);await page.click('[data-section="Minha página"]');await page.$eval('[name=slug]',el=>el.value='studio-bella');await page.type('[name=descricao]','Um momento de cuidado, pensado para você.');await page.click('#previewButton');await page.waitForSelector('#preview:not([hidden])');assert.match(await page.$eval('#preview',el=>el.textContent),/Studio Bella/);await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
  const coverInput=await page.$('[name=capa]');
  await coverInput.uploadFile(path.resolve(__dirname,'../public/assets/studiofy-interior.jpg'));
  await page.waitForFunction(()=>document.querySelector('#preview .cover').style.backgroundImage.includes('data:image/jpeg'),{timeout:3000});
  await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
- await page.reload();await page.waitForSelector('[data-section="Minha página"]');await page.click('[data-section="Minha página"]');
+ await page.reload();await page.waitForSelector('[data-section="Minha página"]');await openMobileMenu(page);await page.click('[data-section="Minha página"]');
  await page.waitForFunction(()=>document.querySelector('#preview .cover')?.style.backgroundImage.includes('data:image/webp'),{timeout:5000});
  const savedCover=await fetch(base+'/api/studiofy/public/studio-bella').then(r=>r.json());assert.match(savedCover.capa,/^data:image\/webp/);
  const publicPreview=await browser.newPage();await publicPreview.goto(base+'/agendar/studio-bella');await publicPreview.waitForSelector('#cover');
@@ -38,7 +39,7 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  await page.click('[name=removeCover]');await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
  assert.equal((await fetch(base+'/api/studiofy/public/studio-bella').then(r=>r.json())).capa,null);
  await publicPreview.reload();await publicPreview.waitForSelector('#cover');assert.match(await publicPreview.$eval('#cover',el=>getComputedStyle(el).backgroundImage),/linear-gradient/);await publicPreview.close();
- await page.click('[data-section="Dashboard"]');
+ await openMobileMenu(page);await page.click('[data-section="Dashboard"]');
  const artifacts=path.resolve(__dirname,'../../.tmp/studiofy-preview');fs.mkdirSync(artifacts,{recursive:true});await page.screenshot({path:path.join(artifacts,'dashboard-desktop.png'),fullPage:true});
  const mobile=await browser.newPage();mobile.on('pageerror',e=>errors.push(e.message));await mobile.setViewport({width:390,height:844,isMobile:true,hasTouch:true});await mobile.goto(base+'/agendar/studio-bella');await mobile.waitForSelector('[data-service]');await mobile.screenshot({path:path.join(artifacts,'agendamento-mobile.png'),fullPage:true});
  assert.ok(await mobile.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
@@ -46,7 +47,7 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  await mobile.screenshot({path:path.join(artifacts,'confirmacao-mobile.png'),fullPage:true});
  await page.bringToFront();await page.reload();await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Gabriel'));assert.equal((await db.getAsync('SELECT count(*) AS n FROM appointment_reminders')).n,1);
  await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true});await page.reload();await page.waitForSelector('[data-section="Agendamentos"]');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:path.join(artifacts,'painel-mobile.png'),fullPage:true});
- await page.click('[data-section="Agendamentos"]');await page.waitForSelector('.week-calendar');
+ await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');await page.waitForSelector('.week-calendar');
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Calendário móvel deve rolar dentro do painel');
  await page.click('#nextWeek');await page.waitForSelector('.week-calendar');await page.click('#agendaToday');
  await page.click('#agendaMode');await page.waitForSelector('[data-reschedule]');
@@ -56,7 +57,7 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  await page.waitForSelector('[data-calendar-booking]');await page.click('[data-calendar-booking]');
  await page.waitForSelector('.agenda-dialog[open]');await page.click('[data-detail-reschedule]');
  await page.waitForSelector('#editor');assert.equal(await page.$eval('[name=nome_cliente]',el=>el.value),'Gabriel');
- await page.click('[data-section="Configurações"]');await page.$eval('[name=antecedencia_minutos]',el=>el.value='60');await page.click('#cancellationPolicy [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('Regra de cancelamento salva'));
+ await openMobileMenu(page);await page.click('[data-section="Configurações"]');await page.$eval('[name=antecedencia_minutos]',el=>el.value='60');await page.click('#cancellationPolicy [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('Regra de cancelamento salva'));
  assert.equal((await db.getAsync('SELECT cancellation_notice_minutes FROM assinaturas WHERE id=$1',[signup.assinatura.id])).cancellation_notice_minutes,60);
  await mobile.bringToFront();await mobile.reload();await mobile.waitForSelector('#openMyBookings');await mobile.click('#openMyBookings');await mobile.waitForSelector('[data-cancel-reservation]');
  assert.match(await mobile.$eval('#savedBookings',el=>el.textContent),/Manicure/);
@@ -71,6 +72,6 @@ test('Studiofy no navegador: serviço, personalização, reserva móvel e painel
  const privateLink=await mobile.$eval('#privateBookingLink',el=>el.value);
  const guest=await browser.createBrowserContext(),guestPage=await guest.newPage();await guestPage.goto(privateLink);await guestPage.waitForFunction(()=>document.querySelector('#booking').textContent.includes('Agendamento cancelado com sucesso.'));assert.equal(new URL(guestPage.url()).hash,'');await guest.close();
  await mobile.bringToFront();await mobile.click('#myBookings');await mobile.waitForFunction(()=>document.querySelector('#savedBookings').textContent.includes('Nenhum agendamento futuro'));
- await page.bringToFront();await page.reload();await page.waitForSelector('[data-section="Agendamentos"]');await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Cancelado'));
+ await page.bringToFront();await page.reload();await page.waitForSelector('[data-section="Agendamentos"]');await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');await page.waitForFunction(()=>document.querySelector('#view').textContent.includes('Cancelado'));
  assert.deepEqual(errors,[]);
 });

@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const express=require('express');
@@ -70,7 +71,7 @@ test('Agenda etapa 2: filtros, calendário, horários, ações e telas responsiv
  },instant);
  await page.emulateTimezone('Pacific/Kiritimati');
  await page.setRequestInterception(true);page.on('request',r=>r.url().startsWith(base)?r.continue():r.respond({status:200,contentType:'application/json',body:'{}'}));
- const open=async()=>{await page.goto(base+'/studiofy.html');await page.waitForSelector('[data-section="Agendamentos"]');await page.click('[data-section="Agendamentos"]');};
+ const open=async()=>{await page.goto(base+'/studiofy.html');await page.waitForSelector('[data-section="Agendamentos"]');await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');};
  const filter=key=>page.click(`[data-agenda-filter="${key}"]`);
  const ids=()=>page.$$eval('[data-agenda-booking]',els=>els.map(e=>Number(e.dataset.agendaBooking)));
  const expected=predicate=>rows.filter(predicate).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)||a.id-b.id).map(a=>a.id);

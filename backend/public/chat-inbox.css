@@ -6,3 +6,6 @@
 .ci-search input{border-color:#657b96}.ci input::placeholder,.ci textarea::placeholder{color:#a2b4cb;opacity:1}
 .ci-new{flex-shrink:0;background:#203c60;color:#c5ddff;border:0;border-radius:0}#inboxBadgeConnection{font-size:10px;color:#c5ddff}#inboxBadgeConnection[hidden]{display:none}
 .ci-history{overflow-anchor:none}
+
+/* Keep search readable in the mobile inbox without changing desktop. */
+@media(max-width:650px){.ci-search input{font-size:16px}}

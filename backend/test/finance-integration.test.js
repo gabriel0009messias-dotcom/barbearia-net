@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const express=require('express');
@@ -133,7 +134,7 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
    page.on('request',r=>r.url().startsWith(base)||r.url().startsWith('data:')?r.continue():r.abort());
    await page.goto(base+'/login.html');await page.evaluate(token=>localStorage.setItem('barbearia_auth_token',token),a.token);
    await page.goto(base+'/studiofy.html');await page.waitForSelector('[data-section="Financeiro"]');
-   await page.click('[data-section="Financeiro"]');await page.waitForSelector('[data-finance="hoje"]');
+   await openMobileMenu(page);await page.click('[data-section="Financeiro"]');await page.waitForSelector('[data-finance="hoje"]');
    for(const width of [1440,390,320]){
     await page.setViewport({width,height:900});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Página deve caber na largura '+width);
@@ -143,27 +144,27 @@ test('Financeiro integrado: sessão, preço histórico e painel responsivo',asyn
     const history=await page.$eval('#financeHistory',e=>e.textContent);
     assert.match(history,/Cliente histórico/);assert.match(history,/R\$\s30,00/);assert.match(history,/R\$\s40,00/);
     assert.doesNotMatch(history,/Cancelado invisível|Confirmado futuro|Concluído futuro|Cliente exclusivo B/);
-    await page.click('[data-section="Dashboard"]');
+    await openMobileMenu(page);await page.click('[data-section="Dashboard"]');
     assert.match(await page.$eval('[data-dashboard="revenue-today"] .stat',e=>e.textContent),/70,00/);
-    await page.click('[data-section="Relatórios"]');
+    await openMobileMenu(page);await page.click('[data-section="Relatórios"]');
     const reports=await page.$eval('#view',e=>e.textContent);
     assert.match(reports,/70,00/);assert.doesNotMatch(reports,/110,00/);
-    await page.click('[data-section="Clientes"]');
+    await openMobileMenu(page);await page.click('[data-section="Clientes"]');
     const clients=await page.$eval('#view',e=>e.textContent);
     assert.match(clients,/Cliente novo/);
     assert.doesNotMatch(clients,/Cliente exclusivo B|Cancelado invisível|Confirmado futuro|Concluído futuro/);
     assert.equal(await page.$$eval('#view tbody tr',els=>els.length),1);
     assert.equal(await page.$eval('#view tbody tr td:last-child',e=>e.textContent),'2');
-    await page.click('[data-section="Financeiro"]');
+    await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
    }
    await page.evaluate(token=>localStorage.setItem('barbearia_auth_token',token),b.token);await page.reload();
-   await page.waitForSelector('[data-section="Financeiro"]');await page.click('[data-section="Financeiro"]');
+   await page.waitForSelector('[data-section="Financeiro"]');await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
    assert.match(await page.$eval('[data-finance="hoje"] .stat',e=>e.textContent),/R\$\s1\.250,00/);
    assert.equal((await request('/studiofy/agendamentos/'+other,b.token,{status:'cancelado'},'PATCH')).status,409);
    assert.equal((await request('/studiofy/painel',b.token)).data.financeiro.total.valor_centavos,125000);
    // Clear this isolated fixture to exercise an empty account; finalized revenue cannot be cancelled away.
    await db.runAsync('DELETE FROM agendamentos WHERE assinatura_id=$1',[b.id]);
-   await page.reload();await page.waitForSelector('[data-section="Financeiro"]');await page.click('[data-section="Financeiro"]');
+   await page.reload();await page.waitForSelector('[data-section="Financeiro"]');await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
    assert.match(await page.$eval('[data-finance="hoje"] .stat',e=>e.textContent),/R\$\s0,00/);
    assert.match(await page.$eval('#financeHistory',e=>e.textContent),/Nenhum registro/);
    assert.deepEqual(errors,[]);

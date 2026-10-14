@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -57,7 +58,7 @@ test('Financeiro etapa 2: apresentação segura, responsividade e atualização'
   await page.setViewport({width:1440,height:1000});
   await page.goto(base+'/studiofy.html');
   await page.waitForSelector('#dashboardStatus[data-state=ready]');
-  await page.click('[data-section="Financeiro"]');
+  await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
   const value = key => page.$eval(`[data-finance="${key}"] .stat`,el=>el.textContent);
   const refresh = async () => { await page.evaluate(()=>action(refresh)); };
 
@@ -87,13 +88,13 @@ test('Financeiro etapa 2: apresentação segura, responsividade e atualização'
     assert.doesNotMatch(await page.$eval('#financeHistory thead',el=>el.textContent),/ID|Telefone/);
   });
   await t.test('mesma receita no Dashboard, Financeiro e Relatórios sem recalcular', async()=>{
-    await page.click('[data-section="Dashboard"]');
+    await openMobileMenu(page);await page.click('[data-section="Dashboard"]');
     assert.match(await page.$eval('[data-dashboard=revenue-today] .stat',el=>el.textContent),/50,30/);
     assert.match(await page.$eval('[data-dashboard=revenue-month] .stat',el=>el.textContent),/140,30/);
-    await page.click('[data-section="Relatórios"]');
+    await openMobileMenu(page);await page.click('[data-section="Relatórios"]');
     assert.equal(await page.$$eval('#financeServices tbody tr',els=>els.length),3);
     assert.match(await page.$eval('#financeServices',el=>el.textContent),/110,30/);
-    await page.click('[data-section="Financeiro"]');
+    await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
   });
   await t.test('vazios por período, serviços e histórico; zero real sem placeholders', async()=>{
     rows=[];await refresh();
@@ -125,9 +126,9 @@ test('Financeiro etapa 2: apresentação segura, responsividade e atualização'
       }
       const artifacts=path.resolve(__dirname,'../../.tmp/finance-stage2');fs.mkdirSync(artifacts,{recursive:true});
       await page.screenshot({path:path.join(artifacts,`finance-${width}.png`),fullPage:true});
-      await page.click('[data-section="Relatórios"]');
+      await openMobileMenu(page);await page.click('[data-section="Relatórios"]');
       assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-      await page.click('[data-section="Financeiro"]');
+      await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
     });
   }
   await t.test('nomes são escapados e profissional ausente tem indicação neutra',async()=>{
@@ -165,10 +166,10 @@ test('Financeiro etapa 2: apresentação segura, responsividade e atualização'
   await t.test('resposta de refresh respeita a seção atual após navegação',async()=>{
     mode='hold';await page.evaluate(()=>{window.pendingFinanceRefresh=action(refresh);});
     await page.waitForSelector('#dashboardStatus[data-state=loading]');
-    await page.click('[data-section="Relatórios"]');mode='ok';held.shift().res.json(payload());
+    await openMobileMenu(page);await page.click('[data-section="Relatórios"]');mode='ok';held.shift().res.json(payload());
     await page.evaluate(()=>window.pendingFinanceRefresh);
     assert.equal(await page.$eval('#title',el=>el.textContent),'Relatórios');assert.equal(await page.$('.finance-metrics'),null);
-    await page.click('[data-section="Financeiro"]');
+    await openMobileMenu(page);await page.click('[data-section="Financeiro"]');
   });
   await t.test('resumo ausente tem erro e tentativa novamente, sem inventar zeros',async()=>{
     mode='missing';await refresh();assert.equal(await page.$('.finance-metrics'),null);
@@ -180,7 +181,7 @@ test('Financeiro etapa 2: apresentação segura, responsividade e atualização'
     assert.equal(await page.$('.finance-metrics'),null);
     assert.match(await page.$eval('#dashboardStatus',el=>el.textContent),/Não foi possível carregar/);
     mode='ok';await page.click('#retryDashboard');await page.waitForSelector('#dashboardStatus[data-state=ready]');
-    await page.click('[data-section="Financeiro"]');assert.match(await value('hoje'),/77,00/);
+    await openMobileMenu(page);await page.click('[data-section="Financeiro"]');assert.match(await value('hoje'),/77,00/);
   });
   assert.deepEqual(errors,[]);
 });

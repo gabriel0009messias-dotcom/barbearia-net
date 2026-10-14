@@ -1561,3 +1561,6 @@ code {
     min-width: 480px;
   }
 }
+
+/* Shared primary buttons: readable small white text. */
+.landing-login-button,.primary-button{background:#0866c4;color:#fff}.landing-login-button:hover,.primary-button:hover{background:#0758aa;color:#fff}.table-scroll-note{display:none}@media(max-width:850px){.table-scroll-note{display:block;font-size:12px;color:var(--muted,#a5afc1);margin:8px 0}.table-wrap{max-width:100%}}

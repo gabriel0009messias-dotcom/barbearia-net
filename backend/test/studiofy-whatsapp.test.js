@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#menuToggle',e=>getComputedStyle(e).display!=='none'&&e.getAttribute('aria-expanded')!=='true'))await page.click('#menuToggle');}
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -73,7 +74,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
   const waRequests = () => network.filter(r => r.url.includes('/whatsapp/')).length;
   const ready = () => page.waitForFunction(() => !document.querySelector('#whatsappRefresh')?.disabled);
   const tick = async ms => { backendOffset += ms; await page.evaluate(ms => window.waAdvance(ms), ms); await ready(); };
-  const open = async () => { await page.click('[data-section="WhatsApp"]'); await ready(); };
+  const open = async () => { await openMobileMenu(page);await page.click('[data-section="WhatsApp"]'); await ready(); };
   const disconnect = async () => { await page.click('#whatsappDisconnect'); await page.waitForSelector('#whatsappConfirm[open]'); await page.click('#whatsappConfirmDisconnect'); await ready(); };
   const folder = path.resolve(__dirname, '../../.tmp/studiofy-whatsapp-preview'); fs.mkdirSync(folder, { recursive: true });
 
@@ -99,7 +100,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
   });
   await t.test('QR e controles cabem em desktop, 390 e 360', async () => {
     for (const width of [1440, 390, 360]) {
-      await page.setViewport({ width, height: width === 1440 ? 1000 : 844 });
+      await page.setViewport({ width, height: width === 1440 ? 1000 : 844 }); await openMobileMenu(page);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       assert.ok(await page.$$eval('#navigation button', buttons => buttons.every(button => {
         const nav = button.parentElement.getBoundingClientRect(), rect = button.getBoundingClientRect();
@@ -153,7 +154,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     assert.equal(connectCalls(), count); pendingQr = false;
   });
   await t.test('sair da seção, refresh geral e retorno não repetem connect; aba oculta pausa', async () => {
-    const count = connectCalls(); await page.click('[data-section="Agendamentos"]'); const requests = waRequests(); await page.evaluate(() => window.waAdvance(60000)); assert.equal(waRequests(), requests);
+    const count = connectCalls(); await openMobileMenu(page);await page.click('[data-section="Agendamentos"]'); const requests = waRequests(); await page.evaluate(() => window.waAdvance(60000)); assert.equal(waRequests(), requests);
     assert.ok(await page.$('#newBooking')); await open(); assert.equal(connectCalls(), count);
     await page.evaluate(() => { window.waHidden = true; Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.waHidden }); document.dispatchEvent(new Event('visibilitychange')); });
     const paused = waRequests(); await page.evaluate(() => window.waAdvance(60000)); assert.equal(waRequests(), paused);
@@ -237,7 +238,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     await page.waitForFunction(() => document.querySelector('#whatsappNotice').textContent.includes('temporariamente indisponível'));
     assert.equal(await page.$eval('#whatsappRefresh', e => e.disabled), true); assert.equal((await page.evaluate(() => window.waDelays())).length, 0);
     const count = upstream.length, requests = waRequests(); await page.evaluate(() => { document.getElementById('whatsappConnect').dispatchEvent(new MouseEvent('click')); document.getElementById('whatsappRefresh').dispatchEvent(new MouseEvent('click')); window.waAdvance(30000); }); assert.equal(waRequests(), requests);
-    await page.click('[data-section="Agendamentos"]'); await page.click('[data-section="WhatsApp"]'); assert.equal(waRequests(), requests);
+    await openMobileMenu(page);await page.click('[data-section="Agendamentos"]'); await openMobileMenu(page);await page.click('[data-section="WhatsApp"]'); assert.equal(waRequests(), requests);
     assert.match(await page.$eval('#whatsappNotice', e => e.textContent), /temporariamente indisponível/);
     await page.evaluate(() => window.waAdvance(90000)); await ready(); assert.equal(waRequests(), requests, 'Expiry never triggers automatic retries');
     await page.click('#whatsappRefresh'); await page.waitForFunction(() => document.querySelector('#whatsappRefresh').disabled && document.querySelector('#whatsappNotice').textContent.includes('temporariamente indisponível')); assert.equal(upstream.length, count, 'Backend cooldown still blocks upstream');
@@ -248,9 +249,9 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     const chat = require('../services/chat').createChat(db); const started = await chat.start({ tenantId: a.id }, { name: 'Cliente de teste', phone: '11977776666' });
     const conversation = (await db.getAsync('SELECT id FROM chat_conversations WHERE assinatura_id=$1', [a.id])).id;
     await chat.send({ slug: 'studio-' + a.id, token: started.token }, 'customer', { content: 'Chat funciona com Evolution indisponível', clientMessageId: crypto.randomUUID() });
-    await page.click('[data-section="Conversas"]'); await page.waitForFunction(() => document.querySelector('.ci')?.getAttribute('aria-busy') === 'false'); await page.click(`[data-conversation="${conversation}"]`); await page.waitForFunction(() => document.querySelector('.ci')?.getAttribute('aria-busy') === 'false');
+    await openMobileMenu(page);await page.click('[data-section="Conversas"]'); await page.waitForFunction(() => document.querySelector('.ci')?.getAttribute('aria-busy') === 'false'); await page.click(`[data-conversation="${conversation}"]`); await page.waitForFunction(() => document.querySelector('.ci')?.getAttribute('aria-busy') === 'false');
     await page.type('#inboxReply', 'Resposta independente'); await page.click('#inboxSend'); await page.waitForFunction(() => document.querySelector('#inboxNotice').textContent === 'Mensagem enviada.');
     const history = await chat.history({ slug: 'studio-' + a.id, token: started.token }, 'customer', {}); assert.ok(history.messages.some(m => m.content === 'Resposta independente'));
-    await page.click('[data-section="Agendamentos"]'); assert.ok(await page.$('#newBooking')); assert.equal(upstream.length, before); assert.deepEqual(errors, []);
+    await openMobileMenu(page);await page.click('[data-section="Agendamentos"]'); assert.ok(await page.$('#newBooking')); assert.equal(upstream.length, before); assert.deepEqual(errors, []);
   });
 });

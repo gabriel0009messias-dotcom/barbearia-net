@@ -109,9 +109,9 @@ test('cadastro no navegador: trial sem checkout e erros visiveis', { skip: !exec
     ['existing', 'assinatura existente'],
     ['trial', '7 dias grátis já foram utilizados'], ['unknown-conflict', 'Confira os dados'],
     ['signup', 'Confira os campos'], ['missing', 'temporariamente indisponível'], ['server', 'temporariamente indisponível'],
-    ['html', 'resposta invalida'], ['json', 'resposta invalida'],
+    ['html', 'resposta inválida'], ['json', 'resposta inválida'],
     ['login', 'Cadastro salvo.'],
-    ['network', 'Verifique sua conexao'], ['timeout', 'demorou para responder'],
+    ['network', 'Verifique sua conexão'], ['timeout', 'demorou para responder'],
   ]) {
     await t.test(`falha ${scenario} aparece no formulario e permite tentar novamente`, async () => {
       failure = scenario;

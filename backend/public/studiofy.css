@@ -33,3 +33,22 @@
 @media(max-width:850px){.finance-view .finance-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.finance-view .metric{padding:16px}.finance-view .stat{font-size:22px}}
 @media(max-width:600px){.finance-view .finance-metrics{grid-template-columns:1fr}.finance-view .metric{padding:16px 18px}.finance-view .stat{font-size:26px}.finance-view .finance-total>span{margin-left:0;flex-basis:100%}.finance-view .table-wrap{padding:6px 10px}.finance-view .finance-intro button{min-height:42px}.finance-view .finance-table-note{display:block}}
 .calendar-professionals span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Keep short appointments within their time slot while retaining the existing event labels. */
+.calendar-hours span{height:var(--agenda-hour-height,64px)}
+.calendar-lane{background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--agenda-hour-height,64px) - 1px),#25323e calc(var(--agenda-hour-height,64px) - 1px),#25323e var(--agenda-hour-height,64px))}
+/* Establishment-controlled text must stay within service cards and the page preview. */
+.service-list,.service-row{min-width:0;max-width:100%}
+.service-row>:not(button){min-width:0;max-width:100%;overflow-wrap:anywhere}
+.page-editor{min-width:0;max-width:100%}
+.page-editor>#preview{min-width:0;max-width:100%;overflow-wrap:anywhere}
+.page-editor>#preview>*{min-width:0;max-width:100%}
+
+/* Mobile review stage 2: preserve stage 1 containment and calendar scale. */
+.primary{background:#0866c4;border-color:#0866c4;color:#fff}.slots .selected{background:#0866c4;color:#fff}
+.topbar>div{min-width:0;max-width:100%}#salonName{display:block;overflow-wrap:anywhere}.topbar .row{flex-shrink:0}
+.service-row>.service-category{grid-row:2}.service-row>.service-description{grid-row:3}.service-row>p:not(.muted){grid-row:4}
+.service-row>.service-photo,.service-row>.service-placeholder,.service-row>.pill,.service-row>button{grid-row:1/5}
+#menuToggle{display:none}.table-scroll-note{display:none}
+@media(max-width:850px){.service-row>button{grid-row:5}.service-row>button:last-child{grid-column:2/4}.table-scroll-note{display:block;color:var(--muted);font-size:12px;margin:12px 0 6px}}
+@media(max-width:600px){#menuToggle{display:block;min-height:44px;margin-top:12px}.sidebar nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));overflow:visible;gap:6px}.sidebar nav button{white-space:normal;min-width:0;overflow-wrap:anywhere;min-height:44px}.sidebar nav button span{min-width:0}.sidebar{padding:12px 16px}.topbar .row{max-width:100%;flex-wrap:wrap}button,.button,.text-button{min-height:44px;min-width:44px}input,select,textarea{font-size:16px;min-height:44px}input[type=checkbox],input[type=radio]{min-height:24px;min-width:24px}label:has(input[type=checkbox]),label:has(input[type=radio]){min-height:44px;align-content:center}.section-intro{flex-wrap:wrap}.service-row>.pill{grid-row:1/5}.service-row>.service-photo,.service-row>.service-placeholder{grid-row:1/5}}
+@media(max-width:600px){.service-row>button{padding-top:12px;padding-bottom:12px;white-space:nowrap}}

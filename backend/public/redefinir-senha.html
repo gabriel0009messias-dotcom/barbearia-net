@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Redefinir senha | Studiofy</title>
     <link rel="stylesheet" href="./styles.css?v=20260408c" />
-  </head>
-  <body>
+  <link rel="stylesheet" href="/studiofy-auth.css?v=mobile-2"><link rel="stylesheet" href="/studiofy-password.css?v=mobile-2"></head>
+  <body class="auth-page password-page">
     <section class="auth-landing">
       <div class="landing-overlay"></div>
       <header class="landing-topbar">
-        <div class="landing-brand">Studiofy</div>
+        <a class="auth-brand" href="/">Studio<span>fy</span></a>
         <div class="landing-topbar-actions">
           <a class="landing-topbar-button link-button" href="/login.html">Voltar ao login</a>
         </div>
@@ -31,12 +31,12 @@
           <p id="resetPasswordInfo" class="landing-panel-copy">Validando link de recuperação...</p>
 
           <form id="resetPasswordForm" class="landing-login-form" hidden>
-            <div class="password-field">
-              <input id="novaSenhaInput" type="password" placeholder="Nova senha" minlength="4" required />
+            <label for="novaSenhaInput">Nova senha</label><div class="password-field">
+              <input autocomplete="new-password" id="novaSenhaInput" type="password" placeholder="Nova senha" minlength="4" required />
               <button class="password-toggle" type="button" data-toggle-password="novaSenhaInput">Mostrar</button>
             </div>
-            <div class="password-field">
-              <input id="confirmarSenhaInput" type="password" placeholder="Confirmar nova senha" minlength="4" required />
+            <label for="confirmarSenhaInput">Confirmar nova senha</label><div class="password-field">
+              <input autocomplete="new-password" id="confirmarSenhaInput" type="password" placeholder="Confirmar nova senha" minlength="4" required />
               <button class="password-toggle" type="button" data-toggle-password="confirmarSenhaInput">Mostrar</button>
             </div>
             <button type="submit" class="landing-login-button">Salvar nova senha</button>

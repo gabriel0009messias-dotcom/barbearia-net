@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const express=require('express');
@@ -39,12 +40,12 @@ test('página pública móvel mostra identidade e serviços de quatro segmentos'
  await t.test('editor preserva perfil e envia categoria do serviço',async()=>{
   await page.evaluate(()=>localStorage.setItem('barbearia_auth_token','test-only'));
   await page.goto(`http://127.0.0.1:${server.address().port}/studiofy.html`);await page.waitForSelector('[data-section="Minha página"]');
-  await page.click('[data-section="Minha página"]');await page.waitForSelector('[name=businessType]');
+  await openMobileMenu(page);await page.click('[data-section="Minha página"]');await page.waitForSelector('[name=businessType]');
   assert.equal(await page.$eval('[name=city]',el=>el.value),'Salvador');
   await page.select('[name=businessType]','massage');
   await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
   assert.equal(savedProfile.businessType,'massage');assert.equal(savedProfile.city,'Salvador');assert.equal(savedProfile.instagram,'studio.bella');
-  await page.click('[data-section="Meus serviços"]');await page.waitForSelector('[data-edit-service]');await page.click('[data-edit-service]');
+  await openMobileMenu(page);await page.click('[data-section="Meus serviços"]');await page.waitForSelector('[data-edit-service]');await page.click('[data-edit-service]');
   assert.equal(await page.$eval('[name=categoria]',el=>el.value),'Unhas');
   await page.$eval('[name=categoria]',el=>{el.value='Cuidados';});await page.click('#editor [type=submit]');await page.waitForFunction(()=>document.querySelector('#message').textContent.includes('salvas'));
   assert.equal(savedService.categoria,'Cuidados');assert.equal(savedService.duracao,45);

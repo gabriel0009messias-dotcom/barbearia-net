@@ -1,3 +1,4 @@
+async function openMobileMenu(page){if(await page.$eval('#navigation',e=>e.hidden))await page.click('#menuToggle');}
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const express=require('express');
@@ -83,7 +84,7 @@ test('Agenda: filtros, conclusão segura, profissionais, financeiro e responsivi
    const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
    await page.setRequestInterception(true);page.on('request',r=>r.url().startsWith(base)||r.url().startsWith('data:')?r.continue():r.abort());
    await page.goto(base+'/login.html');await page.evaluate(token=>localStorage.setItem('barbearia_auth_token',token),a.token);
-   await page.goto(base+'/studiofy.html');await page.waitForSelector('[data-section="Agendamentos"]');await page.click('[data-section="Agendamentos"]');
+   await page.goto(base+'/studiofy.html');await page.waitForSelector('[data-section="Agendamentos"]');await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');
    const ids=()=>page.$$eval('[data-agenda-booking]',els=>els.map(e=>Number(e.dataset.agendaBooking)));
    const filter=async key=>{await page.click(`[data-agenda-filter="${key}"]`);};
    const folder=path.resolve(__dirname,'../../.tmp/agenda-validation');fs.mkdirSync(folder,{recursive:true});
@@ -107,9 +108,9 @@ test('Agenda: filtros, conclusão segura, profissionais, financeiro e responsivi
    }
    await filter('todos');page.once('dialog',dialog=>dialog.accept());await page.select(`[data-status="${viaUI}"]`,'concluido');
    await page.waitForFunction(id=>document.querySelector(`[data-agenda-booking="${id}"] .status-concluido`),{},viaUI);
-   await page.click('[data-section="Financeiro"]');await page.waitForSelector('#view table');
+   await openMobileMenu(page);await page.click('[data-section="Financeiro"]');await page.waitForSelector('#view table');
    assert.match(await page.$eval('#view',e=>e.textContent),/R\$\s70,00/);
-   await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');
+   await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');
    for(let i=0;i<2&&!await page.$(`[data-calendar-booking="${tomorrowB}"]`);i++)await page.click('#nextWeek');
    const boxes=await page.evaluate(([a,b])=>[a,b].map(id=>{const r=document.querySelector(`[data-calendar-booking="${id}"]`).getBoundingClientRect();return {left:r.left,right:r.right};}),[tomorrowA,tomorrowB]);
    assert.ok(boxes[0].right<=boxes[1].left || boxes[1].right<=boxes[0].left,'Profissionais simultâneos não se sobrepõem');

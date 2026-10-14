@@ -51,7 +51,7 @@ document.querySelectorAll('[data-toggle-password]').forEach((button) => {
 function exibirPlano(plan) {
   if (!plan || !Number.isSafeInteger(plan.amountCents) || plan.amountCents <= 0 ||
       !Number.isSafeInteger(plan.durationDays) || plan.durationDays <= 0 || plan.currency !== 'BRL' || !plan.name) {
-    throw new Error('O servidor nao informou um plano valido. Tente novamente.');
+    throw new Error('O servidor não informou um plano válido. Tente novamente.');
   }
   planoAtual = plan;
   const valor = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: plan.currency }).format(plan.amountCents / 100);
@@ -108,7 +108,7 @@ async function buscarJson(url, options = {}) {
     }
     let payload;
     try { payload = await response.json(); } catch {
-      throw new Error(`O servidor retornou uma resposta invalida. Tente novamente.`);
+      throw new Error(`O servidor retornou uma resposta inválida. Tente novamente.`);
     }
     if (!response.ok) {
       let message = response.status === 409 ? (
@@ -116,7 +116,7 @@ async function buscarJson(url, options = {}) {
         payload?.code === 'TRIAL_JA_UTILIZADO' ? 'Os 7 dias grátis já foram utilizados com estes dados. Você pode contratar sem um novo teste grátis.' :
         'Não foi possível concluir esta solicitação. Confira os dados ou entre em contato com o suporte.'
       ) :
-        response.status === 400 ? 'Confira os campos obrigatorios, o email e a senha.' :
+        response.status === 400 ? 'Confira os campos obrigatórios, o e-mail e a senha.' :
         response.status === 404 ? 'Este cadastro está temporariamente indisponível. Tente novamente mais tarde.' :
         'O serviço está temporariamente indisponível. Tente novamente em instantes.';
       const error = new Error(message);
@@ -124,11 +124,11 @@ async function buscarJson(url, options = {}) {
       error.status = response.status;
       throw error;
     }
-    if (!payload || typeof payload !== 'object') throw new Error('Resposta invalida do servidor. Tente novamente.');
+    if (!payload || typeof payload !== 'object') throw new Error('Resposta inválida do servidor. Tente novamente.');
     return payload;
   } catch (error) {
     if (controller.signal.aborted) throw new Error('O servidor demorou para responder. Tente novamente em instantes.');
-    if (error instanceof TypeError) throw new Error('Nao foi possivel conectar ao servidor. Verifique sua conexao e tente novamente.');
+    if (error instanceof TypeError) throw new Error('Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.');
     throw error;
   } finally {
     clearTimeout(timer);
@@ -188,7 +188,7 @@ function renderizarCheckout(url = null) {
   gatewayCheckoutButton.hidden = !url;
   gatewayCheckoutButton.textContent = 'Pagar com Mercado Pago';
   if (planoAtual) exibirPlano(planoAtual);
-  gatewayHelpLabel.textContent = 'Pague no Mercado Pago. O acesso sera liberado apos a confirmacao do pagamento.';
+  gatewayHelpLabel.textContent = 'Pague no Mercado Pago. O acesso será liberado após a confirmação do pagamento.';
   pixQrCard.hidden = true;
 }
 
@@ -234,7 +234,7 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
         if (senha) await fazerLoginAutomatico(email, senha);
         else {
           limparCadastroPendente();
-          assinaturaFormMessage.textContent = 'Pagamento confirmado! Entre com seu email e senha na página de Login.';
+          assinaturaFormMessage.textContent = 'Pagamento confirmado! Entre com seu e-mail e senha na página de Login.';
           gatewayCheckoutButton.hidden = true;
         }
       }
@@ -242,7 +242,7 @@ function iniciarMonitorLiberacao(assinaturaId, email, senha) {
       if ([401,403].includes(error.status)) {
         limparMonitorLiberacao();
         mostrarMensagem('Entre na sua conta para acompanhar o pagamento com segurança.');
-      } else mostrarMensagem(`Nao foi possivel verificar a liberacao: ${error.message}`);
+      } else mostrarMensagem(`Não foi possível verificar a liberação: ${error.message}`);
     }
   }, 5000);
 }
@@ -254,15 +254,15 @@ async function carregarConfiguracao() {
     supportNumberLabel.textContent = config.suporteNumero ? `Suporte: ${config.suporteNumero}` : '';
     cadastroConfigMessage.textContent = '';document.getElementById('retryConfig')?.remove();
     metodoPagamentoInput.innerHTML = '<option value="mercado_pago">Mercado Pago</option>';
-    if (!Array.isArray(config.diasVencimento) || !config.diasVencimento.length) throw new Error('Configuracao de vencimento indisponivel.');
+    if (!Array.isArray(config.diasVencimento) || !config.diasVencimento.length) throw new Error('Configuração de vencimento indisponível.');
     diaVencimentoInput.innerHTML = config.diasVencimento
       .map((dia) => `<option value="${dia}">Dia ${dia}</option>`)
       .join('');
     if (config.gateway?.enabled === false) {
-      cadastroConfigMessage.textContent = 'O pagamento esta temporariamente indisponivel. O cadastro pode ser salvo, mas o responsavel pelo sistema precisa configurar o Mercado Pago para liberar o checkout.';
+      cadastroConfigMessage.textContent = 'O pagamento está temporariamente indisponível. O cadastro pode ser salvo, mas o responsável pelo sistema precisa configurar o Mercado Pago para liberar o checkout.';
     }
   } catch (error) {
-    cadastroConfigMessage.textContent = `Nao consegui carregar a configuracao do cadastro. ${error.message}`;
+    cadastroConfigMessage.textContent = `Não consegui carregar a configuração do cadastro. ${error.message}`;
     let retry = document.getElementById('retryConfig');
     if (!retry) { retry = document.createElement('button');retry.id = 'retryConfig';retry.type = 'button';retry.textContent = 'Tentar novamente';cadastroConfigMessage.after(retry); }
     retry.onclick = async () => { retry.disabled = true;try { await carregarConfiguracao(); } finally { cadastroRateControls(); } };
@@ -325,7 +325,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
     });
 
     if (!Number.isSafeInteger(resposta.assinatura?.id) || resposta.assinatura.id <= 0) {
-      throw new Error('O servidor nao confirmou o cadastro. Tente novamente.');
+      throw new Error('O servidor não confirmou o cadastro. Tente novamente.');
     }
     cadastroSalvo = true;
     authToken = null;
@@ -363,7 +363,7 @@ assinaturaForm.addEventListener('submit', async (event) => {
 });
 
 assinaturaForm.addEventListener('invalid', () => {
-  mostrarMensagem('Confira os campos obrigatorios, o email e a senha de 8 a 128 caracteres, sem contar espaços nas extremidades.');
+  mostrarMensagem('Confira os campos obrigatórios, o e-mail e a senha de 8 a 128 caracteres, sem contar espaços nas extremidades.');
 }, true);
 
 carregarConfiguracao();
@@ -371,6 +371,6 @@ loadBusinessTypes();
 
 const cadastroPendente = carregarCadastroPendente();
 if (cadastroPendente?.assinaturaId) {
-  assinaturaFormMessage.textContent = 'Aguardando confirmacao do Mercado Pago. Se ainda nao pagou, entre pela página de Login para continuar.';
+  assinaturaFormMessage.textContent = 'Aguardando confirmação do Mercado Pago. Se ainda não pagou, entre pela página de Login para continuar.';
   iniciarMonitorLiberacao(cadastroPendente.assinaturaId, cadastroPendente.email);
 }
