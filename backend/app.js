@@ -759,12 +759,26 @@ app.post('/webhook', (req, res) => {
 app.use(require('./services/httpErrors').createHttpErrorHandler());
 
 require('./database').ready.then(() => {
-  require('./evolutionWebhook').startWorker();
-  require('./services/reminders').startWorker(require('./database'));
+  const webhookTimer = require('./evolutionWebhook').startWorker();
+  const reminderTimer = require('./services/reminders').startWorker(require('./database'));
+  // Explicit local simulation only; no real return transport exists in this stage.
+  const returnWorker = process.env.RETURN_REMINDER_WORKER_MODE === 'simulated'
+    ? require('./services/returnReminders').startWorker(require('./database')) : null;
   const server = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });
   server.on('error', (erro) => registrarErroRuntime('serverError', erro));
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(webhookTimer); clearInterval(reminderTimer);
+    const closing = new Promise(resolve => server.close(resolve));
+    try { await returnWorker?.stop(); await closing; await require('./database').close(); }
+    catch { process.exitCode = 1; }
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }).catch(async (erro) => {
   console.error('Falha ao inicializar o banco de dados:', erro);
   process.exitCode = 1;
