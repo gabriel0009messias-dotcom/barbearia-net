@@ -41,7 +41,7 @@ test('diagnostico seguro da resposta upstream 429', async t => {
   await t.test('header ausente ou invalido nao e confundido com backoff', async () => {
     for (const value of [null, 'invalid']) {
       const { event } = await run('limited', value === null ? {} : { 'Retry-After': value });
-      assert.equal(event.upstreamRetryAfter, value);
+      assert.equal(event.upstreamRetryAfter, null);
       assert.equal(event.localBackoffSeconds, 30);
       assert.equal(event.effectiveRetryAfterSeconds, 30);
       assert.equal(event.studiofyCooldown.backoffSeconds, 30);
@@ -57,17 +57,17 @@ test('diagnostico seguro da resposta upstream 429', async t => {
       'rndr-id': 'render-test', 'request-id': 'request-test', 'x-request-id': 'x-request-test' };
     const { event, name } = await run('<html>Limited</html>', { ...headers,
       'set-cookie': 'private-cookie', authorization: 'private-auth', apikey: 'private-key' },
-    { requestId: 'diagnostic-request-id', headers: { authorization: 'Bearer private-request-token' } });
+    { requestId: '6e7b5189-2da9-411a-812f-2017b3a08d19', headers: { authorization: 'Bearer private-request-token' } });
     assert.equal(event.endpoint, `/instance/connectionState/${name}`);
     assert.equal(event.path, event.endpoint);
     assert.equal(new URL(event.origin).origin, 'https://diagnostics.test');
-    assert.equal(event.requestId, 'diagnostic-request-id');
+    assert.equal(event.requestId, '6e7b5189-2da9-411a-812f-2017b3a08d19');
     assert.ok(Number.isFinite(Date.parse(event.timestamp)));
     assert.ok(Number.isFinite(event.durationMs) && event.durationMs >= 0);
     assert.equal(event.method, 'GET');
     assert.equal(event.httpStatus, 429);
     assert.equal(event.statusText, 'Too Many Requests');
-    for (const [key, value] of Object.entries(headers)) assert.equal(event[key], value);
+    for (const key of Object.keys(headers)) assert.equal(event[key], '[VALUE OMITTED]');
     assert.doesNotMatch(JSON.stringify(logs), /private-cookie|private-auth|private-key|private-request-token/);
   });
   await t.test('Retry-After menor que o minimo preserva valor original e cooldown local', async () => {
@@ -83,10 +83,10 @@ test('diagnostico seguro da resposta upstream 429', async t => {
       endereco: 'private-address', remoteJid: 'private-jid', qr: 'private-qr',
       detail: 'Contact private-detail@example.test data:image/png;base64,private-image' }),
     { server: 'proxy token=private-header-token', 'x-customer-data': 'private-unknown-header' });
-    assert.equal(JSON.parse(event.body).message, 'Too Many Requests');
+    assert.equal(event.body, 'Too Many Requests');
     assert.doesNotMatch(JSON.stringify(logs), /private-(?:customer|name|email|cpf|address|jid|qr|detail|image|header|unknown)|11999998888/);
     const text = await run('Too Many Requests\nname=private-text-name with spaces\nqr=private-text-qr\nemail=private-text@example.test');
-    assert.match(text.event.body, /Too Many Requests/);
+    assert.equal(text.event.body, '[BODY OMITTED: non-public content]');
     assert.doesNotMatch(JSON.stringify(logs), /private-text/);
   });
   await t.test('corpo JSON e segredos aninhados', async () => {
@@ -95,7 +95,7 @@ test('diagnostico seguro da resposta upstream 429', async t => {
       senha: 'hidden-senha', cookie: 'hidden-cookie', pairingCode: 'hidden-pairing', code: 'hidden-code',
       DATABASE_URL: process.env.DATABASE_URL }, echo: process.env.EVOLUTION_API_KEY,
       detail: 'Cookie: hidden-message-cookie; session=hidden-session\npairing_code=hidden-message-pairing' }), { 'content-type': 'application/json' });
-    assert.equal(JSON.parse(event.body).message, 'Too Many Requests');
+    assert.equal(event.body, 'Too Many Requests');
     assert.doesNotMatch(JSON.stringify(logs), /hidden-|fake-diagnostic-api-key|fake-db-password/);
   });
   await t.test('texto e HTML sanitizados, inclusive cookies e inputs', async () => {
@@ -106,18 +106,27 @@ test('diagnostico seguro da resposta upstream 429', async t => {
       '<input value="form-secret" name="password">\n' +
       `echo ${process.env.EVOLUTION_API_KEY} ${process.env.DATABASE_URL}</html>`;
     const { event } = await run(raw, { 'content-type': 'text/html' });
-    assert.match(event.body, /Too Many Requests/);
+    assert.equal(event.body, '[BODY OMITTED: non-public content]');
     assert.doesNotMatch(JSON.stringify(logs), /cookie-secret|auth-secret|pair-secret|pwd-secret|api-secret|token-secret|form-secret|fake-diagnostic-api-key|fake-db-password/);
   });
   await t.test('trunca apos sanitizar em no maximo 1000 caracteres', async () => {
     const { event } = await run('x'.repeat(970) + ' password="' + 'boundary-secret'.repeat(50) + '" ' + 'y'.repeat(1200));
-    assert.equal(event.body.length, 1000);
+    assert.equal(event.body, '[BODY OMITTED: non-public content]');
     assert.equal(event.bodyTruncated, true);
     assert.doesNotMatch(event.body, /boundary/);
   });
   await t.test('corpo excessivo e omitido sem expor segredo parcial', async () => {
     const { event } = await run('x'.repeat(65530) + ' password=' + 'secret'.repeat(2000));
     assert.equal(event.body, '[BODY OMITTED: size limit]');
+  });
+  await t.test('QR e pairing sem rotulo em corpo 429 nunca chegam aos logs', async () => {
+    const secrets = ['synthetic-raw-qr,synthetic-pairing-token', 'PAIR9876'];
+    for (const body of [secrets[0], JSON.stringify({ message: secrets[0], detail: secrets[1] }),
+      JSON.stringify({ message: 'Too Many Requests', unknown: secrets[0], nested: { arbitrary: secrets[1] } })]) {
+      const { event } = await run(body);
+      for (const secret of secrets) assert.ok(!JSON.stringify(logs).includes(secret));
+      assert.ok(event.body === 'Too Many Requests' || event.bodyOmitted === true);
+    }
   });
   await t.test('cooldown bloqueia chamadas e diagnostico nao aumenta retries', async () => {
     const { name } = await run('limited', { 'Retry-After': '60' }, { retryAttempts: 9 });

@@ -225,7 +225,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     await page.click('#whatsappRefresh');
     await page.waitForFunction(() => document.querySelector('#whatsappNotice').textContent.includes('HTTP 429'));
     assert.equal(await page.$eval('#whatsappQrArea', e => e.hidden), false);
-    assert.match(await page.$eval('#whatsappNotice', e => e.textContent), /Referência: .*Etapa: \/instance\/connectionState\//);
+    assert.doesNotMatch(await page.$eval('#whatsappNotice', e => e.textContent), /Referência:|Etapa:/);
     assert.equal(require('../evolutionApi').tentativaConexaoAtiva(name), true);
     assert.equal((await page.evaluate(() => window.waDelays())).length, 0);
     fault = null; await tick(90001);

@@ -1,3 +1,4 @@
+const { publicWhatsappError, logWhatsappFailure } = require('./whatsappError');
 const crypto = require('crypto');
 const express = require('express');
 const nodemailer = require('nodemailer');
@@ -484,6 +485,8 @@ async function carregarAssinaturaPorToken(token) {
   return assinatura;
 }
 
+const accountAccessFailures = new WeakMap();
+
 async function carregarAssinaturaPorBridgeToken(token) {
   if (!token) {
     return null;
@@ -501,35 +504,33 @@ async function carregarAssinaturaPorBridgeToken(token) {
   if (!acesso.liberado) {
     const error = new Error(acesso.mensagem);
     error.statusCode = 403;
-    error.assinatura = assinatura;
+    accountAccessFailures.set(error, montarEstadoPagamento(assinatura));
     throw error;
   }
 
   return assinatura;
 }
 
-async function requireConta(req, res, next) {
+function responderErroConta(res, error) {
+  const safe = publicWhatsappError(error);
+  const message = safe.code === 'WHATSAPP_AUTH_REQUIRED' ? 'Login do barbeiro obrigatorio.' : safe.message;
+  return res.status(safe.statusCode).json({ error: message });
+}
+
+async function requireConta(req, res, next, respond = responderErroConta) {
   try {
     const token = req.headers['x-barbeiro-token'];
     const assinatura = await carregarAssinaturaPorToken(token);
     if (!assinatura) {
-      if (req.path.includes('/whatsapp/')) {
-        console.info('[WHATSAPP] Consulta sem login valido', { assinaturaId: req.params.id });
-        return responderErroWhatsapp(res, createEvolutionError('Sua sessao expirou. Entre novamente no painel.', 401, 'WHATSAPP_AUTH_REQUIRED'));
-      }
-      return res.status(401).json({ error: 'Login do barbeiro obrigatorio.' });
+      return respond(res, createEvolutionError('Sua sessao expirou. Entre novamente no painel.', 401, 'WHATSAPP_AUTH_REQUIRED'));
     }
     req.barbeiroToken = token;
     req.assinatura = assinatura;
     next();
   } catch (error) {
-    if (req.path.includes('/whatsapp/')) {
-      logEvolutionError('autenticacao da assinatura no WhatsApp', error);
-      return responderErroWhatsapp(res, error);
-    }
-    const payload = { error: error.message };
-    if (error.assinatura) Object.assign(payload, montarEstadoPagamento(error.assinatura));
-    res.status(error.statusCode || 500).json(payload);
+    // Authentication failures have one public boundary, independent of any URL spelling.
+    logWhatsappFailure(error);
+    return respond(res, error);
   }
 }
 
@@ -540,6 +541,10 @@ function requireOperacao(req, res, next) {
 }
 function requireBarbeiro(req, res, next) {
   return requireConta(req, res, () => requireOperacao(req, res, next));
+}
+function requireBarbeiroWhatsapp(req, res, next) {
+  // Selected by the registered handler, never by request path/query/header data.
+  return requireConta(req, res, () => requireOperacao(req, res, next), responderErroWhatsapp);
 }
 function requirePainelOuBridge(req, res, next) {
   return requireContaOuBridge(req, res, () => requireOperacao(req, res, next));
@@ -562,13 +567,13 @@ async function requireContaOuBridge(req, res, next) {
     req.assinatura = assinatura;
     next();
   } catch (error) {
-    const payload = { error: error.message };
+    const safe = publicWhatsappError(error);
+    const payload = { error: safe.message };
+    logWhatsappFailure(error);
 
-    if (error.assinatura) {
-      Object.assign(payload, montarEstadoPagamento(error.assinatura));
-    }
+    if (accountAccessFailures.has(error)) Object.assign(payload, accountAccessFailures.get(error));
 
-    res.status(error.statusCode || 500).json(payload);
+    res.status(safe.statusCode).json(payload);
   }
 }
 
@@ -1145,22 +1150,13 @@ function assinaturaPertenceAoBarbeiro(req, res) {
   return true;
 }
 
-function mapearStatusWhatsappEvolution(state = '') {
-  const estado = String(state || '').trim().toLowerCase();
-
-  if (['open', 'connected'].includes(estado)) {
-    return 'conectado';
-  }
-
-  if (['connecting', 'pairing', 'syncing'].includes(estado)) {
-    return 'iniciando';
-  }
-
-  if (['close', 'closed', 'disconnected', 'logout'].includes(estado)) {
-    return 'nao_configurado';
-  }
-
-  return estado || 'nao_configurado';
+const WHATSAPP_STATUSES = new Set(['nao_configurado', 'iniciando', 'qr_pronto', 'conectado', 'erro']);
+function mapearStatusWhatsappEvolution(state) {
+  const known = extrairEstadoInstancia({ state });
+  if (['open', 'connected'].includes(known)) return 'conectado';
+  if (['connecting', 'pairing', 'syncing'].includes(known)) return 'iniciando';
+  // Closed and unknown provider states share the existing safe disconnected status.
+  return 'nao_configurado';
 }
 
 function respostaStatusWhatsapp({
@@ -1211,7 +1207,8 @@ function mapearStatusWhatsappLocal(status = '', qrCode = null) {
 }
 
 async function consultarStatusWhatsappLocal(assinaturaId) {
-  const sessao = statusSessaoWhatsappLocal(assinaturaId);
+  const local = statusSessaoWhatsappLocal(assinaturaId);
+  const sessao = { ...local, ultimoErro: local.ultimoErro ? 'WHATSAPP_LOCAL_START_FAILED' : null };
   const statusMapeado = mapearStatusWhatsappLocal(sessao.status, sessao.qrCode);
   const conectado = statusMapeado === 'conectado';
   const qrCode = conectado ? null : sessao.qrCode || null;
@@ -1265,7 +1262,7 @@ function normalizarNumeroWhatsappPareamento(numero = '') {
 
 function iniciarSessaoWhatsappLocalSemBloquear(assinaturaId) {
   iniciarSessaoWhatsappLocal(assinaturaId).catch((error) => {
-    console.error(`Erro ao iniciar sessao local do WhatsApp da assinatura ${assinaturaId}:`, error.message);
+    logWhatsappFailure(error);
   });
 }
 
@@ -1330,7 +1327,7 @@ async function persistirSessaoWhatsapp(assinaturaId, valores = {}) {
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappStatus')) {
     campos.push(`whatsapp_status = $${params.length + 1}`);
-    params.push(valores.whatsappStatus || 'nao_configurado');
+    params.push(WHATSAPP_STATUSES.has(valores.whatsappStatus) ? valores.whatsappStatus : 'nao_configurado');
   }
 
   if (Object.prototype.hasOwnProperty.call(valores, 'whatsappUltimoErro')) {
@@ -1494,7 +1491,8 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
       precisaQr: precisaGerarQrPorStatus(statusMapeado),
       mensagem: 'A instancia existe, mas ainda precisa conectar o WhatsApp.',
     }) };
-  } catch (error) {
+  } catch (original) {
+    const error = publicWhatsappError(original);
     logEvolutionError(`status da assinatura ${assinatura.id}`, error);
 
     if (error?.code === 'EVOLUTION_INSTANCE_NOT_FOUND') {
@@ -1516,7 +1514,7 @@ async function consultarStatusWhatsappEvolution(assinatura, options = {}, estado
       whatsappUltimoCheckEm: agoraIso(),
     });
 
-    return { diagnostic: error.diagnostic, rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt, httpStatus: [401, 403].includes(error.statusCode) ? 502 : (error.statusCode || 500), errorCode: error.code, ...respostaStatusWhatsapp({
+    return { rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt, httpStatus: [401, 403].includes(error.statusCode) ? 502 : (error.statusCode || 500), errorCode: error.code, ...respostaStatusWhatsapp({
       status: 'erro',
       ultimoErro: error.message,
       instancia: instanceName,
@@ -1562,7 +1560,7 @@ async function gerarQrWhatsappEvolution(assinatura) {
       }
       return respostaTentativaWhatsapp(instanceName);
     } catch (error) {
-      await persistirSessaoWhatsapp(assinatura.id, { whatsappStatus: 'erro', whatsappUltimoErro: error.message, whatsappUltimoCheckEm: agoraIso() });
+      await persistirSessaoWhatsapp(assinatura.id, { whatsappStatus: 'erro', whatsappUltimoErro: publicWhatsappError(error).code, whatsappUltimoCheckEm: agoraIso() });
       throw error;
     }
   });
@@ -2316,14 +2314,17 @@ async function gerarPairingCodeWhatsappEvolution(assinatura, numeroWhatsapp) {
 }
 
 function responderErroWhatsapp(res, error) {
-  const statusCode = error.code?.startsWith('EVOLUTION_') && [401, 403].includes(error.statusCode)
-    ? 502 : (error.statusCode || 500);
-  const message = statusCode === 500 ? 'Erro interno no servico do WhatsApp. Consulte os logs do servidor.' : error.message;
-  if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds));
-  return res.status(statusCode).json({ success: false, status: 'error', connected: false, conectado: false, error: message, message, errorCode: error.code || 'WHATSAPP_INTERNAL_ERROR', diagnostic: error.diagnostic, rateLimitSource: error.rateLimitSource, upstreamStatus: error.upstreamStatus, retryAfterSeconds: error.retryAfterSeconds, retryAt: error.retryAt });
+  const safe = publicWhatsappError(error);
+  if (safe.retryAfterSeconds) res.set('Retry-After', String(safe.retryAfterSeconds));
+  return res.status(safe.statusCode).json({ success: false, status: 'error', connected: false, conectado: false,
+    error: safe.message, message: safe.message, errorCode: safe.code,
+    ...(safe.rateLimitSource ? { rateLimitSource: safe.rateLimitSource } : {}),
+    ...(safe.upstreamStatus ? { upstreamStatus: safe.upstreamStatus } : {}),
+    ...(safe.retryAfterSeconds ? { retryAfterSeconds: safe.retryAfterSeconds } : {}),
+    ...(safe.retryAt ? { retryAt: safe.retryAt } : {}) });
 }
 
-router.post('/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiro, async (req, res) => {
+router.post('/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiroWhatsapp, async (req, res) => {
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) return;
     const assinatura = await carregarAssinaturaAtualizada(req.assinatura.id);
@@ -2342,7 +2343,7 @@ router.post('/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiro, asyn
   } catch (error) { responderErroWhatsapp(res, error); }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, async (req, res) => {
+router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) return;
@@ -2359,7 +2360,7 @@ router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiro, a
   }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async (req, res) => {
+router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
 
   try {
@@ -2389,7 +2390,7 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiro, async 
   }
 });
 
-router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, res) => {
+router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
   res.set('Cache-Control', 'no-store');
 
@@ -2417,7 +2418,7 @@ router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiro, async (req, 
   }
 });
 
-router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
+router.get('/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const assinatura = await carregarAssinaturaAtualizada(req.assinatura.id);
@@ -2453,7 +2454,7 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
 
     if (statusLocalPareceTravado(statusInicial)) {
       reiniciarSessaoWhatsappLocal(assinatura.id).catch((error) => {
-        console.error(`Erro ao reiniciar sessao local do WhatsApp da assinatura ${assinatura.id}:`, error.message);
+        logWhatsappFailure(error);
       });
       statusInicial = await consultarStatusWhatsappLocal(assinatura.id);
     }
@@ -2479,12 +2480,12 @@ router.get('/whatsapp/qr', requireBarbeiro, async (req, res) => {
     res.status(500).json({
       status: 'error',
       qr: null,
-      message: error.message || 'Falha ao gerar QR Code.',
+      message: publicWhatsappError(error).message,
     });
   }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiro, async (req, res) => {
+router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2643,7 +2644,7 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
   }
 });
 
-router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (req, res) => {
+router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
   console.info('[WHATSAPP] Buscando status da assinatura:', id);
   res.set('Cache-Control', 'no-store');
@@ -2664,7 +2665,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiro, async (r
   }
 });
 
-router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiro, async (req, res) => {
+router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
 
   try {
@@ -2957,6 +2958,13 @@ router.post('/admin/assinaturas/:id/desbloquear', requireAdmin, async (req, res)
   } catch {
     res.status(500).json({ error: 'Nao foi possivel retirar o bloqueio administrativo.' });
   }
+});
+
+// Routing/decode errors use the same boundary even when no handler was entered.
+router.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+  logWhatsappFailure(error);
+  return responderErroWhatsapp(res, error instanceof URIError ? { statusCode: 400 } : error);
 });
 
 module.exports = router;

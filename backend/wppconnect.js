@@ -1,6 +1,6 @@
 const express = require('express');
-const qrcodeTerminal = require('qrcode-terminal');
 const wppconnect = require('@wppconnect-team/wppconnect');
+const { logEvolutionError } = require('./evolutionApi');
 
 require('./loadEnv');
 
@@ -11,6 +11,11 @@ const app = express();
 const PORT = Number(process.env.WHATSAPP_BRIDGE_PORT || 3010);
 const sessoes = new Map();
 const REMINDER_CHECK_INTERVAL_MS = 60 * 1000;
+const PUBLIC_STATUSES = new Set(['nao_iniciado', 'iniciando', 'qr_pronto', 'conectado', 'erro',
+  'notLogged', 'isLogged', 'qrReadSuccess', 'qrReadFail', 'browserClose', 'autocloseCalled',
+  'desconnectedMobile', 'inChat', 'serverClose', 'deviceNotConnected']);
+for (const status of ['disconnectedMobile', 'phoneNotConnected', 'qrReadError']) PUBLIC_STATUSES.add(status);
+const publicStatus = value => PUBLIC_STATUSES.has(value) ? value : 'iniciando';
 
 app.use(express.json());
 app.use((req, res, next) => {
@@ -196,16 +201,24 @@ function iniciarLoopDeLembretes(assinaturaId) {
 
   sessao.reminderInterval = setInterval(() => {
     verificarLembretesDaSessao(assinaturaId).catch((error) => {
-      console.error(`Erro ao verificar lembretes da assinatura ${assinaturaId}:`, error.message);
+      logEvolutionError('legacy_bridge_reminders', error);
     });
   }, REMINDER_CHECK_INTERVAL_MS);
 
   verificarLembretesDaSessao(assinaturaId).catch((error) => {
-    console.error(`Erro ao iniciar verificador de lembretes da assinatura ${assinaturaId}:`, error.message);
+    logEvolutionError('legacy_bridge_reminders_start', error);
   });
 }
 
 async function iniciarSessao(assinaturaId, contexto = {}) {
+  // Private entry point: require a complete, immutable binding on every call.
+  if (!/^[1-9]\d*$/.test(String(assinaturaId)) || contexto.sessionName !== undefined || !contexto.apiBaseUrl || (!contexto.bridgeToken && !contexto.barberToken)) {
+    throw new Error('Contexto interno do WhatsApp invalido.');
+  }
+  const existing = sessoes.get(assinaturaId);
+  if (existing && (existing.apiBaseUrl !== contexto.apiBaseUrl || existing.barberToken !== (contexto.barberToken || null) || existing.bridgeToken !== (contexto.bridgeToken || null))) {
+    throw new Error('O vinculo interno do WhatsApp nao pode ser alterado.');
+  }
   const sessao = obterSessao(assinaturaId);
 
   if (sessao.startPromise) {
@@ -215,9 +228,9 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
   sessao.status = 'iniciando';
   sessao.qrCode = null;
   sessao.ultimoErro = null;
-  sessao.apiBaseUrl = contexto.apiBaseUrl || sessao.apiBaseUrl;
-  sessao.barberToken = contexto.barberToken || sessao.barberToken;
-  sessao.bridgeToken = contexto.bridgeToken || sessao.bridgeToken;
+  sessao.apiBaseUrl = contexto.apiBaseUrl;
+  sessao.barberToken = contexto.barberToken || null;
+  sessao.bridgeToken = contexto.bridgeToken || null;
 
   if (!sessao.apiBaseUrl || (!sessao.bridgeToken && !sessao.barberToken)) {
     sessao.status = 'erro';
@@ -232,25 +245,14 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
       criarOpcoesWppconnect({
         session: sessionKey,
         headless: false,
-        catchQR: (base64Qrimg, asciiQR) => {
+        catchQR: (base64Qrimg) => {
           sessao.qrCode = base64Qrimg;
           sessao.status = 'qr_pronto';
           sessao.ultimoErro = null;
 
-          if (asciiQR) {
-            console.log(`\nQR Code do WhatsApp da assinatura ${assinaturaId}:\n`);
-            console.log(asciiQR);
-            return;
-          }
-
-          const base64Data = String(base64Qrimg || '').split(',')[1];
-
-          if (base64Data) {
-            qrcodeTerminal.generate(base64Data, { small: true });
-          }
         },
         statusFind: (statusSession) => {
-          sessao.status = statusSession || sessao.status;
+          sessao.status = publicStatus(statusSession || sessao.status);
           if (sessao.status && sessao.status !== 'erro') {
             sessao.ultimoErro = null;
           }
@@ -275,8 +277,9 @@ async function iniciarSessao(assinaturaId, contexto = {}) {
     })
     .catch((error) => {
       sessao.status = 'erro';
-      sessao.ultimoErro = error.message;
-      console.error(`Erro ao iniciar WPPConnect da assinatura ${assinaturaId}:`, error.message);
+      sessao.qrCode = null;
+      sessao.ultimoErro = 'Nao foi possivel iniciar a conexao local.';
+      logEvolutionError('legacy_bridge_start', error);
       throw error;
     })
     .finally(() => {
@@ -290,32 +293,12 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'whatsapp-bridge', port: PORT });
 });
 
-app.post('/sessions/:assinaturaId/start', async (req, res) => {
-  const { assinaturaId } = req.params;
-
-  try {
-    await iniciarSessao(assinaturaId, req.body || {});
-    const sessao = obterSessao(assinaturaId);
-    res.json({
-      ok: true,
-      status: sessao.status,
-      qrCode: sessao.qrCode,
-      ultimoErro: sessao.ultimoErro,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// No per-establishment authorization exists here. Generic session routes fail closed.
+app.post('/sessions/:assinaturaId/start', (req, res) => {
+  res.status(403).json({ error: 'Use o fluxo autenticado do Studiofy.', errorCode: 'WHATSAPP_AUTH_REQUIRED' });
 });
-
 app.get('/sessions/:assinaturaId/status', (req, res) => {
-  const { assinaturaId } = req.params;
-  const sessao = obterSessao(assinaturaId);
-
-  res.json({
-    status: sessao.status,
-    qrCode: sessao.qrCode,
-    ultimoErro: sessao.ultimoErro,
-  });
+  res.status(403).json({ error: 'Use o fluxo autenticado do Studiofy.', errorCode: 'WHATSAPP_AUTH_REQUIRED' });
 });
 
 app.listen(PORT, '127.0.0.1', () => {

@@ -1,5 +1,6 @@
 // Temporary diagnostics: never serialize request headers, payloads or Error objects.
-const { sanitizeUpstreamBody, sanitize } = require('./evolutionLog');
+const { sanitize, safeText } = require('./evolutionLog');
+const { STATUS_CODES } = require('node:http');
 const SAFE_HEADERS = Object.freeze([
   'retry-after', 'content-type', 'server', 'via', 'cf-ray', 'cf-cache-status',
   'date', 'x-request-id', 'request-id', 'rndr-id',
@@ -16,15 +17,23 @@ const PUBLIC_MESSAGES = new Set([
   'internal server error', 'bad gateway', 'service unavailable', 'gateway timeout',
 ]);
 
-function safeValue(value) {
-  return sanitizeUpstreamBody(String(value)).body.replace(/[\r\n\x00-\x1f\x7f]/g, ' ').slice(0, 256);
+function safeRetryAfter(value) {
+  if (typeof value !== 'string') return null;
+  if (/^(?:0|[1-9]\d{0,4})$/.test(value) && Number(value) <= 86400) return value;
+  if (/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) {
+    const date = Date.parse(value);
+    if (Number.isFinite(date) && new Date(date).toUTCString() === value) return value;
+  }
+  return null;
 }
 
 function safeHeaders(headers) {
   const result = {};
   for (const name of SAFE_HEADERS) {
     const value = headers.get(name);
-    if (value !== null) result[name] = safeValue(value);
+    if (value !== null) result[name] = name === 'retry-after' ? safeRetryAfter(value) :
+
+      '[VALUE OMITTED]';
   }
   return result;
 }
@@ -40,7 +49,7 @@ function safeBody(raw) {
   } catch { /* plain text */ }
   const publicMessage = typeof candidate === 'string' && PUBLIC_MESSAGES.has(candidate.toLowerCase());
   return {
-    body: publicMessage ? safeValue(candidate).slice(0, BODY_LIMIT) : '[BODY OMITTED: non-public content]',
+    body: publicMessage ? safeText(candidate, 'body').slice(0, BODY_LIMIT) : '[BODY OMITTED: non-public content]',
     bodyTruncated: raw.length > BODY_LIMIT,
     bodyOmitted: !publicMessage,
   };
@@ -86,24 +95,33 @@ function classifyOrigin(headers, status) {
 async function responseDiagnostic(response, context, started) {
   const headers = safeHeaders(response.headers);
   const body = await readSafeBody(response);
-  return { ...sanitize({ httpStatus: response.status, statusText: safeValue(response.statusText || ''),
+  return { ...sanitize({ httpStatus: response.status, statusText: STATUS_CODES[response.status] || 'Unknown HTTP status',
     requestId: context.requestId, timestamp: new Date().toISOString(),
     method: context.method, endpoint: context.endpoint, origin: context.origin,
     durationMs: Math.max(0, Date.now() - started),
     upstreamRetryAfter: headers['retry-after'] ?? null, ...body,
-    classification: classifyOrigin(headers, response.status) }), headers: sanitize(headers),
-    origin: sanitize(context.origin).replace(/\/$/, '') };
+    classification: classifyOrigin(headers, response.status) }), headers };
 }
 
 function routeDiagnostic(error) {
   // Only the module's explicit projection can reach the browser; no stack/details.
-  if (error.upstreamDiagnostic && error.rateLimitSource !== 'local_cooldown') return error.upstreamDiagnostic;
+  if (error.upstreamDiagnostic && error.rateLimitSource !== 'local_cooldown') {
+    const source = error.upstreamDiagnostic;
+    const httpStatus = Number.isInteger(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599 ? source.httpStatus : null;
+    const headers = safeHeaders(new Headers(Object.fromEntries(SAFE_HEADERS.filter(key => typeof source.headers?.[key] === 'string').map(key => [key, source.headers[key]]))));
+    return { ...sanitize({ httpStatus, statusText: STATUS_CODES[httpStatus] || 'Unknown HTTP status',
+      requestId: source.requestId, timestamp: source.timestamp, method: source.method,
+      endpoint: source.endpoint, origin: source.origin, durationMs: source.durationMs,
+      body: safeText(source.body, 'body'), bodyTruncated: source.bodyTruncated === true, bodyOmitted: source.bodyOmitted === true,
+      classification: classifyOrigin(headers, httpStatus) }),
+      upstreamRetryAfter: safeRetryAfter(source.upstreamRetryAfter), headers };
+  }
   const local = error.rateLimitSource === 'local_cooldown';
-  const httpStatus = !local && Number.isInteger(error.diagnostic?.httpStatus) ? error.diagnostic.httpStatus : null;
+  const httpStatus = !local && Number.isInteger(error.diagnostic?.httpStatus) && error.diagnostic.httpStatus >= 100 && error.diagnostic.httpStatus <= 599 ? error.diagnostic.httpStatus : null;
   return { httpStatus, upstreamRetryAfter: null,
     classification: { probableOrigin: local ? 'studiofy_local_cooldown' : httpStatus !== null ? 'upstream_response_without_safe_details' : 'no_upstream_response',
       confidence: 'high', evidence: [], producerConfirmed: error.rateLimitSource === 'local_cooldown' },
-    retryAfterSeconds: error.retryAfterSeconds || null };
+    retryAfterSeconds: Number.isInteger(error.retryAfterSeconds) && error.retryAfterSeconds > 0 && error.retryAfterSeconds <= 86400 ? error.retryAfterSeconds : null };
 }
 
-module.exports = { SAFE_HEADERS, BODY_LIMIT, safeBody, safeHeaders, classifyOrigin, responseDiagnostic, routeDiagnostic };
+module.exports = { SAFE_HEADERS, BODY_LIMIT, safeBody, safeHeaders, safeRetryAfter, classifyOrigin, responseDiagnostic, routeDiagnostic };

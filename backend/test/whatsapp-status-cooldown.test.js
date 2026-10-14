@@ -41,10 +41,7 @@ test('status: 429, bloqueio local sem renovar prazo, expiracao e recuperacao', {
   assert.equal(upstream,0);const wait=page.waitForResponse(r=>r.url().endsWith('/whatsapp/status'));
   await page.click('[data-section="WhatsApp"]');const response=await wait;assert.equal(response.status(),429);
   firstDiagnostic=(await response.json()).diagnostic;
-  assert.equal(firstDiagnostic.endpoint,'/instance/connectionState/status-fixture');
-  assert.equal(firstDiagnostic.httpStatus,429);
-  assert.equal(firstDiagnostic.trigger,'section_open');
-  assert.equal(firstDiagnostic.requestId,response.headers()['x-request-id']);
+  assert.equal(firstDiagnostic, undefined, 'Normal HTTP responses exclude diagnostics.');
   await page.waitForFunction(()=>document.querySelector('#whatsappNotice').textContent.includes('temporariamente'));
   assert.equal(upstream,1);assert.equal(browserRequests,1);
  });

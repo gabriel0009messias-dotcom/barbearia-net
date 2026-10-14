@@ -6,6 +6,7 @@ module.exports = {
     api.createEvolutionError(message, statusCode, 'EVOLUTION_ERROR', details),
   extractQrValue: api.extrairConteudoQr,
   normalizeQrCode: api.construirQrCodeUrl,
+  getConnectionCode: api.obterCodigoConexao,
   instanceNameForSalon: api.gerarNomeInstancia,
   fetchInstances: api.buscarInstancia,
   createInstance: api.criarInstancia,

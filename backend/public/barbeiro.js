@@ -622,7 +622,7 @@ async function consultarStatusWhatsapp() {
     atualizarStatusWhatsapp(resposta.status, resposta.connected || resposta.conectado, resposta.connectionAttemptActive);
     if (!whatsappConnected) {
       const qr = resposta.qrCode || resposta.qr;
-      if (typeof qr === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr) || /^https:\/\/api\.qrserver\.com\/v1\/create-qr-code\/\?/.test(qr))) {
+      if (typeof qr === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr)) {
         qrCodeImage.src = qr; qrCodeImage.hidden = false;
       }
       const code = resposta.pairingCode || resposta.code;
@@ -737,7 +737,7 @@ async function solicitarConexaoWhatsapp(modo = 'pairing') {
       qrStatusMessage.textContent = 'Codigo gerado. Digite este codigo no WhatsApp do celular.';
     } else {
       const qr = resposta.qrCode || resposta.qr;
-      if (!qr) throw new Error(resposta.message || resposta.mensagem || 'O servidor ainda nao disponibilizou o QR Code. Tente novamente.');
+      if (typeof qr !== 'string' || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr)) throw new Error('O servidor ainda nao disponibilizou um QR Code seguro. Tente novamente.');
       qrCodeImage.src = qr;
       qrCodeImage.hidden = false;
       qrStatusMessage.textContent = 'Abra Aparelhos conectados no WhatsApp e escaneie o QR Code.';

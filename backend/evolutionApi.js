@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { logEvolution, sanitize, sanitizeUpstreamBody } = require('./evolutionLog');
+const { logEvolution } = require('./evolutionLog');
 const guard = require('./evolutionConnectionGuard');
 const statusRequests = new Map();
 const statusCache = new Map();
@@ -7,7 +7,8 @@ const connectionCodes = new Map();
 const recoveries = new Map();
 const recoveryWindows = new Map();
 const requestContext = require('./evolutionContext');
-const { responseDiagnostic } = require('./evolutionDiagnostics');
+const { responseDiagnostic, safeBody, safeHeaders, safeRetryAfter } = require('./evolutionDiagnostics');
+const { STATUS_CODES } = require('node:http');
 function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
 function traceStatus(event, data) {
   if (process.env.EVOLUTION_STATUS_TRACE === 'true') logEvolution(event, data);
@@ -158,8 +159,9 @@ function createEvolutionError(message, statusCode = 500, code = 'EVOLUTION_ERROR
   const error = new Error(message);
   error.statusCode = statusCode;
   error.code = code;
-  // Consumidores legados tambem podem registrar o Error diretamente.
-  error.details = sanitize(details);
+  // Provider text can repeat pairing material under arbitrary field names.
+  // Keep technical error metadata, never copy a provider payload into an Error.
+  error.details = null;
   return error;
 }
 
@@ -201,7 +203,7 @@ async function upstream429Body(response) {
     let bytes = 0;
     while (true) {
       const { done, value } = await reader.read();
-      if (done) return sanitizeUpstreamBody(Buffer.concat(chunks).toString('utf8'));
+      if (done) return safeBody(Buffer.concat(chunks).toString('utf8'));
       bytes += value.byteLength;
       if (bytes > 65536) return { body: '[BODY OMITTED: size limit]', bodyTruncated: true };
       chunks.push(Buffer.from(value));
@@ -283,7 +285,7 @@ async function requestTransport(path, options = {}) {
       httpStatus = response.status;
       if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_EVOLUTION_RESPONSE', { requestId, httpStatus });
       if (httpStatus === 429) {
-        const upstreamRetryAfter = response.headers.get('retry-after');
+        const upstreamRetryAfter = safeRetryAfter(response.headers.get('retry-after'));
         const diagnostic = { requestId, endpoint, instanceName: instance, method: context.method,
           httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
         const error = guard.recordRateLimit(connectionKey(instance || 'global'), upstreamRetryAfter, diagnostic);
@@ -292,20 +294,12 @@ async function requestTransport(path, options = {}) {
           logEvolution('evolution_temporary_upstream_error', { ...error.upstreamDiagnostic, headers: undefined, ...error.upstreamDiagnostic.headers }, 'error');
           throw error;
         }
-        const metadata = {};
-        for (const name of ['content-type', 'server', 'date', 'via', 'cf-ray', 'x-ratelimit-limit',
-          'x-ratelimit-remaining', 'x-ratelimit-reset', 'ratelimit-limit', 'ratelimit-remaining',
-          'ratelimit-reset', 'ratelimit', 'ratelimit-policy', 'x-ratelimit-policy',
-          'x-ratelimit-reset-after', 'rndr-id', 'request-id', 'x-request-id']) {
-          const value = response.headers.get(name);
-          if (value !== null) metadata[name] = /^(?:x-)?ratelimit-/.test(name) && /^\d+$/.test(value)
-            ? value.slice(0, 256) : sanitizeUpstreamBody(value).body.slice(0, 256);
-        }
+        const metadata = safeHeaders(response.headers);
         const body = await upstream429Body(response);
         logEvolution('evolution_upstream_429', { ...context, path: endpoint, httpStatus,
           durationMs: Date.now() - started,
-          statusText: sanitizeUpstreamBody(response.statusText || '').body.slice(0, 256),
-          ...metadata, upstreamRetryAfter: upstreamRetryAfter === null ? null : sanitizeUpstreamBody(upstreamRetryAfter).body.slice(0, 256),
+          statusText: STATUS_CODES[httpStatus] || 'Unknown HTTP status',
+          ...metadata, upstreamRetryAfter,
           localBackoffSeconds: error.localBackoffSeconds,
           studiofyCooldown: { backoffSeconds: error.localBackoffSeconds,
             effectiveSeconds: error.retryAfterSeconds, retryAt: error.retryAt },
@@ -323,8 +317,7 @@ async function requestTransport(path, options = {}) {
       let payload;
       try { payload = JSON.parse(raw); }
       catch { payload = { nonJson: true, body: raw }; }
-      logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started,
-        ...(temporaryDiagnostics ? {} : { response: payload }) });
+      logEvolution('request_response', { ...context, httpStatus, durationMs: Date.now() - started });
       if (!response.ok || payload?.error) {
         const [message, status, code] = classifyFailure(httpStatus, payload, endpoint);
         if (code === 'EVOLUTION_INSTANCE_NOT_FOUND' && instance) invalidarExistenciaInstancia(instance);
@@ -344,7 +337,13 @@ async function requestTransport(path, options = {}) {
         error = createEvolutionError(code === 'ENOTFOUND' ? 'Nao foi possivel resolver o endereco da Evolution API.' : 'Evolution API esta offline ou inacessivel pela rede.', 503,
           code === 'ENOTFOUND' ? 'EVOLUTION_DNS_ERROR' : 'EVOLUTION_OFFLINE');
       }
-      if (error !== original) error.cause = original;
+      // Preserve only closed technical categories, never the original exception.
+      if (error !== original) {
+        error.cause = { name: ['AbortError','TimeoutError','TypeError'].includes(original.name) ? original.name : 'Error' };
+        if (['ENOTFOUND','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','ETIMEDOUT'].includes(original.cause?.code)) {
+          error.cause.cause = { code: original.cause.code };
+        }
+      }
       error.diagnostic ||= { requestId, endpoint, instanceName: instance, method: context.method,
         httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
       logEvolution('request_failure', { ...context, httpStatus, durationMs: Date.now() - started,
@@ -392,21 +391,7 @@ function extrairConteudoQr(payload = null) {
 }
 
 function construirQrCodeUrl(code = '') {
-  const conteudo = String(code || '').trim();
-
-  if (!conteudo) {
-    return null;
-  }
-
-  if (conteudo.startsWith('data:image/')) {
-    return conteudo;
-  }
-
-  if (/^[A-Za-z0-9+/=\r\n]+$/.test(conteudo) && conteudo.length > 100) {
-    return `data:image/png;base64,${conteudo.replace(/\s/g, '')}`;
-  }
-
-  return `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(conteudo)}`;
+  return require('./localWhatsappQr').localWhatsappQr(code);
 }
 
 async function validarConexaoApi() {
@@ -472,7 +457,9 @@ function invalidarExistenciaInstancia(instanceName) {
 }
 
 function extrairEstadoInstancia(payload) {
-  const state = String(payload?.instance?.state || payload?.state || payload?.instance?.status || '').trim().toLowerCase();
+  const raw = payload?.instance?.state ?? payload?.state ?? payload?.instance?.status;
+  if (typeof raw !== 'string' || raw.length > 32) return null;
+  const state = raw.trim().toLowerCase();
   return ['open', 'connected', 'close', 'closed', 'disconnected', 'logout', 'connecting', 'pairing', 'syncing'].includes(state) ? state : null;
 }
 

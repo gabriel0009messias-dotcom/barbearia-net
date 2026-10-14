@@ -1,3 +1,4 @@
+const { safeWhatsappException } = require('./whatsappError');
 const { attachBotHandlers } = require('./botFlow');
 const { criarOpcoesWppconnect } = require('./whatsappBrowser');
 
@@ -73,10 +74,7 @@ async function iniciarSessao(assinaturaId) {
     iniciadoEm: Date.now(),
   });
 
-  const wppconnect = obterWppconnect();
-
-  sessao.startPromise = wppconnect
-    .create(
+  sessao.startPromise = Promise.resolve().then(() => obterWppconnect().create(
       criarOpcoesWppconnect({
         session: `assinatura-${assinaturaId}`,
         headless: true,
@@ -88,7 +86,7 @@ async function iniciarSessao(assinaturaId) {
           });
         },
         statusFind: (statusSession) => {
-          const novoStatus = statusSession || sessao.status;
+          const novoStatus = ['notLogged','isLogged','qrReadSuccess','qrReadFail','browserClose','autocloseCalled','desconnectedMobile','inChat','serverClose','deviceNotConnected','disconnectedMobile','phoneNotConnected','qrReadError'].includes(statusSession) ? statusSession : sessao.status;
           atualizarSessao(sessao, {
             status: novoStatus,
             qrCode: ['conectado', 'isLogged', 'qrReadSuccess'].includes(novoStatus) ? null : sessao.qrCode,
@@ -96,7 +94,7 @@ async function iniciarSessao(assinaturaId) {
           });
         },
       })
-    )
+    ))
     .then((client) => {
       atualizarSessao(sessao, {
         client,
@@ -111,11 +109,12 @@ async function iniciarSessao(assinaturaId) {
     .catch((error) => {
       atualizarSessao(sessao, {
         status: 'erro',
-        ultimoErro: error.message,
+        qrCode: null,
+        ultimoErro: 'WHATSAPP_LOCAL_START_FAILED',
         startPromise: null,
         iniciadoEm: null,
       });
-      throw error;
+      throw safeWhatsappException({ code: 'WHATSAPP_LOCAL_START_FAILED', statusCode: 503 });
     })
     .finally(() => {
       sessao.startPromise = null;

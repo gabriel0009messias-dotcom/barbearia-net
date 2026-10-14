@@ -73,7 +73,9 @@ test('429 do webhook mantem tentativa e informa origem original no cooldown de s
   assert.equal(event.instanceName, 'one');
   assert.equal(event.attempt, 1);
   assert.ok(Number.isFinite(Date.parse(event.timestamp)));
-  assert.match(event.body, /Webhook limited/);
+  assert.equal(event.body, '[BODY OMITTED: non-public content]');
+  assert.equal(event.bodyOmitted, true);
+  assert.doesNotMatch(JSON.stringify(logs), /Webhook limited/);
   assert.doesNotMatch(JSON.stringify(logs), /synthetic-webhook-key/);
 });
 

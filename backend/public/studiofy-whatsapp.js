@@ -93,7 +93,7 @@
           const qr = data.qrCode || data.qr || '';
           if (data.codeExpiresInSeconds === 0 && !qr && !pairing) { s.qr = ''; s.pairing = ''; s.codeUntil = 0; }
           if (/^[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(pairing)) { s.pairing = pairing; s.qr = ''; s.mode = 'pairing'; }
-          else if (s.mode === 'qr' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr) || /^https:\/\/api\.qrserver\.com\/v1\/create-qr-code\/\?/.test(qr))) s.qr = qr;
+          else if (s.mode === 'qr' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(qr)) s.qr = qr;
           if (s.qr || s.pairing) {
             s.codeUntil = Date.now() + (data.codeExpiresInSeconds || 60) * 1000;
             if (!hadCode) s.deadline = Date.now() + 180000;

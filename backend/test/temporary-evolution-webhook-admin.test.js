@@ -151,8 +151,8 @@ test('temporary webhook admin: real admin auth, fixed scope and secret-safe veri
     assert.ok(diagnostic.durationMs >= 0);
     assert.equal(diagnostic.upstreamRetryAfter, '30');
     assert.equal(diagnostic.headers['retry-after'], '30');
-    assert.equal(diagnostic.headers['x-render-origin-server'], 'render-test');
-    assert.equal(diagnostic.headers['cf-cache-status'], 'DYNAMIC');
+    assert.equal(diagnostic.headers['x-render-origin-server'], '[VALUE OMITTED]');
+    assert.equal(diagnostic.headers['cf-cache-status'], '[VALUE OMITTED]');
     assert.equal(diagnostic.body, 'Too Many Requests');
     assert.equal(diagnostic.classification.producerConfirmed, false);
     assert.equal(diagnostic.classification.confidence, 'low');
