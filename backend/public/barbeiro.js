@@ -27,7 +27,7 @@ const mesFaturamentoInput = document.getElementById('mesFaturamentoInput');
 const mesFaturamentoResultado = document.getElementById('mesFaturamentoResultado');
 const mesFaturamentoMensagem = document.getElementById('mesFaturamentoMensagem');
 const bloqueiosList = document.getElementById('bloqueiosList');
-const formMessage = document.getElementById('formMessage');
+const formMessage = document.getElementById('formMessageInicio');
 const bloqueiosListInicio = document.getElementById('bloqueiosListInicio');
 const formMessageInicio = document.getElementById('formMessageInicio');
 const refreshButton = document.getElementById('refreshButton');
@@ -592,7 +592,7 @@ async function carregarPainelBarbeiro() {
     }
     mostrarMensagemTopo('Nao consegui atualizar o painel agora.');
     if (formMessage) {
-      formMessage.textContent = 'Nao consegui carregar o painel do salao.';
+      formMessage.textContent = 'Não foi possível carregar seu painel.';
     }
   }
 }
@@ -859,7 +859,7 @@ configuracoesBarbeiroForm.addEventListener('submit', async (event) => {
     if (tratarErroSessao(error)) {
       return;
     }
-    configuracoesMessage.textContent = 'Nao consegui atualizar as configuracoes da barbearia.';
+    configuracoesMessage.textContent = 'Não foi possível atualizar as configurações do estabelecimento.';
   }
 });
 

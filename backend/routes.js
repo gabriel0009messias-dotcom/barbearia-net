@@ -513,7 +513,7 @@ async function carregarAssinaturaPorBridgeToken(token) {
 
 function responderErroConta(res, error) {
   const safe = publicWhatsappError(error);
-  const message = safe.code === 'WHATSAPP_AUTH_REQUIRED' ? 'Login do barbeiro obrigatorio.' : safe.message;
+  const message = safe.code === 'WHATSAPP_AUTH_REQUIRED' ? 'Entre na sua conta para continuar.' : safe.message;
   return res.status(safe.statusCode).json({ error: message });
 }
 
@@ -986,7 +986,7 @@ async function enviarCodigoRecuperacaoPorEmail(destino, codigo) {
   const email = String(destino || '').trim();
 
   if (!email) {
-    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+    throw new Error('Este estabelecimento não possui Gmail válido para recuperar a senha.');
   }
 
   await enviarEmail({
@@ -1088,7 +1088,7 @@ async function enviarLinkRecuperacaoPorEmailSeguro(destino, linkRecuperacao) {
   const from = apiConfig?.from || smtpConfig?.from || null;
 
   if (!email) {
-    throw new Error('Essa barbearia nao possui Gmail valido para recuperar a senha.');
+    throw new Error('Este estabelecimento não possui Gmail válido para recuperar a senha.');
   }
 
   if (!apiConfig && !smtpConfig) {
@@ -1831,7 +1831,7 @@ function privateAuthentication(auth){
 async function requireStatusAccount(req,res,next){
   try {
     const assinatura=await carregarAssinaturaPorToken(req.headers['x-barbeiro-token']);
-    if(!assinatura)return res.status(401).json({error:'Login do barbeiro obrigatório.'});
+    if(!assinatura)return res.status(401).json({error:'Entre na sua conta para continuar.'});
     req.assinatura=assinatura;
     next();
   } catch {

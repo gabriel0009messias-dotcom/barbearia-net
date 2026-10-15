@@ -16,7 +16,15 @@ function slugify(value) {
 }
 
 async function register(payload) {
-  const salonName = requiredString(payload.salonName, 'Nome do salao');
+  let salonName;
+  try {
+    salonName = requiredString(payload.salonName, 'Nome do estabelecimento');
+  } catch (error) {
+    if (error.statusCode === 400) {
+      error.message = 'Nome do estabelecimento é obrigatório.';
+    }
+    throw error;
+  }
   const ownerName = requiredString(payload.ownerName, 'Nome do administrador');
   const userEmail = validateEmail(payload.email);
   const password = requiredString(payload.password, 'Senha');

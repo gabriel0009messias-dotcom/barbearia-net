@@ -58,14 +58,14 @@ async function buildPayload(salonId, payload) {
 async function ensureNoConflicts(salonId, payload, ignoreId = null) {
   const salon = await salonRepository.findById(salonId);
   if (!salon) {
-    throw createError('Salao nao encontrado.', 404);
+    throw createError('Estabelecimento não encontrado.', 404);
   }
 
   const dayOfWeek = new Date(`${payload.date}T00:00:00`).getDay();
   const workingDays = Array.isArray(salon.working_days) ? salon.working_days : JSON.parse(salon.working_days || '[]');
 
   if (!workingDays.includes(dayOfWeek)) {
-    throw createError('O salao nao atende neste dia.');
+    throw createError('O estabelecimento não atende neste dia.');
   }
 
   if (payload.startTime < salon.opening_time || payload.endTime > salon.closing_time) {
@@ -133,7 +133,7 @@ async function cancel(salonId, id) {
 async function getAvailability(salonId, query) {
   const salon = await salonRepository.findById(salonId);
   if (!salon) {
-    throw createError('Salao nao encontrado.', 404);
+    throw createError('Estabelecimento não encontrado.', 404);
   }
 
   const appointmentDate = date(query.date);

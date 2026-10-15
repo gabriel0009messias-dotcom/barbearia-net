@@ -47,7 +47,7 @@ function PageShell({ user, route, navigate, onLogout, children }) {
     <div className="app-shell">
       <aside className="sidebar">
         <div>
-          <p className="eyebrow">SaaS Barbearia</p>
+          <p className="eyebrow">Studiofy</p>
           <h1>{user?.salon?.name || 'Painel'}</h1>
           <p className="muted">{user?.name || ''}</p>
         </div>
@@ -127,7 +127,7 @@ function AuthPage({ mode, onSuccess, onSwitch }) {
     <div className="auth-layout">
       <section className="hero-panel">
         <p className="eyebrow">Plataforma oficial</p>
-        <h1>Barbearias e saloes no mesmo sistema, cada um com seus proprios dados.</h1>
+        <h1>Negócios de diferentes segmentos no mesmo sistema, cada um com seus próprios dados.</h1>
         <p className="muted">
           Cadastro, agendamentos, bloqueios, assinatura, dashboard e integracao com WhatsApp em uma unica operacao.
         </p>
@@ -135,13 +135,13 @@ function AuthPage({ mode, onSuccess, onSwitch }) {
 
       <section className="auth-card">
         <p className="eyebrow">{mode === 'register' ? 'Novo cadastro' : 'Acesso'}</p>
-        <h2>{mode === 'register' ? 'Criar conta do salao' : 'Entrar na plataforma'}</h2>
+        <h2>{mode === 'register' ? 'Criar conta do estabelecimento' : 'Entrar na plataforma'}</h2>
 
         <form className="form-grid" onSubmit={submit}>
           {mode === 'register' ? (
             <>
               <label>
-                Nome do salao
+                Nome do estabelecimento
                 <input
                   value={form.salonName}
                   onChange={(event) => setForm((current) => ({ ...current, salonName: event.target.value }))}
@@ -561,7 +561,7 @@ function SettingsPage({ user }) {
       <h3>Configuracoes</h3>
       <div className="details-grid">
         <div>
-          <span>Salao</span>
+          <span>Estabelecimento</span>
           <strong>{user?.salon?.name || '-'}</strong>
         </div>
         <div>
