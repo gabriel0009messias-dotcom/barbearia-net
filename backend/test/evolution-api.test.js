@@ -35,7 +35,13 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
     };
     process.env.EVOLUTION_WEBHOOK_SECRET = 'private-webhook-secret';
     await api.configurarWebhookInstancia('salon-test', 'https://example.test/api/webhook/evolution');
-    await api.enviarTextoInstancia('salon-test', '5511999999999', 'Olá!');
+    const env = require('./helpers/postgres').testEnvironment();
+    const db = require('../database'); await db.ready;
+    try {
+      await db.runAsync("INSERT INTO assinaturas(id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,whatsapp_session) VALUES(806,'Synthetic transport','Owner','11999990000','mercado_pago',5,'','salon-test')");
+      await require('../services/evolutionOwnershipOperation').createEvolutionOwnershipOperation(db.pool).run(806,
+        () => api.enviarTextoInstancia('salon-test', '5511999999999', 'Olá!'));
+    } finally { await db.close(); await env.cleanup(); }
     assert.equal(requests[0].body.webhook.headers['x-webhook-secret'], 'private-webhook-secret');
     assert.deepEqual(requests[0].body.webhook.events, ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']);
     assert.equal(requests[0].body.webhook.byEvents, false);
@@ -47,36 +53,36 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
   await t.test('status HTTP prevalece sobre HTML ou mensagem do provedor', async () => {
     for (const [status, code] of [[401, 'EVOLUTION_INVALID_KEY'], [403, 'EVOLUTION_INVALID_KEY'], [503, 'EVOLUTION_OFFLINE'], [504, 'EVOLUTION_TIMEOUT'], [404, 'EVOLUTION_ENDPOINT_NOT_FOUND']]) {
       reply(status, '<html>proxy unavailable</html>');
-      await assert.rejects(api.obterEstadoConexao('barbearia-1'), (error) => error.code === code && error.upstreamStatus === status);
+      await assert.rejects(api.obterEstadoConexao('test-a'), (error) => error.code === code && error.upstreamStatus === status);
     }
   });
   await t.test('falhas de criacao e connect nao vazam mensagem tecnica para o painel', async () => {
     reply(400, { message: 'database password=other-secret apikey=secret-global-key' });
-    await assert.rejects(api.criarInstancia('barbearia-1'), { code: 'EVOLUTION_CREATE_FAILED', message: 'Nao foi possivel criar a instancia.' });
+    await assert.rejects(api.criarInstancia('test-a'), { code: 'EVOLUTION_CREATE_FAILED', message: 'Nao foi possivel criar a instancia.' });
     reply(200, { error: true, message: 'internal socket failure token=other-secret' });
-    await assert.rejects(api.conectarInstancia('barbearia-1'), { code: 'EVOLUTION_CONNECT_FAILED' });
+    await assert.rejects(api.conectarInstancia('test-a'), { code: 'EVOLUTION_CONNECT_FAILED' });
   });
   await t.test('404 de instancia ausente permite criar; erro de rota e autenticacao nao', async () => {
-    reply(404, { error: 'Not Found', response: { message: ['Instance "barbearia-1" not found'] } });
-    assert.equal(await api.buscarInstancia('barbearia-1'), null);
+    reply(404, { error: 'Not Found', response: { message: ['Instance "test-a" not found'] } });
+    assert.equal(await api.buscarInstancia('test-a'), null);
     reply(404, { message: 'Cannot GET /instance/fetchInstances' });
-    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_ENDPOINT_NOT_FOUND' });
+    await assert.rejects(api.buscarInstancia('test-a'), { code: 'EVOLUTION_ENDPOINT_NOT_FOUND' });
     reply(401, { message: 'Unauthorized' });
-    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_KEY' });
+    await assert.rejects(api.buscarInstancia('test-a'), { code: 'EVOLUTION_INVALID_KEY' });
   });
   await t.test('resposta invalida nao vira lista vazia nem cria outra instancia', async () => {
     reply(200, '<html>Render loading</html>');
-    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_RESPONSE' });
+    await assert.rejects(api.buscarInstancia('test-a'), { code: 'EVOLUTION_INVALID_RESPONSE' });
     reply(200, { unexpected: true });
-    await assert.rejects(api.buscarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_RESPONSE' });
+    await assert.rejects(api.buscarInstancia('test-a'), { code: 'EVOLUTION_INVALID_RESPONSE' });
   });
   await t.test('conflito de criacao permanece distinguivel', async () => {
     reply(403, { message: 'Forbidden' });
-    await assert.rejects(api.criarInstancia('barbearia-1'), { code: 'EVOLUTION_INVALID_KEY' });
+    await assert.rejects(api.criarInstancia('test-a'), { code: 'EVOLUTION_INVALID_KEY' });
     reply(409, { message: 'Conflict' });
-    await assert.rejects(api.criarInstancia('barbearia-1'), { code: 'EVOLUTION_INSTANCE_EXISTS' });
-    reply(403, { response: { message: ['This name "barbearia-1" is already in use.'] } });
-    await assert.rejects(api.criarInstancia('barbearia-1'), { code: 'EVOLUTION_INSTANCE_EXISTS' });
+    await assert.rejects(api.criarInstancia('test-a'), { code: 'EVOLUTION_INSTANCE_EXISTS' });
+    reply(403, { response: { message: ['This name "test-a" is already in use.'] } });
+    await assert.rejects(api.criarInstancia('test-a'), { code: 'EVOLUTION_INSTANCE_EXISTS' });
   });
   await t.test('timeout durante leitura preserva causa e nao repete POST', async sub => {
     let transportCalls = 0;
@@ -88,22 +94,22 @@ test('Evolution: transporte, diagnostico e protecao de segredos', async (t) => {
         else options.signal.addEventListener('abort', abort, { once: true });
       }) };
     });
-    await assert.rejects(api.criarInstancia('barbearia-1', '', { timeoutMs: 30, retryAttempts: 3 }), (error) => error.code === 'EVOLUTION_TIMEOUT' && error.cause?.name === 'AbortError');
+    await assert.rejects(api.criarInstancia('test-a', '', { timeoutMs: 30, retryAttempts: 3 }), (error) => error.code === 'EVOLUTION_TIMEOUT' && error.cause?.name === 'AbortError');
     assert.equal(transportCalls, 1);
   });
   await t.test('logs preservam evidencias e ocultam segredos, QR e pairing', async () => {
     reply(200, { pairingCode: 'ABCD1234', code: 'raw-qr-secret', base64: 'qr-image-secret', hash: 'instance-secret', token: 'session-secret', nested: { password: 'password-secret' } });
-    assert.equal((await api.conectarInstancia('barbearia-1', '5575981218107')).pairingCode, 'ABCD1234');
+    assert.equal((await api.conectarInstancia('test-a', '5575981218107')).pairingCode, 'ABCD1234');
     logEvolution('test_error', { error: Object.assign(new Error('apikey=secret-global-key'), { cause: new Error('password=other-secret') }) });
     const output = logs.join('\n');
     for (const secret of ['secret-global-key', 'other-secret', 'ABCD1234', 'raw-qr-secret', 'qr-image-secret', 'instance-secret', 'session-secret', 'password-secret', '5575981218107']) assert.ok(!output.includes(secret), secret);
-    for (const field of ['request_start', 'request_response', 'request_failure', 'durationMs', 'httpStatus', 'stack', 'cause', 'barbearia-1']) assert.ok(output.includes(field), field);
+    for (const field of ['request_start', 'request_response', 'request_failure', 'durationMs', 'httpStatus', 'stack', 'cause', 'test-a']) assert.ok(output.includes(field), field);
   });
   await t.test('DNS, conexao recusada e TLS preservam causa tecnica', async (sub) => {
     let networkCode;
     sub.mock.method(global, 'fetch', async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('network detail'), { code: networkCode }) }); });
     for (networkCode of ['ENOTFOUND', 'ECONNREFUSED', 'CERT_HAS_EXPIRED']) {
-      await assert.rejects(api.obterEstadoConexao('barbearia-1'), (error) => error.cause?.cause?.code === networkCode && error.code === (networkCode === 'ENOTFOUND' ? 'EVOLUTION_DNS_ERROR' : 'EVOLUTION_OFFLINE'));
+      await assert.rejects(api.obterEstadoConexao('test-a'), (error) => error.cause?.cause?.code === networkCode && error.code === (networkCode === 'ENOTFOUND' ? 'EVOLUTION_DNS_ERROR' : 'EVOLUTION_OFFLINE'));
     }
   });
   await t.test('URL invalida e valor de timeout explicito sao respeitados', () => {

@@ -4,6 +4,8 @@ const crypto = require('node:crypto');
 
 async function migrate(pool, schema = process.env.DATABASE_SCHEMA || 'salaoflix') {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw new Error('Schema invalido.');
+  const legacySchema = process.env.LEGACY_DATABASE_SCHEMA || 'public';
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(legacySchema) || schema === legacySchema) throw new Error('Invalid Evolution ownership schema configuration.');
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -11,6 +13,7 @@ async function migrate(pool, schema = process.env.DATABASE_SCHEMA || 'salaoflix'
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     await client.query(`SET LOCAL search_path TO "${schema}", public`);
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)');
+    await client.query("SELECT set_config('studiofy.evolution_legacy_schema',$1,true)", [legacySchema]);
     const directory = path.join(__dirname, 'migrations');
     for (const name of fs.readdirSync(directory).filter(name => name.endsWith('.sql')).sort()) {
       const sql = fs.readFileSync(path.join(directory, name), 'utf8');

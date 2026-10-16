@@ -77,7 +77,7 @@ test('PostgreSQL: quatro segmentos, isolamento, conflito, cancelamento e lembret
  assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[appointment.id])).status,'cancelled');
  let sent=0;await require('../services/reminders').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:40:00-03:00')).drain();assert.equal(sent,0);
  assert.equal((await request(url,'POST',booking)).status,201);
- await require('../services/reminders').createReminderWorker(db,async(_instance,_phone,message)=>{sent++;assert.match(message,/Corte/);assert.match(message,/20 minutos/);},()=>new Date(date+'T09:40:00-03:00')).drain();
+ await require('../services/reminders').createReminderWorker(db,async(_instance,_phone,message)=>{sent++;assert.match(message,/Corte/);assert.match(message,/20 minutos/);return {key:{id:'synthetic'},status:'PENDING'};},()=>new Date(date+'T09:40:00-03:00')).drain();
  assert.equal(sent,1);
  await require('../services/reminders').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:40:00-03:00')).drain();assert.equal(sent,1);
 });

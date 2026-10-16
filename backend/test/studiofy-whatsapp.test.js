@@ -10,6 +10,8 @@ const puppeteer = require('puppeteer');
 test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { timeout: 120000 }, async t => {
   const environment = require('./helpers/postgres').testEnvironment();
   Object.assign(process.env, { NODE_ENV: 'test', RENDER: 'false', PUBLIC_APP_URL: '', EVOLUTION_API_URL: 'https://evolution.studiofy.test', EVOLUTION_API_KEY: 'fake-test-key', EVOLUTION_API_RETRY_DELAY_MS: '1', MERCADO_PAGO_ACCESS_TOKEN: '' });
+  const fixtureApi = require('../evolutionApi');
+  t.mock.method(fixtureApi, 'gerarNomeInstancia', id => 'instance-' + id + '-test');
   const db = require('../database'); await db.ready;
   const app = express(); app.use(express.json()); app.use('/api', require('../routes')); app.use(express.static(path.resolve(__dirname, '../public')));
   const server = app.listen(0, '127.0.0.1'); await new Promise(r => server.once('listening', r));
@@ -53,7 +55,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     const login = await api('/barbeiro/login', null, 'POST', { identificador: `studiofy-wa-${n}@example.test`, senha: 'test-password' }); assert.equal(login.status, 200);
     accounts.push({ id: signup.body.assinatura.id, token: login.body.token });
   }
-  const [a, b] = accounts, route = `/publico/assinaturas/${a.id}/whatsapp`, name = 'barbearia-' + a.id;
+  const [a, b] = accounts, route = `/publico/assinaturas/${a.id}/whatsapp`, name = fixtureApi.gerarNomeInstancia(a.id);
   const executablePath = [process.env.CHROME_PATH, puppeteer.executablePath(), 'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(p => p && fs.existsSync(p)); assert.ok(executablePath);
   browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage(), errors = [], network = [];
@@ -169,7 +171,7 @@ test('Studiofy WhatsApp: tela, rotas reais, isolamento e Evolution simulada', { 
     }
     assert.equal(upstream.length, count);
     const own = await api(route + '/status?establishment_id=' + b.id, a.token); assert.equal(own.status, 200); assert.ok(upstream.slice(count).every(c => c.path.endsWith('/' + name)));
-    const forged = await api(route + '/iniciar', a.token, 'POST', { establishment_id: b.id, instanceName: 'barbearia-' + b.id }); assert.equal(forged.status, 200); assert.equal(connectCalls(), 2);
+    const forged = await api(route + '/iniciar', a.token, 'POST', { establishment_id: b.id, instanceName: fixtureApi.gerarNomeInstancia(b.id) }); assert.equal(forged.status, 200); assert.equal(connectCalls(), 2);
   });
   await t.test('backoff de falhas de status é limitado e não gera novos connects', async () => {
     await disconnect(); await page.click('#whatsappConnect'); await ready(); fault = 503; const connects = connectCalls();

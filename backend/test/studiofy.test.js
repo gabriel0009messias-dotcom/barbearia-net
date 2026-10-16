@@ -94,7 +94,7 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
  });
  await t.test('worker: reinício, duas instâncias, cancelamento, envio incerto e expiração',async()=>{
   const {createReminderWorker}=require('../services/reminders');
-  const sent=[];const send=async(...args)=>sent.push(args);
+  const sent=[];const send=async(...args)=>{sent.push(args);return {key:{id:'synthetic-accepted'},status:'PENDING'};};
   const clock=()=>new Date(`${future}T13:40:00-03:00`);
   await db.runAsync("UPDATE appointment_reminders SET status='cancelled' WHERE appointment_id<>$1",[booking]);
   await createReminderWorker(db,send,()=>new Date(clock().getTime()-1)).drain();assert.equal(sent.length,0);
@@ -109,6 +109,10 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
   let attempts=0;const fail=async()=>{attempts++;throw Error('ambiguous');};
   await createReminderWorker(db,fail,()=>new Date(`${future}T15:40:00-03:00`)).drain();await createReminderWorker(db,fail,()=>new Date(`${future}T15:41:00-03:00`)).drain();assert.equal(attempts,1);
   assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[booking])).status,'uncertain');
+  const uncertain=await db.getAsync('SELECT * FROM appointment_reminders WHERE appointment_id=$1',[booking]);
+  await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'16:30'},a.token);
+  assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[booking])).status,'uncertain');
+  await require('../services/evolutionDelivery').createEvolutionDelivery(db).reconcile('appointment_reminders',uncertain.id,a.id,uncertain.operation_token,{stopped:true,outcome:'rejected'});
   await request('/studiofy/agendamentos/'+booking,'PUT',{...body(),hora:'17:00'},a.token);
   await createReminderWorker(db,send,()=>new Date(`${future}T17:01:00-03:00`)).drain();assert.equal(sent.length,1);
   assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[booking])).status,'expired');

@@ -54,7 +54,9 @@ async function importSqlite(filename, options = {}) {
       // Never merge into an operating system: conflicting IDs could connect the wrong customer/payment.
       for (const name of [...new Set(metadata.map(c => c.table_name))].filter(name => !['schema_migrations', 'sqlite_imports'].includes(name))) {
         const rows = (await client.query(`SELECT * FROM ${identifier(name)}`)).rows;
-        const onlySeeds = name === 'configuracoes'
+        const onlySeeds = name === 'evolution_ownership_models'
+          ? rows.length === 2 && rows.every(row => ({ principal: process.env.DATABASE_SCHEMA || 'salaoflix', alternative: process.env.LEGACY_DATABASE_SCHEMA || 'public' })[row.model] === row.source_schema)
+          : name === 'configuracoes'
           ? rows.every(row => ({ suporte_numero: '+55 75 8317-9933', admin_pin: '5090' })[row.chave] === row.valor)
           : name === 'business_types'
             ? rows.every(row => seedBusinessTypes.some(([code, label], index) => row.code === code && row.name === label && row.active === true && row.sort_order === index + 1))

@@ -247,6 +247,7 @@ function classifyFailure(status, payload, path) {
 
 async function evolutionRequest(path, options = {}) {
   const endpoint = path.split('?')[0];
+  if (/^\/message\//i.test(endpoint)) require('./services/evolutionOwnershipOperation').assertEvolutionOperation(decodeURIComponent(endpoint.split('/')[3] || ''));
   const instance = options.instanceName || endpoint.split('/')[3];
   guard.checkCooldown(connectionKey('global'));
   if (instance && /^(\/instance\/|\/webhook\/set\/|\/message\/)/.test(endpoint)) {
@@ -272,14 +273,17 @@ async function requestTransport(path, options = {}) {
     const statusBeforeTransport = instance ? statusCache.get(connectionKey(instance)) : null;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
-    let httpStatus = null;
+    let httpStatus = null, transmitted = false;
     const context = { ...requestContext.current(), requestId, endpoint, instance, instanceName: instance, method: fetchOptions.method || 'GET', attempt,
       origin: new URL(config.baseUrl).origin, timeoutMs: budget };
     logEvolution('request_start', context);
     try {
       if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_CALLING_EVOLUTION', { requestId });
+      if (/^\/message\//i.test(endpoint)) require('./services/evolutionOwnershipOperation').assertEvolutionOperation(decodeURIComponent(endpoint.split('/')[3] || ''));
+      transmitted = true;
       const response = await fetch(`${config.baseUrl}${path}`, {
-        ...fetchOptions, redirect: 'manual', signal: controller.signal,
+        ...fetchOptions, redirect: 'manual', signal: /^\/message\//i.test(endpoint)
+          ? AbortSignal.any([controller.signal, require('./services/evolutionOwnershipOperation').assertEvolutionOperation(decodeURIComponent(endpoint.split('/')[3] || '')).signal]) : controller.signal,
         headers: { apikey: config.apiKey, ...(fetchOptions.body ? { 'Content-Type': 'application/json' } : {}), ...(fetchOptions.headers || {}) },
       });
       httpStatus = response.status;
@@ -343,6 +347,10 @@ async function requestTransport(path, options = {}) {
         if (['ENOTFOUND','ECONNREFUSED','ECONNRESET','CERT_HAS_EXPIRED','ETIMEDOUT'].includes(original.cause?.code)) {
           error.cause.cause = { code: original.cause.code };
         }
+      }
+      if (/^\/message\//i.test(endpoint)) {
+        error.deliveryOutcome = !transmitted ? 'not_attempted'
+          : httpStatus >= 400 && httpStatus < 500 && ![408, 425].includes(httpStatus) ? 'rejected' : 'uncertain';
       }
       error.diagnostic ||= { requestId, endpoint, instanceName: instance, method: context.method,
         httpStatus, timestamp: new Date().toISOString(), attempt, action: context.action, trigger: context.trigger };
@@ -602,6 +610,11 @@ async function configurarWebhookInstancia(instanceName, url, events = ['MESSAGES
   });
 }
 
+// A provider message id plus an acknowledgement state proves acceptance, not delivery.
+function acceptedEvolutionMessage(result) {
+  return Boolean(result && !result.error && typeof result.key?.id === 'string' && result.key.id.trim() &&
+    ['PENDING', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED'].includes(result.status));
+}
 async function enviarTextoInstancia(instanceName, number, text) {
   return evolutionRequest(`/message/sendText/${encodeURIComponent(instanceName)}`, {
     method: 'POST',
@@ -635,6 +648,7 @@ async function enviarListaInstancia(instanceName, number, options = {}) {
 }
 
 module.exports = {
+  acceptedEvolutionMessage,
   recuperarCodigoConexao,
   progressoConexao,
   receberEventoConexao,

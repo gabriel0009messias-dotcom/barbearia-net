@@ -27,7 +27,7 @@ test('clientes compartilham single-flight, cache, cooldown e Retry-After', async
   await new Promise(resolve => setImmediate(resolve)); release();
   for (const job of [limited, shared]) await assert.rejects(job, { rateLimitSource: 'upstream', retryAfterSeconds: 120 });
   await assert.rejects(legacy.getConnectionState('barbearia-6'), { rateLimitSource: 'local_cooldown' });
-  await assert.rejects(api.enviarTextoInstancia('barbearia-6', '5511999999999', 'synthetic'), { rateLimitSource: 'local_cooldown' });
+  await assert.rejects(api.enviarTextoInstancia('barbearia-6', '5511999999999', 'synthetic'), { code: 'INSTANCE_OPERATION_REQUIRED' });
   assert.equal(calls, 2);
   now += 120001; fault = false;
   const recovered = legacy.getConnectionState('barbearia-6');

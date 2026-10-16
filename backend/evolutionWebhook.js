@@ -77,33 +77,30 @@ async function processConnectionEvent(payload) {
 }
 
 async function drain(send = enviarTextoInstancia) {
-  // Persistent lease prevents multiple processes from sending the same response concurrently.
+  const db = require('./database');
+  const { createEvolutionDelivery, newDeliveryClaim } = require('./services/evolutionDelivery');
+  const delivery = createEvolutionDelivery(db);
+  await delivery.recoverInterrupted('whatsapp_messages');
   for (let i = 0; i < 50; i++) {
-    const row = await transaction(async db => {
-      const pending = await db.getAsync(`SELECT m.* FROM whatsapp_messages m
-        WHERE m.status = 'pending' AND m.lease_until < $1
-        AND NOT EXISTS (SELECT 1 FROM whatsapp_messages older WHERE older.instance = m.instance
-          AND older.phone = m.phone AND older.status = 'pending' AND older.id < m.id)
-        ORDER BY m.id LIMIT 1`, [Date.now()]);
-      if (pending) await db.runAsync("UPDATE whatsapp_messages SET lease_until = $1 WHERE id = $2", [Date.now() + 120000, pending.id]);
-      return pending;
-    });
+    const row = await db.transaction(async client => {
+      const pending = await client.getAsync(`SELECT m.* FROM whatsapp_messages m
+        WHERE m.status='pending' AND m.lease_until<$1 AND m.dispatch_started_at IS NULL
+          AND (m.attempts=0 OR m.claim_token IS NOT NULL)
+        AND NOT EXISTS(SELECT 1 FROM whatsapp_messages older WHERE older.instance=m.instance
+          AND older.phone=m.phone AND older.status IN ('pending','sending','uncertain') AND older.id<m.id)
+        ORDER BY m.id LIMIT 1 FOR UPDATE OF m SKIP LOCKED`, [Date.now()]);
+      if (!pending) return null;
+      const claim = newDeliveryClaim();
+      await client.runAsync("UPDATE whatsapp_messages SET status='sending',claim_token=$1,operation_token=NULL,dispatch_started_at=NULL,claimed_at=CURRENT_TIMESTAMP WHERE id=$2",[claim,pending.id]);
+      return { ...pending, claim_token: claim };
+    }, { serialize: false });
     if (!row) return;
-    try {
-      const account = await transaction(db => db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [row.assinatura_id]));
-      if (!require('./services/access').avaliarAcessoAssinatura(account).liberado) {
-        // Access deferral is not a provider attempt and must not grow transport backoff.
-        await transaction(db => db.runAsync('UPDATE whatsapp_messages SET lease_until=$1 WHERE id=$2', [Date.now() + 300000, row.id]));
-        continue;
-      }
-      await transaction(db => db.runAsync('UPDATE whatsapp_messages SET attempts=attempts+1 WHERE id=$1', [row.id]));
-      await send(row.instance, row.phone, row.response);
-      await transaction(db => db.runAsync("UPDATE whatsapp_messages SET status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = $1", [row.id]));
-      log('resposta enviada', { tenant: row.assinatura_id, phone: `***${row.phone.slice(-4)}` });
-    } catch {
-      log('erro de envio; resposta preservada para nova tentativa', { tenant: row.assinatura_id });
-      await transaction(db => db.runAsync("UPDATE whatsapp_messages SET lease_until = $1 WHERE id = $2", [Date.now() + Math.min(300000, 10000 * (row.attempts + 1)), row.id]));
+    const account = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[row.assinatura_id]);
+    if (!require('./services/access').avaliarAcessoAssinatura(account).liberado) {
+      await db.runAsync("UPDATE whatsapp_messages SET status='pending',lease_until=$1 WHERE id=$2 AND claim_token=$3 AND status='sending'",[Date.now()+300000,row.id,row.claim_token]);
+      continue;
     }
+    await delivery.dispatch('whatsapp_messages',row,send);
   }
 }
 

@@ -7,7 +7,7 @@ test('WhatsApp fornece link individual; nao conduz agendamento; webhook autentic
  const db=require('../database');await db.ready;
  t.after(async()=>{await db.close();await env.cleanup();});
  const webhook=require('../evolutionWebhook'),headers={'x-webhook-secret':'test-only-secret'},sent=[];
- const send=async(instance,phone,text)=>sent.push({instance,phone,text});
+ const send=async(instance,phone,text)=>{sent.push({instance,phone,text});return {key:{id:crypto.randomUUID()},status:'PENDING'};};
  const payload=(text,instance='test-a',id=crypto.randomUUID())=>({event:'messages.upsert',instance,data:{key:{remoteJid:'5511999990001@s.whatsapp.net',fromMe:false,id},message:{conversation:text}}});
  for(const [id,instance,name] of [[1,'test-a','Studio Bella'],[2,'test-b','Espaco Ana']])await db.runAsync("INSERT INTO assinaturas (id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,whatsapp_session,status,proximo_vencimento) VALUES ($1,$2,'Dono','5511999990000','mercado_pago',5,'',$3,'ativo','2099-01-01')",[id,name,instance]);
  await assert.rejects(webhook.processarWebhookEvolution(payload('oi'),{}, {send}),e=>e.statusCode===401);
@@ -21,7 +21,9 @@ test('WhatsApp fornece link individual; nao conduz agendamento; webhook autentic
  delete require.cache[require.resolve('../evolutionWebhook')];assert.equal((await require('../evolutionWebhook').processarWebhookEvolution(p,headers,{send})).duplicate,true);
  assert.equal(sent.length,2);
  const pending=payload('Ola');await webhook.processarWebhookEvolution(pending,headers,{send:async()=>{throw Error('offline');}});
- const row=await db.getAsync('SELECT * FROM whatsapp_messages WHERE message_id=$1',[pending.data.key.id]);assert.equal(row.status,'pending');
+ const row=await db.getAsync('SELECT * FROM whatsapp_messages WHERE message_id=$1',[pending.data.key.id]);assert.equal(row.status,'uncertain');
+ await webhook.drain(send);assert.equal(sent.length,2);
+ await require('../services/evolutionDelivery').createEvolutionDelivery(db).reconcile('whatsapp_messages',row.id,1,row.operation_token,{stopped:true,outcome:'not_accepted'});
  await db.runAsync('UPDATE whatsapp_messages SET lease_until=0 WHERE id=$1',[row.id]);await webhook.drain(send);assert.equal(sent.length,3);
  await t.test('trial governa respostas e fila sem alterar mensagem ou backoff de transporte',async()=>{
   const started=new Date(),ends=new Date(started.getTime()+168*3600000);
@@ -29,10 +31,10 @@ test('WhatsApp fornece link individual; nao conduz agendamento; webhook autentic
   await webhook.processarWebhookEvolution(payload('oi'),headers,{send});assert.equal(sent.length,4);
   const queued=payload('oi');
   const attemptStart=Date.now();
-  await webhook.processarWebhookEvolution(queued,headers,{send:async()=>{throw Object.assign(Error('provider 429'),{statusCode:429});}});
+  await webhook.processarWebhookEvolution(queued,headers,{send:async()=>{throw Object.assign(Error('provider 429'),{deliveryOutcome:'not_attempted'});}});
   const pending=await db.getAsync('SELECT * FROM whatsapp_messages WHERE message_id=$1',[queued.data.key.id]);
   assert.equal(pending.attempts,1);
-  assert.ok(pending.lease_until>=attemptStart+10000 && pending.lease_until<=Date.now()+10000);
+  assert.ok(pending.lease_until>=attemptStart+30000 && pending.lease_until<=Date.now()+30000);
   await db.runAsync("UPDATE assinaturas SET trial_started_at='2000-01-01T00:00:00.000Z',trial_ends_at='2000-01-08T00:00:00.000Z' WHERE id=1");
   const ignored=payload('oi');assert.equal((await webhook.processarWebhookEvolution(ignored,headers,{send})).reason,'payment_required');
   assert.equal(await db.getAsync('SELECT id FROM whatsapp_messages WHERE message_id=$1',[ignored.data.key.id]),undefined);

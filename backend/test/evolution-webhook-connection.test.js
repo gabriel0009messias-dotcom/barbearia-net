@@ -25,7 +25,7 @@ test('webhook real: autenticacao, repeticao, QR, open/close e ausencia de loop/4
   };
   const event = (state, instance = 'barbearia-6') => ({ event: 'connection.update', instance, data: { state } });
   assert.equal((await post(event('open'), 'wrong')).status, 401);
-  assert.equal((await post(event('open', 'barbearia-1'))).body.ignored, true);
+  assert.equal((await post(event('open', 'instance-unowned-test'))).body.ignored, true);
   const qr = { event: 'qrcode.updated', instance: 'barbearia-6', data: { qrcode: { base64: 'data:image/png;base64,c3ludGhldGlj' } } };
   const repeated = await Promise.all([post(qr), post(qr)]);
   assert.ok(repeated.every(r => r.status === 200));

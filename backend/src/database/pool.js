@@ -2,7 +2,10 @@ const { Pool } = require('pg');
 
 const env = require('../config/env');
 
+const legacySchema = process.env.LEGACY_DATABASE_SCHEMA || 'public';
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(legacySchema)) throw new Error('Invalid legacy database schema.');
 const pool = new Pool({
+  options: `-c search_path=${legacySchema},public`,
   connectionString: env.databaseUrl,
   ssl: env.nodeEnv === 'production' ? { rejectUnauthorized: false } : false,
 });
