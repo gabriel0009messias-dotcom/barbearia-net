@@ -80,6 +80,11 @@ async function drain(send = enviarTextoInstancia) {
   const db = require('./database');
   const { createEvolutionDelivery, newDeliveryClaim } = require('./services/evolutionDelivery');
   const delivery = createEvolutionDelivery(db);
+  const { materializeBookingConfirmations, validateBookingConfirmation } = require('./services/bookingConfirmation');
+  // Producer recovery is independent of dispatch: a transient materialization
+  // failure keeps its durable origin and must not stop the existing outbox.
+  try { await materializeBookingConfirmations(db); }
+  catch { log('erro ao preparar confirmações de agendamento'); }
   await delivery.recoverInterrupted('whatsapp_messages');
   for (let i = 0; i < 50; i++) {
     const row = await db.transaction(async client => {
@@ -100,7 +105,8 @@ async function drain(send = enviarTextoInstancia) {
       await db.runAsync("UPDATE whatsapp_messages SET status='pending',lease_until=$1 WHERE id=$2 AND claim_token=$3 AND status='sending'",[Date.now()+300000,row.id,row.claim_token]);
       continue;
     }
-    await delivery.dispatch('whatsapp_messages',row,send);
+    await delivery.dispatch('whatsapp_messages',row,send, row.booking_confirmation_appointment_id
+      ? { validate: () => validateBookingConfirmation(db, row) } : undefined);
   }
 }
 

@@ -1,6 +1,8 @@
 const crypto = require('node:crypto');
 const { fail } = require('./studiofy');
 const { createPublicBookings } = require('./publicBookings');
+const { captureBookingConfirmation } = require('./bookingConfirmation');
+const { classifyBrazilianDestination } = require('./whatsapp/phone');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function requestIdentity(key, tenant, body) {
@@ -15,9 +17,11 @@ function requestIdentity(key, tenant, body) {
 // Must run inside the existing serialized booking transaction. The receipt,
 // appointment and cancellation capability commit or roll back together.
 async function confirmBooking(connection, studio, tenant, body, key) {
+ const phoneRouting = classifyBrazilianDestination(body.telefone);
  if (key === undefined) {
   const booking = await studio.book(tenant, body), access = createPublicBookings(connection);
   const token = await access.issue(booking.id);
+  await captureBookingConfirmation(connection, tenant, booking.id, phoneRouting);
   return {token, agendamento:await access.get(token)};
  }
  const identity = requestIdentity(key, tenant, body);
@@ -31,6 +35,7 @@ async function confirmBooking(connection, studio, tenant, body, key) {
  const booking = await studio.book(tenant, body);
  await access.issue(booking.id, identity.token);
  await connection.runAsync('INSERT INTO public_booking_requests (assinatura_id,key_hash,request_hash,appointment_id) VALUES ($1,$2,$3,$4)',[tenant,identity.keyHash,identity.requestHash,booking.id]);
+ await captureBookingConfirmation(connection, tenant, booking.id, phoneRouting);
  return {token:identity.token, agendamento:await access.get(identity.token)};
 }
 async function recoverBooking(connection,key,body,onValidated) {

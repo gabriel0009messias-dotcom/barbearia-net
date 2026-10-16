@@ -131,7 +131,7 @@ test('019 delivery migration: valid legacy upgrade, quarantine, rollback and run
   await c.query('BEGIN');await c.query('CREATE SCHEMA "'+env.schema+'"');await c.query('SET LOCAL search_path TO "'+env.schema+'",public');
   await c.query("SELECT set_config('studiofy.evolution_legacy_schema','public',true)");
   const directory=path.join(__dirname,'../database/migrations');
-  for(const name of fs.readdirSync(directory).sort().filter(n=>n.endsWith('.sql')&&!n.startsWith('019_')))await c.query(fs.readFileSync(path.join(directory,name),'utf8'));
+  for(const name of fs.readdirSync(directory).sort().filter(n=>n.endsWith('.sql')&&n<'019'))await c.query(fs.readFileSync(path.join(directory,name),'utf8'));
   await c.query("INSERT INTO assinaturas(id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero) VALUES(806,'Synthetic','Owner','11999990000','mercado_pago',5,'')");
   for(const [id,status,attempts] of [['fresh','pending',0],['ambiguous','pending',1],['accepted','sent',1]])await c.query("INSERT INTO whatsapp_messages(assinatura_id,instance,phone,message_id,response,status,attempts) VALUES(806,'migration-test','5511999990000',$1,'Synthetic',$2,$3)",[id,status,attempts]);
   await c.query('COMMIT');
