@@ -483,7 +483,7 @@ async function criarInstancia(instanceName, phoneNumber = '', options = {}) {
   const alwaysOnline = parseBooleanEnv(process.env.EVOLUTION_ALWAYS_ONLINE, true);
   const readMessages = parseBooleanEnv(process.env.EVOLUTION_READ_MESSAGES, false);
   const readStatus = parseBooleanEnv(process.env.EVOLUTION_READ_STATUS, false);
-  const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, true);
+  const syncFullHistory = parseBooleanEnv(process.env.EVOLUTION_SYNC_FULL_HISTORY, false);
 
   invalidarExistenciaInstancia(instanceName);
   const result = await evolutionRequest('/instance/create', {
