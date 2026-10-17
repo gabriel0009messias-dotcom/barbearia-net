@@ -688,11 +688,8 @@ async function consumirLimpezaPendente(client, sessionKey, user) {
 }
 
 async function enviarTexto(client, user, texto, sessionKey = 'default') {
-  const message = await client.sendText(user, texto);
-  registrarMensagemEnviada(message);
-  registrarUltimaMensagemDoBot(sessionKey, user, message);
-  await consumirLimpezaPendente(client, sessionKey, user);
-  return message;
+  // Retired local delivery has no transport capability, even through old helpers.
+  return null;
 }
 
 async function enviarTextoCompatibilidade(client, user, texto, sessionKey = 'default') {
@@ -700,52 +697,15 @@ async function enviarTextoCompatibilidade(client, user, texto, sessionKey = 'def
 }
 
 async function enviarTextoComBotoes(client, user, texto, botoes, titulo, rodape, sessionKey = 'default') {
-  try {
-    const message = await client.sendText(user, texto, {
-      useTemplateButtons: true,
-      buttons: botoes,
-      title: titulo,
-      footer: rodape,
-    });
-    registrarMensagemEnviada(message);
-    registrarUltimaMensagemDoBot(sessionKey, user, message);
-    await consumirLimpezaPendente(client, sessionKey, user);
-    return true;
-  } catch (error) {
-    console.warn('Nao consegui enviar botoes interativos:', error.message);
-    return false;
-  }
+  return false;
 }
 
 async function enviarEnqueteInterativa(client, user, pergunta, opcoes, sessionKey = 'default') {
-  try {
-    const message = await client.sendPollMessage(user, pergunta, opcoes, {
-      selectableCount: 1,
-    });
-    registrarMensagemEnviada(message);
-    registrarUltimaMensagemDoBot(sessionKey, user, message);
-    await consumirLimpezaPendente(client, sessionKey, user);
-    return true;
-  } catch (error) {
-    console.warn('Nao consegui enviar enquete interativa:', error.message);
-    return false;
-  }
+  return false;
 }
 
 async function enviarListaInterativa(client, user, options, fallbackTexto, sessionKey = 'default') {
-  try {
-    const message = await client.sendListMessage(user, options);
-    registrarMensagemEnviada(message);
-    registrarUltimaMensagemDoBot(sessionKey, user, message);
-    await consumirLimpezaPendente(client, sessionKey, user);
-    return true;
-  } catch (error) {
-    console.warn('Nao consegui enviar lista interativa:', error.message);
-    if (fallbackTexto) {
-      await enviarTexto(client, user, fallbackTexto);
-    }
-    return false;
-  }
+  return false;
 }
 
 function criarLinhasFallback(opcoes = []) {
@@ -1033,7 +993,7 @@ function extrairOpcaoEnquete(data = {}) {
   };
 }
 
-function createMessageProcessor(client, options = {}) {
+function retiredMessageProcessor(client, options = {}) {
   const sessionKey = options.sessionKey || 'default';
   const assinaturaId = options.assinaturaId || null;
   definirContextoSessao(sessionKey, options);
@@ -1315,30 +1275,16 @@ function createMessageProcessor(client, options = {}) {
   };
 }
 
-function attachBotHandlers(client, options = {}) {
-  // Local adapters share the website greeting; interactive booking is retired.
-  client.onMessage(async message => {
-    if (message.fromMe || !/^\d{10,15}@(c.us|s.whatsapp.net)$/.test(message.from || '')) return;
-    const body = String(message.body || '').trim();
-    if (!/^(oi|ol[aá]|bom dia|boa tarde|boa noite|menu|agendar|agendamento)[!.,\s]*$/i.test(body)) return;
-    try {
-      let response;
-      if (options.apiBaseUrl) {
-        const result = await fetch(`${options.apiBaseUrl.replace(/\/$/, '')}/api/webhook`, {
-          method: 'POST', headers: {'Content-Type':'application/json',
-            ...(options.barberToken ? {'x-barbeiro-token':options.barberToken} : {'x-whatsapp-bridge-token':options.bridgeToken})},
-          body: JSON.stringify({telefone:message.from,mensagem:body}), signal:AbortSignal.timeout(15000),
-        });
-        if (!result.ok) return;
-        const data = await result.json();
-        if (data.delivered) return;
-        response = data.resposta;
-      } else {
-        response = await require('./whatsappWebhook').processarMensagemWhatsapp({assinaturaId:options.assinaturaId,telefone:message.from,mensagem:body});
-      }
-      if (response) await client.sendText(message.from,response);
-    } catch { console.error('[Studiofy] Falha ao enviar link pelo adaptador local.'); }
-  });
+function createMessageProcessor() {
+  // Hard retirement, independent of flags, environment, event IDs or process
+  // memory. Only evolutionWebhook owns active Studiofy conversational messaging.
+  return async () => ({ ignored: true, reason: 'LOCAL_MESSAGE_DELIVERY_DISABLED' });
+}
+
+function attachBotHandlers(client) {
+  // Keep the SDK lifecycle compatible, but never forward events, touch booking
+  // state or send a local response. Callers cannot opt back into direct delivery.
+  client.onMessage(createMessageProcessor());
 }
 
 module.exports = {

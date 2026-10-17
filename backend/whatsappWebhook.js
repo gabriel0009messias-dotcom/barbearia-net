@@ -1,5 +1,4 @@
 const db = require('./database');
-const { clienteSessao } = require('./whatsappManager');
 
 const { runAsync, getAsync, allAsync } = db;
 
@@ -186,15 +185,9 @@ async function criarAgendamento(assinaturaId, telefone, sessao, horario) {
 }
 
 async function sendMessage(assinaturaId, telefone, texto) {
-  const client = clienteSessao(assinaturaId);
-  const chatId = formatarTelefoneParaEnvio(telefone);
-
-  if (client && chatId) {
-    await client.sendText(chatId, texto);
-    return { delivered: true, provider: 'wppconnect_local' };
-  }
-
-  return { delivered: false, provider: null };
+  // Legacy HTTP callers may still obtain their textual response, but this
+  // compatibility API cannot send WhatsApp messages or select a transport.
+  return { delivered: false, provider: null, reason: 'LOCAL_MESSAGE_DELIVERY_DISABLED' };
 }
 
 async function processarMensagemWhatsapp({

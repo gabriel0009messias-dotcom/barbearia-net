@@ -1,6 +1,5 @@
 ﻿const crypto = require('crypto');
 const { transaction } = require('./services/whatsapp/sessionRepository');
-const { createScheduling } = require('./services/whatsapp/scheduling');
 const { enviarTextoInstancia, receberEventoConexao, extrairEstadoInstancia } = require('./evolutionApi');
 const { sanitize } = require('./evolutionLog');
 
@@ -31,7 +30,16 @@ function extract(payload) {
     message.buttonsResponseMessage?.selectedButtonId || message.listResponseMessage?.singleSelectReply?.selectedRowId;
   const instance = payload.instance || payload.instanceName;
   if (typeof text !== 'string' || !text.trim() || text.length > 2000 || typeof key.id !== 'string' || !key.id || key.id.length > 200 || typeof instance !== 'string' || !instance || instance.length > 150) return null;
-  return { instance, phone: remote.split('@')[0], messageId: key.id, text: text.trim() };
+  const context = message.extendedTextMessage?.contextInfo || message.messageContextInfo || {};
+  const quoted = context.quotedMessage;
+  const quotedText = quoted?.conversation || quoted?.extendedTextMessage?.text || '';
+  const reference = typeof quotedText === 'string' ? quotedText.match(/Referência: ([a-f0-9]{16})\b/)?.[1] : undefined;
+  const rawTimestamp = Number(data.messageTimestamp);
+  const timestamp = Number.isSafeInteger(rawTimestamp) && rawTimestamp > 0 ? rawTimestamp : undefined;
+  const replyTo = typeof context.stanzaId === 'string' && context.stanzaId.length > 0 && context.stanzaId.length <= 200 ? context.stanzaId : undefined;
+  return { instance, phone: remote.split('@')[0], messageId: key.id, text: text.trim(), reference, timestamp,
+    replyTo, quotedText: typeof quotedText === 'string' && quotedText ? quotedText : undefined,
+    hasReplyContext: Boolean(quoted || context.stanzaId) };
 }
 
 const log = (event, data = {}) => console.info('[WhatsApp]', JSON.stringify(sanitize({ event, ...data })));
@@ -81,12 +89,19 @@ async function drain(send = enviarTextoInstancia) {
   const { createEvolutionDelivery, newDeliveryClaim } = require('./services/evolutionDelivery');
   const delivery = createEvolutionDelivery(db);
   const { materializeBookingConfirmations, validateBookingConfirmation } = require('./services/bookingConfirmation');
+  const { validateConversationResponse, createConversationProcessor } = require('./services/whatsapp/conversationStore');
+  const conversations = createConversationProcessor(db);
   // Producer recovery is independent of dispatch: a transient materialization
   // failure keeps its durable origin and must not stop the existing outbox.
   try { await materializeBookingConfirmations(db); }
   catch { log('erro ao preparar confirmações de agendamento'); }
   await delivery.recoverInterrupted('whatsapp_messages');
   for (let i = 0; i < 50; i++) {
+    // Durable input recovery runs before looking for the next outbox message,
+    // including after a restart or explicit reconciliation of uncertain delivery.
+    await conversations.consumePending();
+    try { await materializeBookingConfirmations(db); }
+    catch { log('erro ao preparar confirmações de agendamento'); }
     const row = await db.transaction(async client => {
       const pending = await client.getAsync(`SELECT m.* FROM whatsapp_messages m
         WHERE m.status='pending' AND m.lease_until<$1 AND m.dispatch_started_at IS NULL
@@ -105,8 +120,19 @@ async function drain(send = enviarTextoInstancia) {
       await db.runAsync("UPDATE whatsapp_messages SET status='pending',lease_until=$1 WHERE id=$2 AND claim_token=$3 AND status='sending'",[Date.now()+300000,row.id,row.claim_token]);
       continue;
     }
-    await delivery.dispatch('whatsapp_messages',row,send, row.booking_confirmation_appointment_id
-      ? { validate: () => validateBookingConfirmation(db, row) } : undefined);
+    const sendWithContext = async (...args) => {
+      const result = await send(...args);
+      // Store provider correlation before finalizing acceptance. A failure here
+      // remains uncertain under the existing delivery protocol; never resend.
+      if (row.conversation_managed && require('./evolutionApi').acceptedEvolutionMessage(result)) {
+        const providerId = result.key?.id;
+        if (typeof providerId === 'string' && providerId.length > 0 && providerId.length <= 200)
+          await db.runAsync('UPDATE whatsapp_conversation_responses SET provider_message_id=$1 WHERE delivery_id=$2 AND assinatura_id=$3',[providerId,row.id,row.assinatura_id]);
+      }
+      return result;
+    };
+    await delivery.dispatch('whatsapp_messages',row,sendWithContext, { validate: async () =>
+      await validateConversationResponse(db,row) && (!row.booking_confirmation_appointment_id || await validateBookingConfirmation(db,row)) });
   }
 }
 
@@ -118,27 +144,7 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
   if (connectionEvent) return connectionEvent;
   const envelope = extract(payload);
   if (!envelope) return { ok: true, ignored: true };
-  const result = await transaction(async db => {
-    const tenants = await db.allAsync("SELECT * FROM assinaturas WHERE whatsapp_session = $1 LIMIT 2", [envelope.instance]);
-    if (tenants.length !== 1) return { ok: true, ignored: true };
-    if (!require('./services/access').avaliarAcessoAssinatura(tenants[0]).liberado) return { ok: true, ignored: true, reason: 'payment_required' };
-    const tenant = tenants[0].id;
-    if (await db.getAsync("SELECT id FROM whatsapp_messages WHERE instance = $1 AND message_id = $2", [envelope.instance, envelope.messageId])) return { ok: true, duplicate: true };
-    const stored = await db.getAsync("SELECT data_json FROM sessoes WHERE assinatura_id = $1 AND telefone = $2", [tenant, envelope.phone]);
-    const previous = stored?.data_json ? JSON.parse(stored.data_json) : null;
-    const base = String(process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
-    if (!/^https?:\/\//.test(base)) return { ok: true, ignored: true, reason: 'public_url_missing' };
-    await require('./services/studiofy').createStudio(db).ensure(tenant);
-    // Send a link on greeting only, leaving ordinary conversation to the establishment.
-    if (!/^(oi|ol[aá]|bom dia|boa tarde|boa noite|agendar|agendamento|menu)[!.,\s]*$/i.test(envelope.text)) return { ok: true, ignored: true };
-    const result = { session: { state: 'LINK' }, text: `Olá! 👋\nSeja bem-vindo(a) ao ${tenants[0].barbearia_nome}!\n\nPara agendar, veja nossos serviços, preços e horários disponíveis:\n${base}/agendar/${tenants[0].public_slug || 'studio-'+tenant}\n\nQualquer dúvida, estamos à disposição.` };
-    await db.runAsync(`INSERT INTO sessoes (assinatura_id, telefone, etapa, nome, data_json) VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT(assinatura_id, telefone) DO UPDATE SET etapa = excluded.etapa, nome = excluded.nome,
-        data_json = excluded.data_json, updated_at = CURRENT_TIMESTAMP`, [tenant, envelope.phone, result.session.state, result.session.name || null, JSON.stringify(result.session)]);
-    await db.runAsync("INSERT INTO whatsapp_messages (assinatura_id, instance, phone, message_id, response) VALUES ($1, $2, $3, $4, $5)", [tenant, envelope.instance, envelope.phone, envelope.messageId, result.text]);
-    log('mensagem recebida', { instance: envelope.instance, tenant, phone: `***${envelope.phone.slice(-4)}`, state: previous?.state || 'MENU', option: /^\d{1,2}$/.test(envelope.text) ? envelope.text : 'texto', nextState: result.session.state });
-    return { ok: true };
-  });
+  const result = await require('./services/whatsapp/conversationStore').createConversationProcessor(require('./database')).process(envelope);
   // HTTP acknowledgements wait only for durable ingestion. The existing worker
   // delivers the outbox, so provider failures cannot delay webhook responses.
   if (!options.deferDelivery) await drain(options.send);

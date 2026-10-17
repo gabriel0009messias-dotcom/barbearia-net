@@ -191,7 +191,7 @@ test('global Evolution ownership: upgrade matrices and legacy collisions are ato
  await t.test('alternative-first then principal installation shares the existing ownership namespace',async()=>{
   await fixture({main:false,alternative:true,alternativeNames:['late-principal-test']},async({pool,c,main,alternative,apply})=>{
    await apply();const before=(await pool.query(`SELECT * FROM ${quote(main)}.evolution_instance_owners`)).rows;
-   await migrate(pool,main);await assert.rejects(principalFixture(c,main,806,'late-principal-test'),error=>error.code==='23505');assert.deepEqual((await pool.query(`SELECT * FROM ${quote(main)}.evolution_instance_owners`)).rows,before);
+   await migrate(pool,main);await assert.rejects(principalFixture(c,main,806,'late-principal-test'),error=>error.code==='23505');const after=(await pool.query(`SELECT * FROM ${quote(main)}.evolution_instance_owners`)).rows;assert.ok(after.every(row=>/^[a-f0-9-]{36}$/.test(row.conversation_epoch)));assert.deepEqual(after.map(({conversation_epoch,...original})=>original),before);
   });
  });
  await t.test('late principal backfill preserves an existing alternative ownership and registers its own rows',async()=>{

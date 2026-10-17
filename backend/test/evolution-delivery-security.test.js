@@ -21,6 +21,7 @@ test('OWN-01/02/03: durable PostgreSQL dispatch, isolation and uncertain outcome
  const reminder=()=>db.runAsync("INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status) VALUES(806,'Synthetic Customer','5511999990000','Synthetic Service',30,'2030-01-02','10:00','confirmado')");
  const reset=async()=>{
   await q('UPDATE evolution_instance_owners SET operation_token=NULL,operation_started_at=NULL');
+  await q('DELETE FROM whatsapp_conversations');await q('DELETE FROM whatsapp_conversation_inbox');
   await q('DELETE FROM whatsapp_messages');await q('DELETE FROM agendamentos');
   await assign(806,null);await assign(807,null);await assign(806,'own-test-a');await assign(807,'own-test-b');
  };

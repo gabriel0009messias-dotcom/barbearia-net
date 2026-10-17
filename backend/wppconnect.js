@@ -117,97 +117,13 @@ function calcularDiasDesdeAgendamento(data) {
 }
 
 async function verificarLembretesDaSessao(assinaturaId) {
-  const sessao = obterSessao(assinaturaId);
-
-  if (!sessao.client || !sessao.bridgeToken || !sessao.apiBaseUrl) {
-    return;
-  }
-
-  const agendamentos = await buscarApi(sessao, '/api/agendamentos');
-  const pendentes = agendamentos.filter((item) => {
-    if (item.status !== 'confirmado' || item.lembrete_15_enviado_em) {
-      return false;
-    }
-
-    const minutos = calcularMinutosAteAgendamento(item.data, item.hora);
-    return Number.isInteger(minutos) && minutos <= 15 && minutos >= 0;
-  });
-
-  const posAtendimentoPendentes = agendamentos.filter((item) => {
-    if (item.status !== 'confirmado' || item.lembrete_7_enviado_em) {
-      return false;
-    }
-
-    const dias = calcularDiasDesdeAgendamento(item.data);
-    return Number.isInteger(dias) && dias >= 7;
-  });
-
-  for (const agendamento of pendentes) {
-    const telefone = normalizarTelefoneWhatsapp(agendamento.telefone);
-
-    if (!telefone) {
-      continue;
-    }
-
-    const nomeCliente = agendamento.cliente || 'Cliente';
-    const mensagem = [
-      `Ola, ${nomeCliente}!`,
-      'Passando para lembrar do seu horario daqui a 15 minutos.',
-      `Servico: ${agendamento.servico || '-'}`,
-      `Data: ${new Date(`${agendamento.data}T00:00:00`).toLocaleDateString('pt-BR')}`,
-      `Horario: ${agendamento.hora}`,
-      '',
-      'Se precisar reagendar, responda esta mensagem o quanto antes.',
-    ].join('\n');
-
-    await sessao.client.sendText(telefone, mensagem);
-    await buscarApi(sessao, `/api/agendamentos/${agendamento.id}/lembrete-15`, {
-      method: 'POST',
-      body: JSON.stringify({ enviadoEm: new Date().toISOString() }),
-    });
-  }
-
-  for (const agendamento of posAtendimentoPendentes) {
-    const telefone = normalizarTelefoneWhatsapp(agendamento.telefone);
-
-    if (!telefone) {
-      continue;
-    }
-
-    const nomeCliente = agendamento.cliente || 'cliente';
-    const mensagem = [
-      `Ola ${nomeCliente}!`,
-      '',
-      `Ja se passaram quase 7 dias desde que fizemos o servico de ${agendamento.servico || 'corte'}.`,
-      'Que tal agendar um horario?',
-      '',
-      'Estamos a disposicao!',
-    ].join('\n');
-
-    await sessao.client.sendText(telefone, mensagem);
-    await buscarApi(sessao, `/api/agendamentos/${agendamento.id}/lembrete-7`, {
-      method: 'POST',
-      body: JSON.stringify({ enviadoEm: new Date().toISOString() }),
-    });
-  }
+  // This bridge has no durable message protocol. Business reminders are owned
+  // by the official workers; a local SDK session cannot send them directly.
+  return { ignored: true, reason: 'LOCAL_MESSAGE_DELIVERY_DISABLED' };
 }
 
 function iniciarLoopDeLembretes(assinaturaId) {
-  const sessao = obterSessao(assinaturaId);
-
-  if (sessao.reminderInterval) {
-    clearInterval(sessao.reminderInterval);
-  }
-
-  sessao.reminderInterval = setInterval(() => {
-    verificarLembretesDaSessao(assinaturaId).catch((error) => {
-      logEvolutionError('legacy_bridge_reminders', error);
-    });
-  }, REMINDER_CHECK_INTERVAL_MS);
-
-  verificarLembretesDaSessao(assinaturaId).catch((error) => {
-    logEvolutionError('legacy_bridge_reminders_start', error);
-  });
+  return { ignored: true, reason: 'LOCAL_MESSAGE_DELIVERY_DISABLED' };
 }
 
 async function iniciarSessao(assinaturaId, contexto = {}) {
