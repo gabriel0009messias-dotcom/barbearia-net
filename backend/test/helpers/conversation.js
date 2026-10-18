@@ -13,6 +13,10 @@ async function fixture(db){
  const state=(sender=phone)=>db.getAsync('SELECT * FROM whatsapp_conversations WHERE assinatura_id=$1 AND sender=$2',[tenant,sender]);
  const sendMock=async()=>({key:{id:crypto.randomUUID()},status:'PENDING'});
  async function send(text,options={}){
+  // Existing happy-path fixtures represent a user reading each new prompt.
+  // Advance only the guard's local-time observation, without sleeping or
+  // supplying a quote/reference. Burst tests use raw events or rapid:true.
+  if(!options.rapid)await db.runAsync("UPDATE whatsapp_conversations SET input_guard=jsonb_set(input_guard,'{at}',to_jsonb((clock_timestamp()-interval '2 seconds')::text),false) WHERE assinatura_id=$1 AND sender=$2",[tenant,options.phone||phone]);
   const current=await state(options.phone||phone);
   const qualified=options.reference?text+' '+options.reference:text;
   const event=payload(qualified,options),result=await webhook.processarWebhookEvolution(event,headers,{deferDelivery:true});
