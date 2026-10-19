@@ -47,7 +47,7 @@ test('Cancelamento público: capacidades individuais, regras e lembretes',async 
   assert.equal((await req('/painel',null,a.token)).data.agendamentos.find(x=>x.id===firstId).status,'cancelado');
  });
  await t.test('lembrete cancelado não é enviado pelo worker, mesmo após reiniciar worker',async()=>{
-  let sends=0;const {createReminderWorker}=require('../services/reminders');
+  let sends=0;const {createReminderWorker}=require('./helpers/reminderClock');
   for(let n=0;n<2;n++)await createReminderWorker(db,async()=>sends++,()=>new Date(date+'T07:40:00-03:00')).drain();
   assert.equal(sends,0);
  });

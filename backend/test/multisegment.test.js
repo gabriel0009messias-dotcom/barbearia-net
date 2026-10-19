@@ -71,13 +71,13 @@ test('PostgreSQL: quatro segmentos, isolamento, conflito, cancelamento e lembret
  assert.equal((await request(url,'POST',{...booking,hora:'10:15'})).status,409);
  const token=attempts.find(x=>x.status===201).body.token;
  const appointment=await db.getAsync('SELECT * FROM agendamentos WHERE assinatura_id=$1',[a.id]);
- const reminder=await db.getAsync('SELECT * FROM appointment_reminders WHERE appointment_id=$1',[appointment.id]);
- assert.equal(+new Date(reminder.due_at),+new Date(date+'T09:40:00-03:00'));
+ const reminder=await db.getAsync('SELECT * FROM appointment_reminders WHERE appointment_id=$1 AND reminder_kind=\'reminder_15m\' ORDER BY id DESC',[appointment.id]);
+ assert.equal(+new Date(reminder.due_at),+new Date(date+'T09:45:00-03:00'));
  assert.equal((await request('/studiofy/public/reservas/cancelar','POST',{token,confirmar:true})).status,200);
  assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE appointment_id=$1',[appointment.id])).status,'cancelled');
- let sent=0;await require('../services/reminders').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:40:00-03:00')).drain();assert.equal(sent,0);
+ let sent=0;await require('./helpers/reminderClock').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:45:00-03:00')).drain();assert.equal(sent,0);
  assert.equal((await request(url,'POST',booking)).status,201);
- await require('../services/reminders').createReminderWorker(db,async(_instance,_phone,message)=>{sent++;assert.match(message,/Corte/);assert.match(message,/20 minutos/);return {key:{id:'synthetic'},status:'PENDING'};},()=>new Date(date+'T09:40:00-03:00')).drain();
+ await require('./helpers/reminderClock').createReminderWorker(db,async(_instance,_phone,message)=>{sent++;assert.match(message,/Corte/);assert.match(message,/horário está chegando/);return {key:{id:'synthetic'},status:'PENDING'};},()=>new Date(date+'T09:45:00-03:00')).drain();
  assert.equal(sent,1);
- await require('../services/reminders').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:40:00-03:00')).drain();assert.equal(sent,1);
+ await require('./helpers/reminderClock').createReminderWorker(db,async()=>sent++,()=>new Date(date+'T09:45:00-03:00')).drain();assert.equal(sent,1);
 });

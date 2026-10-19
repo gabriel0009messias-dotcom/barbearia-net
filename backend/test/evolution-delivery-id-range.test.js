@@ -14,7 +14,7 @@ test('OWN-PUB-01: receipt IDs preserve the canonical BIGINT range', async t => {
   const op = createEvolutionOwnershipOperation(db.pool);
   const q = (sql, args = []) => db.pool.query(sql, args);
   const accepted = () => ({ key: { id: randomUUID() }, status: 'PENDING' });
-  let businessClock = new Date('2030-01-02T12:40:00Z');
+  let businessClock = new Date('2030-01-02T12:45:00Z');
   const clock = () => businessClock;
   const insertOwner = tenant => q("INSERT INTO assinaturas(id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,status,proximo_vencimento,whatsapp_session) VALUES($1,'Synthetic ID Range','Owner','11999990000','mercado_pago',5,'','ativo','2099-01-01',$2)", [tenant, 'range-test-' + tenant]);
   t.after(async () => { await db.close(); await env.cleanup(); });
@@ -24,7 +24,7 @@ test('OWN-PUB-01: receipt IDs preserve the canonical BIGINT range', async t => {
     for (const table of ['whatsapp_messages', 'appointment_reminders']) {
       for (const outcome of ['accepted', 'rejected', 'not_accepted']) {
         await t.test(`${tenant}: ${table} / ${outcome}, receipt, replay and next delivery`, async () => {
-          businessClock = new Date('2030-01-02T12:40:00Z');
+          businessClock = new Date('2030-01-02T12:45:00Z');
           // Each case uses real migrations, ownership locks and worker claims.
           await q('UPDATE evolution_instance_owners SET operation_token=NULL,operation_started_at=NULL');
           await q('DELETE FROM whatsapp_messages');
@@ -40,7 +40,7 @@ test('OWN-PUB-01: receipt IDs preserve the canonical BIGINT range', async t => {
           const state = id => db.getAsync('SELECT * FROM ' + table + ' WHERE id=$1', [id]);
           const drain = send => table === 'whatsapp_messages'
             ? require('../evolutionWebhook').drain(send)
-            : require('../services/reminders').createReminderWorker(db, send, clock).drain();
+            : require('./helpers/reminderClock').createReminderWorker(db, send, clock).drain();
           const id = await createMessage();
           let firstCalls = 0;
           await drain(async instance => { assert.equal(instance, owner.instanceName); firstCalls++; throw Error('Synthetic lost response'); });
@@ -73,7 +73,7 @@ test('OWN-PUB-01: receipt IDs preserve the canonical BIGINT range', async t => {
           await drain(async instance => { assert.equal(instance, owner.instanceName); remainingCalls++; return accepted(); });
           assert.equal(remainingCalls, outcome === 'not_accepted' ? 1 : 0);
           const next = await createMessage(true);
-          businessClock = new Date('2030-01-03T12:40:00Z');
+          businessClock = new Date('2030-01-03T12:45:00Z');
           await drain(async instance => { assert.equal(instance, owner.instanceName); remainingCalls++; return accepted(); });
           assert.equal((await state(next)).status, 'sent');
           assert.equal(remainingCalls, outcome === 'not_accepted' ? 2 : 1);

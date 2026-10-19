@@ -4,7 +4,7 @@ const {startWorker,getWorkerStatus}=require('../services/reminders');
 
 test('worker reports completed database cycles and failures without exposing errors',async()=>{
  let fail=false;
- const db={runAsync:async()=>{if(fail)throw Error('private connection detail');},transaction:async fn=>fn({runAsync:async()=>{},getAsync:async()=>null})};
+ const db={getAsync:async()=>({now:new Date()}),runAsync:async()=>{if(fail)throw Error('private connection detail');},transaction:async fn=>fn({runAsync:async()=>{},getAsync:async()=>null})};
  assert.equal(getWorkerStatus().startedAt,null);
  const timer=startWorker(db);
  try{

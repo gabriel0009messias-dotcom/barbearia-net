@@ -13,7 +13,7 @@
  <div class="demo-message" data-message>Olá! 👋 Seja bem-vindo ao <strong data-studio-name>Studio Bella</strong>.<small>09:41</small></div>
  <div class="demo-message" data-message>Você pode escolher seu serviço, profissional e horário disponível pelo nosso agendamento online.<button type="button" class="demo-booking-link" tabindex="-1">Agendar horário ↗</button><small>09:42</small></div>
  <div class="demo-message" data-message>Pronto! Seu horário foi agendado. ✅<small>09:43</small></div>
- <div class="demo-message" data-message>Olá, Ana! Passando para lembrar que seu horário é hoje às 15:30. 😊<small>Lembrete automático · 15:10</small></div>
+ <div class="demo-message" data-message>Olá, Ana! Passando para lembrar que seu horário é hoje às 15:30. 😊<small>Lembretes automáticos · 15:15 e 15:25</small></div>
  <div class="demo-typing" aria-hidden="true"><i></i><i></i><i></i></div></div>
  <div class="demo-compose" aria-hidden="true"><span>⊕</span><span>Mensagem</span><span>♩</span></div></div>
  <div class="demo-floating" aria-hidden="true"><span class="demo-floating-icon">✓</span><div><strong>Um horário. Tudo certo.</strong><small>Na agenda e na memória do cliente.</small></div></div></div>

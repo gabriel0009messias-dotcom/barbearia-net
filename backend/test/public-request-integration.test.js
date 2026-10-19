@@ -54,7 +54,7 @@ test('Etapa 2: recibos idempotentes, perda de resposta, isolamento e limites per
   assert.equal((await db.getAsync('SELECT count(*)::int AS n FROM agendamentos WHERE assinatura_id=$1',[a.id])).n,1);
   const receipt=await db.getAsync('SELECT * FROM public_booking_requests WHERE assinatura_id=$1',[a.id]);
   assert.ok(!JSON.stringify(receipt).includes(k));assert.ok(!JSON.stringify(receipt).includes(first.token));assert.equal(receipt.key_hash.length,64);
-  assert.equal((await db.getAsync('SELECT count(*)::int AS n FROM appointment_reminders')).n,1);
+  assert.equal((await db.getAsync('SELECT count(*)::int AS n FROM appointment_reminders')).n,2);
  });
  await t.test('mesma chave com outro cliente ou dados retorna 409 sem revelar token',async()=>{
   for(const changed of [{hora:'08:30'},{telefone:'11999991111'},{nome_cliente:'Outra pessoa'}]){

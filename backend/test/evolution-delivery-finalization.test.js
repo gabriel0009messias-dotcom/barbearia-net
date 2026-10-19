@@ -122,7 +122,7 @@ test('OWN-AUD-01: atomic finalization and durable explicit reconciliation', { ti
     await delivery.reconcile('appointment_reminders', row.id, 1906, token, { stopped: true, outcome: 'accepted' });
     assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE id=$1', [row.id])).status, 'sent');
     assert.equal((await owner()).operation_token, null);
-    await require('../services/reminders').createReminderWorker(db, () => assert.fail('sent reminder cannot retry'), () => new Date('2030-01-02T12:40:00Z')).drain();
+    await require('./helpers/reminderClock').createReminderWorker(db, () => assert.fail('sent reminder cannot retry'), () => new Date('2030-01-02T12:45:00Z')).drain();
   });
   await t.test('reconciliation failure rolls back receipt, delivery and release together', async () => {
     const row = await legacyTerminal('sent');

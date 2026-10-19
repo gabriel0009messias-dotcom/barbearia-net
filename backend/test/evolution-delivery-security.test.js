@@ -10,14 +10,14 @@ const accepted = () => ({key:{id:randomUUID()},status:'PENDING'});
 test('OWN-01/02/03: durable PostgreSQL dispatch, isolation and uncertain outcomes', {timeout:120000}, async t => {
  const env=require('./helpers/postgres').testEnvironment(),db=require('../database');await db.ready;
  const api=require('../evolutionApi'),webhook=require('../evolutionWebhook');
- const {createReminderWorker}=require('../services/reminders');
+ const {createReminderWorker}=require('./helpers/reminderClock');
  const delivery=createEvolutionDelivery(db),op=createEvolutionOwnershipOperation(db.pool);
  const q=(sql,args=[])=>db.pool.query(sql,args);
  const assign=(id,name)=>q('UPDATE assinaturas SET whatsapp_session=$2 WHERE id=$1',[id,name]);
  const message=async()=>{const r=await db.getAsync("INSERT INTO whatsapp_messages(assinatura_id,instance,phone,message_id,response) VALUES(806,'own-test-a','5511999990000',$1,'Synthetic only') RETURNING *",[randomUUID()]);return r;};
  const state=async(table='whatsapp_messages')=>db.getAsync('SELECT * FROM '+table+' ORDER BY id LIMIT 1');
  const fence=async()=>db.getAsync("SELECT * FROM evolution_instance_owners WHERE owner_id='806'");
- const clock=()=>new Date('2030-01-02T12:40:00Z');
+ const clock=()=>new Date('2030-01-02T12:45:00Z');
  const reminder=()=>db.runAsync("INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status) VALUES(806,'Synthetic Customer','5511999990000','Synthetic Service',30,'2030-01-02','10:00','confirmado')");
  const reset=async()=>{
   await q('UPDATE evolution_instance_owners SET operation_token=NULL,operation_started_at=NULL');

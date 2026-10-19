@@ -51,11 +51,11 @@ test('OWN-FINAL-01: durable transport frontier, recovery and process crashes', {
   await t.test('reminder reservation rollback also has zero transport and safe recovery', async () => {
     await db.runAsync("INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status) VALUES(3908,'Synthetic','5511999990000','Service',30,'2030-01-02','10:00','confirmado')");
     await abortReservation(); let calls = 0;
-    const worker = require('../services/reminders').createReminderWorker(db, async () => { calls++; return accepted(); }, () => new Date('2030-01-02T12:40:00Z'));
+    const worker = require('./helpers/reminderClock').createReminderWorker(db, async () => { calls++; return accepted(); }, () => new Date('2030-01-02T12:45:00Z'));
     await worker.drain(); assert.equal(calls, 0);
-    let row = await db.getAsync('SELECT * FROM appointment_reminders'); assert.equal(row.status, 'pending'); assert.equal(row.dispatch_started_at, null); assert.equal(row.operation_token, null);
+    let row = await db.getAsync("SELECT * FROM appointment_reminders ORDER BY id LIMIT 1"); assert.equal(row.status, 'pending'); assert.equal(row.dispatch_started_at, null); assert.equal(row.operation_token, null);
     await q('DROP TRIGGER audit_abort_reservation ON evolution_instance_owners'); await q('UPDATE appointment_reminders SET next_attempt_at=NULL'); await worker.drain();
-    row = await db.getAsync('SELECT * FROM appointment_reminders'); assert.equal(row.status, 'sent'); assert.equal(calls, 1); assert.equal((await owner()).operation_token, null);
+    row = await db.getAsync("SELECT * FROM appointment_reminders ORDER BY id LIMIT 1"); assert.equal(row.status, 'sent'); assert.equal(calls, 1); assert.equal((await owner()).operation_token, null);
     await worker.drain(); assert.equal(calls, 1);
   });
   await t.test('uncertain without any evidence is rejected by the database constraint', async () => {
@@ -63,21 +63,20 @@ test('OWN-FINAL-01: durable transport frontier, recovery and process crashes', {
     await assert.rejects(q("UPDATE whatsapp_messages SET status='uncertain' WHERE id=$1", [row.id]), e => e.code === '23514');
     assert.equal((await state(row.id)).status, 'sending');
   });
-  await t.test('rescheduled completed reminder starts a new safe cycle; uncertainty is never recycled', async () => {
+  await t.test('rescheduling preserves sent lifetime evidence; unsent 5m retains uncertainty', async () => {
     const appointment = await db.runAsync("INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status) VALUES(3908,'Synthetic','5511999990000','Service',30,'2030-01-02','10:00','confirmado')");
-    let clock = new Date('2030-01-02T12:40:00Z'), calls = 0;
-    const worker = require('../services/reminders').createReminderWorker(db, async () => { calls++; return accepted(); }, () => clock);
-    await worker.drain(); assert.equal(calls, 1);
-    await q("UPDATE agendamentos SET hora='11:00' WHERE id=$1", [appointment.lastID]);
-    let row = await db.getAsync('SELECT * FROM appointment_reminders');
-    assert.equal(row.status, 'pending'); assert.equal(row.dispatch_started_at, null); assert.equal(row.operation_token, null); assert.equal(row.claim_token, null);
-    clock = new Date('2030-01-02T13:40:00Z'); await worker.drain(); assert.equal(calls, 2);
-    await q("UPDATE agendamentos SET hora='12:00' WHERE id=$1", [appointment.lastID]);
-    clock = new Date('2030-01-02T14:40:00Z');
-    await require('../services/reminders').createReminderWorker(db, async () => { throw Error('Synthetic response lost'); }, () => clock).drain();
-    row = await db.getAsync('SELECT * FROM appointment_reminders'); assert.equal(row.status, 'uncertain'); const token = row.operation_token;
-    await q("UPDATE agendamentos SET hora='13:00' WHERE id=$1", [appointment.lastID]);
-    row = await db.getAsync('SELECT * FROM appointment_reminders'); assert.equal(row.status, 'uncertain'); assert.equal(row.operation_token, token); assert.ok(row.dispatch_started_at);
+    let clock=new Date('2030-01-02T12:45:00Z'),calls=0;
+    const worker=require('./helpers/reminderClock').createReminderWorker(db,async()=>{calls++;return accepted();},()=>clock);
+    await worker.drain();assert.equal(calls,1);
+    const sent=await db.getAsync("SELECT * FROM appointment_reminders WHERE reminder_kind='reminder_15m'");
+    await q("UPDATE agendamentos SET hora='11:00' WHERE id=$1",[appointment.lastID]);
+    clock=new Date('2030-01-02T13:45:00Z');await worker.drain();assert.equal(calls,1);
+    assert.deepEqual(await db.getAsync('SELECT * FROM appointment_reminders WHERE id=$1',[sent.id]),sent);
+    clock=new Date('2030-01-02T13:55:00Z');
+    await require('./helpers/reminderClock').createReminderWorker(db,async()=>{throw Error('Synthetic response lost');},()=>clock).drain();
+    const uncertain=await db.getAsync("SELECT * FROM appointment_reminders WHERE status='uncertain'");assert.ok(uncertain);assert.equal(uncertain.reminder_kind,'reminder_5m');
+    await q("UPDATE agendamentos SET hora='12:00' WHERE id=$1",[appointment.lastID]);
+    assert.deepEqual(await db.getAsync('SELECT * FROM appointment_reminders WHERE id=$1',[uncertain.id]),uncertain);
   });
   await t.test('operation token lifecycle: committed before frontier, retained as history after sent, fence released', async () => {
     const row = await message(true); assert.equal(row.operation_token, null);
@@ -90,17 +89,17 @@ test('OWN-FINAL-01: durable transport frontier, recovery and process crashes', {
   });
   await t.test('cancelled pre-transport reminder restarts cleanly when its confirmed appointment is refreshed', async () => {
     const appointment = await db.runAsync("INSERT INTO agendamentos(assinatura_id,nome_cliente,telefone,servico_nome,preco,data,hora,status) VALUES(3908,'Synthetic','5511999990000','Service',30,'2030-01-02','10:00','confirmado')");
-    const clock = () => new Date('2030-01-02T12:40:00Z'); let calls = 0;
-    await require('../services/reminders').createReminderWorker(db, async () => { calls++; throw Object.assign(Error('Synthetic local preflight failure'), { deliveryOutcome: 'not_attempted' }); }, clock).drain();
-    assert.equal((await db.getAsync('SELECT status FROM appointment_reminders')).status, 'pending');
+    const clock = () => new Date('2030-01-02T12:45:00Z'); let calls = 0;
+    await require('./helpers/reminderClock').createReminderWorker(db, async () => { calls++; throw Object.assign(Error('Synthetic local preflight failure'), { deliveryOutcome: 'not_attempted' }); }, clock).drain();
+    assert.equal((await db.getAsync("SELECT status FROM appointment_reminders WHERE reminder_kind='reminder_15m' ORDER BY id DESC LIMIT 1")).status, 'pending');
     // This is the persisted state produced by account-access cancellation; the
     // appointment itself remains confirmed. Finalized appointments stay final.
     await q("UPDATE appointment_reminders SET status='cancelled'");
     await q("UPDATE agendamentos SET nome_cliente='Synthetic refreshed' WHERE id=$1", [appointment.lastID]);
-    const row = await db.getAsync('SELECT * FROM appointment_reminders');
+    const row = await db.getAsync("SELECT * FROM appointment_reminders WHERE reminder_kind='reminder_15m' ORDER BY id DESC LIMIT 1");
     assert.equal(row.status, 'pending'); assert.equal(row.attempts, 0); assert.equal(row.dispatch_started_at, null); assert.equal(row.claim_token, null); assert.equal(row.operation_token, null);
-    await require('../services/reminders').createReminderWorker(db, async () => { calls++; return accepted(); }, clock).drain();
-    assert.equal(calls, 2); assert.equal((await db.getAsync('SELECT status FROM appointment_reminders')).status, 'sent');
+    await require('./helpers/reminderClock').createReminderWorker(db, async () => { calls++; return accepted(); }, clock).drain();
+    assert.equal(calls, 2); assert.equal((await db.getAsync('SELECT status FROM appointment_reminders WHERE id=$1',[row.id])).status, 'sent');
   });
   await t.test('lost frontier write acknowledgement is uncertain even with zero actual mock calls', async () => {
     const row = await message(true); let calls = 0;
