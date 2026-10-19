@@ -42,7 +42,7 @@ services:
       - key: EVOLUTION_ALWAYS_ONLINE
         value: true
       - key: EVOLUTION_SYNC_FULL_HISTORY
-        value: true
+        value: false
       - key: EVOLUTION_READ_MESSAGES
         value: false
       - key: EVOLUTION_READ_STATUS
