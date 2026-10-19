@@ -47,7 +47,7 @@ test('025 upgrade: no activation, no historical rewrite, transactional and repea
     assert.equal((await q('SELECT count(*)::int n FROM schema_migrations WHERE name=$1', [file])).rows[0].n, 1);
     assert.equal((await q('SELECT count(*)::int n FROM configuracoes WHERE chave=$1', [key])).rows[0].n, 0);
     assert.deepEqual((await q('SELECT * FROM appointment_reminders ORDER BY id')).rows, before);
-    assert.deepEqual((await q('SELECT * FROM agendamentos ORDER BY id')).rows, sources);
+    assert.deepEqual((await q('SELECT * FROM agendamentos ORDER BY id')).rows, sources.map(a=>({...a,origem:null,observacao:null})));
     assert.equal((await q('SELECT studiofy_appointment_transport_allowed($1) allowed', [tenant])).rows[0].allowed, false);
   });
   await t.test('020-024 checksums and approved window/return guards remain installed', async () => {

@@ -2,8 +2,9 @@ const crypto = require('node:crypto');
 const { createStudio, effectiveHours } = require('../studiofy');
 const { publicProfile } = require('../establishment');
 const { localNow, addDays } = require('./scheduling');
-const { confirmBooking, requestIdentity } = require('../bookingRequests');
+const { confirmBooking } = require('../bookingRequests');
 const { createPublicBookings } = require('../publicBookings');
+const { customerName, identifyCustomer, saveCustomerName } = require('./customerIdentity');
 const PAGE = 8;
 const normalize = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 const plain = s => String(s || '').replace(/[<>\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -16,7 +17,17 @@ async function transition(db, account, conversation, input, now) {
   let state = structuredClone(conversation.state);
   const command = normalize(input);
   const result = text => ({ state, text });
-  const menu = prefix => { state = { step: 'MENU' }; return result(`${prefix || ''}Olá! 👋 ${plain(account.barbearia_nome)}\n${MENU}`); };
+  const customer = await identifyCustomer(db, tenant, conversation.sender);
+  const knownName = customerName(customer.nome);
+  const menu = prefix => { state = { step: 'MENU' }; return result(`${prefix || ''}Olá, ${plain(knownName)}! 👋\n${plain(account.barbearia_nome)}\n${MENU}`); };
+  if (!knownName) {
+    if (state.step === 'ASK_NAME' && !['menu','inicio','recomecar','oi','ola','bom dia','boa tarde','boa noite','0','voltar'].includes(command)) {
+      const saved = await saveCustomerName(db, tenant, conversation.sender, input);
+      if (saved) { state = { step: 'MENU' }; return result(`Olá, ${plain(saved)}! 👋\n${plain(account.barbearia_nome)}\n${MENU}`); }
+    }
+    state = { step: 'ASK_NAME' };
+    return result('Antes de começarmos, qual é o seu nome? 😊');
+  }
   const catalog = async () => (await studio.services(tenant)).filter(s => s.ativo).map(({id,nome,preco,duracao,categoria})=>({id,nome,preco,duracao,categoria}));
   const people = async () => (await studio.professionals(tenant)).filter(p => p.ativo && p.servicos.includes(Number(state.service?.id)));
   async function list(step, items, label, heading, page = 0) {
@@ -27,7 +38,9 @@ async function transition(db, account, conversation, input, now) {
     return result(`${heading}\n\n${rows || 'Nenhuma opção disponível.'}${maxPage ? `\n\nPágina ${page + 1}/${maxPage} — digite MAIS ou ANTERIOR.` : ''}\n\n0 - Voltar`);
   }
   async function services(page = 0, prices = false) {
-    return list(prices ? 'PRICES' : 'SERVICE', await catalog(), s => `${plain(s.nome)} — ${money(s.preco)} — ${s.duracao} min`, prices ? '💰 Preços dos serviços' : '🗓 Escolha o serviço', page);
+    const response = await list(prices ? 'PRICES' : 'SERVICE', await catalog(), s => `${plain(s.nome)} — ${money(s.preco)} — ${s.duracao} min`, prices ? '💰 Preços dos serviços' : '🗓 Escolha o serviço', page);
+    if (prices) response.text += '\nDigite AGENDAR para escolher um serviço.';
+    return response;
   }
   async function professionals(page = 0, auto = true) {
     const current = (await catalog()).find(s => s.id === state.service?.id);
@@ -52,7 +65,8 @@ async function transition(db, account, conversation, input, now) {
   async function dates(page = 0, prefix = '') {
     page = Math.min(Math.max(0, page), 12);
     state.step = 'DATE'; state.page = page; state.options = await days(page);
-    return result(`${prefix}📅 Escolha o dia\n\n${state.options.map((d,i)=>`${i+1} - ${dateLabel(d)}`).join('\n') || 'Nenhum dia disponível nesta semana.'}\n\nSemana ${page+1}/13 — MAIS / ANTERIOR.\n0 - Voltar`);
+    const today = localNow(now).date;
+    return result(`${prefix}📅 Escolha o dia\n\n${state.options.map((d,i)=>`${i+1} - ${d === today ? 'Hoje — ' : d === addDays(today,1) ? 'Amanhã — ' : ''}${dateLabel(d)}`).join('\n') || 'Nenhum dia disponível nesta semana.'}\n\nSemana ${page+1}/13 — MAIS / ANTERIOR.\n0 - Voltar`);
   }
   async function times(page = 0, prefix = '') {
     const items = await studio.times(tenant, state.date, state.service.id, state.professional.id);
@@ -68,15 +82,13 @@ async function transition(db, account, conversation, input, now) {
     if (!(await studio.times(tenant, state.date, service.id, professional.id)).includes(state.time)) { delete state.time; delete state.attempt; return times(0, 'Esse horário acabou de ficar indisponível.\n'); }
     state.step = 'REVIEW'; state.establishmentName = account.barbearia_nome; delete state.options; delete state.page;
     state.attempt = { id: crypto.randomUUID(), key: crypto.randomBytes(32).toString('hex') };
-    return result(`${prefix}📋 Confira seu agendamento\n\n👤 Cliente: ${plain(state.name)}\n🏢 Estabelecimento: ${plain(account.barbearia_nome)}\n🗓 Serviço: ${plain(service.nome)}\n👤 Profissional: ${plain(professional.nome)}\n💰 Valor: ${money(service.preco)}\n⏱ Duração: ${service.duracao} min\n📅 Data: ${dateLabel(state.date)}\n🕐 Horário: ${state.time}\n\n1 - ✅ Confirmar agendamento\n2 - ✏️ Alterar escolha\n3 - 🔄 Recomeçar\n0 - ↩️ Voltar`);
+    return result(`${prefix}📋 Confira seu agendamento\n\n👤 Cliente: ${plain(state.name)}\n🏢 Estabelecimento: ${plain(account.barbearia_nome)}\n🗓 Serviço: ${plain(service.nome)}\n👤 Profissional: ${plain(professional.nome)}\n💰 Valor: ${money(service.preco)}\n⏱ Duração: ${service.duracao} min\n📅 Data: ${dateLabel(state.date)}\n🕐 Horário: ${state.time}${state.observation ? '\n📝 Observação: ' + plain(state.observation) : ''}\n\n1 - ✅ Confirmar agendamento\n2 - ✏️ Alterar escolha\n3 - 🔄 Recomeçar\n4 - ✏️ Alterar nome\n5 - 📝 Incluir observação\n6 - 👤 Agendar para outra pessoa\n0 - ↩️ Voltar`);
   }
   async function cancellations(page = 0) {
-    // Only server-created bindings from this sender and current ownership epoch.
-    const rows = await db.allAsync(`SELECT a.id,a.servico_nome,a.data,a.hora FROM whatsapp_conversation_actions w
-      JOIN agendamentos a ON a.id=w.appointment_id AND a.assinatura_id=w.assinatura_id
-      WHERE w.assinatura_id=$1 AND w.sender=$2 AND w.owner_epoch=$3 AND a.status='confirmado'
-      AND (a.data>$4 OR (a.data=$4 AND a.hora>$5)) ORDER BY a.data,a.hora,a.id`, [tenant,conversation.sender,conversation.owner_epoch,localNow(now).date,localNow(now).time]);
-    if (!rows.length) { state = { step: 'INFO' }; return result('Não há agendamentos vinculados a esta conversa para cancelar.\nPara reservas feitas fora do WhatsApp, use o acesso privado de cancelamento da sua reserva ou fale com o estabelecimento. Não envie ID, telefone ou token aqui.\n0 - Voltar'); }
+    // Only the verified sender within the currently resolved tenant. The same
+    // public cancellation domain enforces status/time/notice again at commit.
+    const rows = await createPublicBookings(db,()=>now).forContact(tenant, conversation.sender);
+    if (!rows.length) { state = { step: 'INFO' }; return result('Não há agendamentos canceláveis para este contato. Confira a antecedência mínima e as regras do estabelecimento.\nNão envie ID, telefone ou token aqui.\n0 - Voltar'); }
     return list('CANCEL', rows, a => `${plain(a.servico_nome)} — ${dateLabel(a.data)} ${a.hora}`, 'Qual agendamento deseja cancelar?', page);
   }
   async function back() {
@@ -86,6 +98,7 @@ async function transition(db, account, conversation, input, now) {
       case 'DATE': delete state.professional; delete state.date; delete state.time; return professionals(0, false);
       case 'TIME': delete state.date; delete state.time; return dates();
       case 'NAME': case 'REVIEW': delete state.time; return times();
+      case 'OBSERVATION': case 'THIRD_PARTY_NAME': return review();
       case 'EDIT': return review();
       case 'CANCEL_REVIEW': delete state.cancelId; return cancellations();
       default: return menu();
@@ -110,7 +123,10 @@ async function transition(db, account, conversation, input, now) {
       if (input === '4' || ['cancelar','cancelar agendamento'].includes(command)) return cancellations();
       break;
     case 'SERVICE':
-      if (selected) { state = { step: 'SERVICE', service: { id: selected.id } }; return professionals(); }
+      if (selected) { state = { step: 'SERVICE', name: state.name || knownName, service: { id: selected.id } }; return professionals(); }
+      break;
+    case 'PRICES':
+      if (command === 'agendar' || command === 'agendamento') return services();
       break;
     case 'PROFESSIONAL':
       if (selected && (await people()).some(p => p.id === selected.id)) { state.professional = selected; delete state.date; delete state.time; return dates(); }
@@ -122,10 +138,15 @@ async function transition(db, account, conversation, input, now) {
     case 'TIME':
       if (selected) { state.time = selected; if (state.name) return review(); state.step='NAME'; delete state.options; return result('Qual nome devo colocar no agendamento?\n0 - Voltar'); }
       break;
-    case 'NAME':
-      if (input.length>=2 && input.length<=100 && /\p{L}/u.test(input) && !/[<>\r\n\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/.test(input)) { state.name = input.trim(); return review(); }
+    case 'NAME': case 'THIRD_PARTY_NAME':
+      if (customerName(input)) { state.name = customerName(input); return review(); }
+      return {...result(null),invalid:true};
+    case 'OBSERVATION':
+      if (input.length <= 500 && !/^[0-9]+$/.test(input) && !['confirmar','sim'].includes(command) && !/[<>\r\n\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/.test(input)) { state.observation = plain(input); return review(); }
       return {...result(null),invalid:true};
     case 'REVIEW':
+      if (input === '4' || input === '6') { delete state.attempt; state.step = input === '6' ? 'THIRD_PARTY_NAME' : 'NAME'; return result('Qual nome devo colocar no agendamento?\nO cadastro do contato permanece igual.\n0 - Voltar'); }
+      if (input === '5') { delete state.attempt; state.step = 'OBSERVATION'; return result('Qual observação deseja incluir? (até 500 caracteres)\n0 - Voltar'); }
       if (input === '2') { state.step = 'EDIT'; return result('Alterar qual escolha?\n1 - Serviço\n2 - Profissional\n3 - Dia\n4 - Horário\n5 - Nome\n0 - Voltar'); }
       if (input === '1' || command === 'confirmar') {
         // Lock the same rows book() will use BEFORE comparing the review.
@@ -149,6 +170,7 @@ async function transition(db, account, conversation, input, now) {
         const appointment = await db.getAsync('SELECT appointment_id FROM public_booking_requests WHERE assinatura_id=$1 AND key_hash=$2',[tenant,crypto.createHash('sha256').update(attempt.key).digest('hex')]);
         if (!appointment || !booked.agendamento) throw Error('Conversation booking receipt missing');
         await db.runAsync('UPDATE whatsapp_conversation_actions SET appointment_id=$1 WHERE id=$2 AND assinatura_id=$3',[appointment.appointment_id,attempt.id,tenant]);
+        await db.runAsync("UPDATE agendamentos SET cliente_id=$1,origem='whatsapp',observacao=$2 WHERE id=$3 AND assinatura_id=$4",[customer.id,state.observation || null,appointment.appointment_id,tenant]);
         state = { step:'COMPLETE', appointmentId:appointment.appointment_id };
         // Exactly one producer: migration 020's durable source/materializer.
         return {state,text:null,appointmentId:appointment.appointment_id};
@@ -166,10 +188,7 @@ async function transition(db, account, conversation, input, now) {
       break;
     case 'CANCEL_REVIEW':
       if(input==='1' || command==='confirmar') {
-        const action=await db.getAsync('SELECT * FROM whatsapp_conversation_actions WHERE appointment_id=$1 AND assinatura_id=$2 AND sender=$3 AND owner_epoch=$4 FOR UPDATE',[state.cancelId,tenant,conversation.sender,conversation.owner_epoch]);
-        if(!action) return menu('Não foi possível autorizar esse cancelamento.\n');
-        const token=requestIdentity(action.booking_key,tenant,action.booking_body).token;
-        try { await createPublicBookings(db,()=>now).cancel(token); return menu('Agendamento cancelado com segurança.\n'); }
+        try { await createPublicBookings(db,()=>now).cancelForContact(tenant,conversation.sender,state.cancelId); return menu('Agendamento cancelado com segurança.\n'); }
         catch(e) { if(e.statusCode===409 || e.statusCode===404) return menu(`${plain(e.message)}\n`);throw e; }
       }
       break;

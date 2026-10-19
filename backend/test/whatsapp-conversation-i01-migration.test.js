@@ -43,7 +43,7 @@ test('022 I-01: populated 021 upgrade, rollback and original pending correlation
     try {
       const p=require('../services/whatsapp/conversationStore').createConversationProcessor(db);await p.consumePending();await p.consumePending();
       const current=await db.getAsync('SELECT * FROM whatsapp_conversations WHERE id=$1',[c.id]);
-      assert.equal(current.state.step,'SERVICE');assert.equal(current.version,2);
+      assert.equal(current.state.step,'ASK_NAME');assert.equal(current.version,2);
       assert.equal((await db.getAsync('SELECT decision FROM whatsapp_conversation_inbox WHERE message_id=$1',[event.messageId])).decision,'processed');
       assert.equal((await db.getAsync('SELECT count(*)::int n FROM agendamentos')).n,0);
     }finally{await db.close();}

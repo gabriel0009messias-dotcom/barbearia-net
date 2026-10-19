@@ -2,6 +2,7 @@
 const { transaction } = require('./services/whatsapp/sessionRepository');
 const { enviarTextoInstancia, receberEventoConexao, extrairEstadoInstancia } = require('./evolutionApi');
 const { sanitize } = require('./evolutionLog');
+const { diagnostic } = require('./services/whatsapp/diagnostics');
 
 function authorized(headers) {
   const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
@@ -26,11 +27,17 @@ function extract(payload) {
   if (!/^\d{10,15}@(s\.whatsapp\.net|c\.us)$/.test(remote)) return null;
   let message = data.message || {};
   for (let i = 0; i < 3; i++) message = message.ephemeralMessage?.message || message.viewOnceMessage?.message || message;
+  let nativeId;
+  const parameters = message.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+  if (typeof parameters === 'string' && parameters.length <= 2000) {
+    try { const selected = JSON.parse(parameters); if (typeof selected.id === 'string') nativeId = selected.id; } catch { /* unsupported selection */ }
+  }
   const text = message.conversation || message.extendedTextMessage?.text ||
-    message.buttonsResponseMessage?.selectedButtonId || message.listResponseMessage?.singleSelectReply?.selectedRowId;
+    message.buttonsResponseMessage?.selectedButtonId || message.listResponseMessage?.singleSelectReply?.selectedRowId || nativeId;
   const instance = payload.instance || payload.instanceName;
   if (typeof text !== 'string' || !text.trim() || text.length > 2000 || typeof key.id !== 'string' || !key.id || key.id.length > 200 || typeof instance !== 'string' || !instance || instance.length > 150) return null;
-  const context = message.extendedTextMessage?.contextInfo || message.messageContextInfo || {};
+  const context = message.extendedTextMessage?.contextInfo || message.buttonsResponseMessage?.contextInfo ||
+    message.listResponseMessage?.contextInfo || message.interactiveResponseMessage?.contextInfo || message.messageContextInfo || {};
   const quoted = context.quotedMessage;
   const quotedText = quoted?.conversation || quoted?.extendedTextMessage?.text || '';
   const reference = typeof quotedText === 'string' ? quotedText.match(/Referência: ([a-f0-9]{16})\b/)?.[1] : undefined;
@@ -43,6 +50,14 @@ function extract(payload) {
 }
 
 const log = (event, data = {}) => console.info('[WhatsApp]', JSON.stringify(sanitize({ event, ...data })));
+const safeId = value => crypto.createHash('sha256').update(String(value)).digest('hex').slice(0,16);
+function ignoredInboundReason(payload) {
+  const type = String(payload?.event || '').toUpperCase().replace(/[.\-]/g,'_');
+  if (type !== 'MESSAGES_UPSERT') return 'unsupported_event';
+  if (![false,'false'].includes(payload?.data?.key?.fromMe) || payload?.data?.fromMe === true) return 'outgoing_or_missing_direction';
+  if (/@(g\.us|broadcast|newsletter)$/.test(String(payload?.data?.key?.remoteJid || ''))) return 'non_private_chat';
+  return 'unsupported_envelope';
+}
 
 const connectionEvents = new Map();
 const connectionEventJobs = new Map();
@@ -149,18 +164,23 @@ async function drain(send = enviarTextoInstancia) {
     await delivery.dispatch('whatsapp_messages',row,sendWithContext, { validate: async () =>
       await validateReturnReminder(db,row) && await validateConversationResponse(db,row)
       && (!row.booking_confirmation_appointment_id || await validateBookingConfirmation(db,row)) });
+    const outcome = await db.getAsync('SELECT status FROM whatsapp_messages WHERE id=$1',[row.id]);
+    diagnostic('outbox_result', { deliveryId: String(row.id), status: outcome?.status || 'missing' });
   }
 }
 
 async function processarWebhookEvolution(payload = {}, headers = {}, options = {}) {
   if (!authorized(headers)) {
+    diagnostic('inbound_rejected', { reason: 'unauthorized', status: 401 });
     const error = new Error('Webhook não autorizado.'); error.statusCode = 401; throw error;
   }
   const connectionEvent = await processConnectionEvent(payload);
   if (connectionEvent) return connectionEvent;
   const envelope = extract(payload);
-  if (!envelope) return { ok: true, ignored: true };
+  if (!envelope) { diagnostic('inbound_ignored', { reason: ignoredInboundReason(payload) }); return { ok: true, ignored: true }; }
   const result = await require('./services/whatsapp/conversationStore').createConversationProcessor(require('./database')).process(envelope);
+  diagnostic('inbound_routed', { type: 'MESSAGES_UPSERT', instanceHash: safeId(envelope.instance), eventHash: safeId(envelope.messageId),
+    reason: result.reason || (result.duplicate ? 'duplicate' : result.pending ? 'awaiting_delivery' : 'processed') });
   // HTTP acknowledgements wait only for durable ingestion. The existing worker
   // delivers the outbox, so provider failures cannot delay webhook responses.
   if (!options.deferDelivery) await drain(options.send);
@@ -168,6 +188,7 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
 }
 
 function startWorker() {
+  diagnostic('outbox_worker_started');
   const run = () => drain().catch(() => log('erro de processamento da fila'));
   void run();
   const timer = setInterval(run, 15000); timer.unref();

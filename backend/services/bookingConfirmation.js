@@ -15,7 +15,7 @@ function buildBookingConfirmation(snapshot) {
     throw new Error('Invalid booking confirmation snapshot.');
   }
   const amount = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(cents / 100);
-  return `Olá, ${cliente}! 👋\n\nSeu agendamento foi confirmado.\n\nEstabelecimento: ${estabelecimento}\nServiço: ${servico}\nValor: ${amount}\nData: ${date.split('-').reverse().join('/')}\nHorário: ${hour}\n\nAté lá! 😊`;
+  return `Olá, ${cliente}! 👋\n\nSeu agendamento foi confirmado.\n\nEstabelecimento: ${estabelecimento}\nServiço: ${servico}${plain(snapshot.profissional) ? '\nProfissional: ' + plain(snapshot.profissional) : ''}\nValor: ${amount}\nData: ${date.split('-').reverse().join('/')}\nHorário: ${hour}\n\nAté lá! 😊`;
 }
 
 // SQL-only, inside the booking transaction. No provider, resolver or transport
@@ -31,7 +31,8 @@ async function captureBookingConfirmation(db, tenant, appointmentId, phoneRoutin
         : phoneRouting.destination !== null)) throw new Error('Invalid booking confirmation phone decision.');
   const result = await db.runAsync(`UPDATE public_booking_access p SET confirmation_snapshot=jsonb_build_object(
     'appointment_id',a.id::text,'assinatura_id',a.assinatura_id::text,'cliente',a.nome_cliente,'telefone',$3::text,'phone_state',$4::text,
-    'servico',a.servico_nome,'preco',a.preco,'data',a.data,'hora',a.hora,'estabelecimento',s.barbearia_nome,'instance',s.whatsapp_session)
+    'servico',a.servico_nome,'preco',a.preco,'data',a.data,'hora',a.hora,'estabelecimento',s.barbearia_nome,'instance',s.whatsapp_session,
+    'profissional',(SELECT nome FROM profissionais WHERE id=a.profissional_id AND assinatura_id=a.assinatura_id))
     FROM agendamentos a JOIN assinaturas s ON s.id=a.assinatura_id
     WHERE p.appointment_id=a.id AND a.id=$1 AND a.assinatura_id=$2 AND p.confirmation_snapshot IS NULL`, [appointmentId, tenant, phoneRouting.destination, phoneRouting.state]);
   if (result.changes !== 1) throw new Error('Booking confirmation origin mismatch.');

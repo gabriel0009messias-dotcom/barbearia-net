@@ -13,15 +13,29 @@ function createPublicBookings(db,clock=()=>new Date()){
   await db.runAsync('INSERT INTO public_booking_access (appointment_id,token_hash) VALUES ($1,$2)',[appointmentId,hash(token)]);
   return token;
  }
- async function find(token,lock=false){
+ async function lookup(where,params,lock=false){
   const row=await db.getAsync(`SELECT a.id,a.assinatura_id,a.nome_cliente,a.servico_nome,a.preco,a.data,a.hora,a.duracao,a.status,
    p.nome AS profissional,s.barbearia_nome,s.public_slug,s.cancellation_notice_minutes,
    (a.data || ' ' || a.hora)::timestamp AT TIME ZONE 'America/Sao_Paulo' AS starts_at
-   FROM public_booking_access t JOIN agendamentos a ON a.id=t.appointment_id
-   JOIN assinaturas s ON s.id=a.assinatura_id LEFT JOIN profissionais p ON p.id=a.profissional_id
-   WHERE t.token_hash=$1 ${lock?'FOR UPDATE OF a,s':''}`,[tokenHash(token)]);
+   FROM agendamentos a LEFT JOIN public_booking_access t ON a.id=t.appointment_id
+   JOIN assinaturas s ON s.id=a.assinatura_id LEFT JOIN profissionais p ON p.id=a.profissional_id AND p.assinatura_id=a.assinatura_id
+   WHERE ${where} ${lock?'FOR UPDATE OF a,s':''}`,params);
   if(!row)fail('Agendamento não encontrado ou link inválido.',404);
   return row;
+ }
+ async function find(token,lock=false){return lookup('t.token_hash=$1',[tokenHash(token)],lock);}
+ function contactIdentity(tenant,phone){
+  if(!Number.isSafeInteger(tenant)||tenant<=0||require('./whatsapp/phone').normalizeBrazilianDestination(phone)!==phone)fail('Contato inválido.',400);
+ }
+ async function forContact(tenant,phone){
+  contactIdentity(tenant,phone);
+  const rows=await db.allAsync(`SELECT a.id,a.servico_nome,a.data,a.hora FROM agendamentos a
+   WHERE a.assinatura_id=$1 AND a.telefone=$2
+   AND a.status='confirmado' AND (a.data || ' ' || a.hora)::timestamp AT TIME ZONE 'America/Sao_Paulo'>$3
+   ORDER BY a.data,a.hora,a.id`,[tenant,phone,clock()]);
+  const available=[];
+  for(const row of rows){const current=await lookup('a.id=$1 AND a.assinatura_id=$2 AND a.telefone=$3',[row.id,tenant,phone]);if(summary(current).cancelavel)available.push(row);}
+  return available;
  }
  function summary(row){
   const remaining=+new Date(row.starts_at)-clock().getTime();
@@ -38,14 +52,25 @@ function createPublicBookings(db,clock=()=>new Date()){
  async function get(token){return summary(await find(token));}
  async function context(token){const row=await find(token);return {tenantId:row.assinatura_id,reservationId:row.id};}
  // Called inside the same serialized transaction used by booking and rescheduling.
- async function cancel(token){
-  if(db.transaction)return db.transaction(c=>createPublicBookings(c,clock).cancel(token));
-  const row=await find(token,true),current=summary(row);
+ async function applyCancellation(row){
+  const current=summary(row);
   if(!current.cancelavel)fail(current.motivo,409);
   await transitionAppointment(db,row.assinatura_id,row.id,'cancelado',clock);
-  // The existing reminder trigger cancels pending/sending reminders atomically.
   return summary({...row,status:'cancelado'});
  }
- return {issue,get,cancel,context};
+ async function cancel(token){
+  if(db.transaction)return db.transaction(c=>createPublicBookings(c,clock).cancel(token));
+  const row=await find(token,true);
+  // The existing reminder trigger cancels pending/sending reminders atomically.
+  return applyCancellation(row);
+ }
+ // Internal domain capability: caller must authenticate the inbound phone via
+ // webhook + persistent ownership. Never exposed as a public phone/ID endpoint.
+ async function cancelForContact(tenant,phone,id){
+  contactIdentity(tenant,phone);
+  if(db.transaction)return db.transaction(c=>createPublicBookings(c,clock).cancelForContact(tenant,phone,id));
+  return applyCancellation(await lookup('a.id=$1 AND a.assinatura_id=$2 AND a.telefone=$3',[id,tenant,phone],true));
+ }
+ return {issue,get,cancel,context,forContact,cancelForContact};
 }
 module.exports={createPublicBookings};

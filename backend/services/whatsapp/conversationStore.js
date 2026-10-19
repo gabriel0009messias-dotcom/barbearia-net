@@ -22,7 +22,8 @@ function description(state,input) {
 }
 function createConversationProcessor(database) {
   async function processCaptured(identity, resume=false) {
-    return database.transaction(async db => {
+    let committedTransition;
+    const outcome = await database.transaction(async db => {
       // Admission committed before entering this transaction or waiting for its
       // locks. A crash here leaves the original event available to the worker.
       await db.runAsync(`INSERT INTO whatsapp_conversation_inbox(instance_key,message_id,assinatura_id,owner_epoch,fingerprint,decision,
@@ -82,9 +83,17 @@ function createConversationProcessor(database) {
       let input=event.text.trim(), supplied=event.reference || null;
       const qualified=input.match(/\s+([a-f0-9]{16})$/i);
       if(qualified) { supplied=qualified[1].toLowerCase();input=input.slice(0,qualified.index).trim(); }
+      // The visual adapter uses the logical question UUID, never a naked
+      // reusable row/button ID as authorization to answer a later question.
+      const structured=input.match(/^sf:([a-f0-9-]{36}):([0-9]{1,2}|menu|mais|anterior|confirmar|agendar)$/i);
+      if(structured) input=structured[2].toLowerCase();
       const command=normalize(input), restart=globalCommands.has(command);
       const currentPrompt=conversation.last_response_id ? await db.getAsync('SELECT status,response,sent_at FROM whatsapp_messages WHERE id=$1 AND assinatura_id=$2',[conversation.last_response_id,tenant]) : null;
       let stale=supplied && supplied!==conversation.reference ? 'stale_revision' : null, explicit=false;
+      if(structured) {
+        if(structured[1]===conversation.question_id) explicit=true;
+        else stale='stale_revision';
+      }
       if(event.replyTo || event.quotedText || event.hasReplyContext) {
         const bindings=await db.allAsync(`SELECT r.delivery_id,r.reference,r.question_id FROM whatsapp_conversation_responses r
           JOIN whatsapp_messages m ON m.id=r.delivery_id AND m.assinatura_id=r.assinatura_id
@@ -166,8 +175,11 @@ function createConversationProcessor(database) {
         question_started_at=CASE WHEN question_id<>$6::uuid THEN clock_timestamp() ELSE question_started_at END,
         question_id=$6,input_guard=$7::jsonb,clarification=$8::jsonb WHERE id=$5`,
         [owner.conversation_epoch,JSON.stringify(next.state),ref,responseId,conversation.id,questionId,JSON.stringify(guard),clarification?JSON.stringify(clarification):null]);
+      committedTransition={step:next.state.step,reason:decision};
       return {...await decide(decision),...(next.appointmentId?{appointmentId:next.appointmentId}:{})};
     });
+    if(committedTransition) require('./diagnostics').diagnostic('conversation_transition',committedTransition);
+    return outcome;
   }
   async function process(event) {
     const admitted=await capture(database,event);

@@ -62,7 +62,8 @@ test('migration 024: populated legacy schema, transaction rollback and runner re
       assert.equal(transport_protocol, 'legacy_simulated'); assert.equal(historical_snapshot_status, 'unavailable_legacy');
       assert.equal(establishment_name_snapshot, null); assert.equal(materialized_at, null); return r;
     }), before);
-    assert.deepEqual((await q('SELECT * FROM agendamentos ORDER BY id')).rows.map(({ return_history_snapshot, ...a }) => {
+    assert.deepEqual((await q('SELECT * FROM agendamentos ORDER BY id')).rows.map(({ return_history_snapshot, origem, observacao, ...a }) => {
+      assert.equal(origem,null); assert.equal(observacao,null);
       assert.equal(return_history_snapshot, null); return a;
     }), appointments);
     assert.equal((await q('SELECT count(*)::int n FROM whatsapp_messages WHERE return_reminder_id IS NOT NULL')).rows[0].n, 0);

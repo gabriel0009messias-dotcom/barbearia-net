@@ -470,7 +470,7 @@ async function carregarNomeClienteSalvo(user, sessionKey) {
     return ultimo?.cliente || null;
   }
 
-  const cliente = await getAsync("SELECT nome FROM clientes WHERE telefone = $1 ORDER BY id DESC LIMIT 1", [user]);
+  const cliente = await getAsync("SELECT nome FROM clientes WHERE telefone = $1 AND assinatura_id IS NULL ORDER BY id DESC LIMIT 1", [user]);
   return cliente?.nome && !nomePareceIdentificador(cliente.nome) ? cliente.nome : null;
 }
 
@@ -552,7 +552,7 @@ async function buscarUltimoAgendamentoConfirmado(user, sessionKey) {
      FROM agendamentos a
      JOIN clientes c ON c.id = a.cliente_id
      LEFT JOIN servicos s ON s.id = a.servico_id
-     WHERE c.telefone = $1
+     WHERE c.telefone = $1 AND c.assinatura_id IS NULL
        AND ($2 <= 0 OR a.assinatura_id = $3)
        AND a.status = 'confirmado'
      ORDER BY a.data DESC, a.hora DESC, a.id DESC

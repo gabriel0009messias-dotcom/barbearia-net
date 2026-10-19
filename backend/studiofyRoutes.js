@@ -76,7 +76,7 @@ module.exports=function studioRoutes(db,auth,access) {
   const result=await tx(async(s,c)=>{
    await s.ensure(id);
    const a=await c.getAsync('SELECT * FROM assinaturas WHERE id=$1',[id]);
-   return {businessTypes:await c.allAsync('SELECT code,name FROM business_types WHERE active=true ORDER BY sort_order,name'),pagina:page(a),horarios:effectiveHours(a),servicos:await s.services(id),profissionais:await s.professionals(id),
+   return {clientes:await c.allAsync('SELECT id,nome,telefone,created_at,updated_at FROM clientes WHERE assinatura_id=$1 ORDER BY nome,id',[id]),businessTypes:await c.allAsync('SELECT code,name FROM business_types WHERE active=true ORDER BY sort_order,name'),pagina:page(a),horarios:effectiveHours(a),servicos:await s.services(id),profissionais:await s.professionals(id),
     agendamentos:await c.allAsync('SELECT a.*,p.nome AS profissional FROM agendamentos a LEFT JOIN profissionais p ON p.id=a.profissional_id AND p.assinatura_id=a.assinatura_id WHERE a.assinatura_id=$1 ORDER BY a.data,a.hora,a.id',[id]),
     bloqueios:await c.allAsync('SELECT * FROM bloqueios WHERE assinatura_id=$1 ORDER BY data,hora',[id]),
     lembretes:await c.allAsync('SELECT r.*,a.nome_cliente,a.data,a.hora FROM appointment_reminders r JOIN agendamentos a ON a.id=r.appointment_id AND a.assinatura_id=r.assinatura_id WHERE r.assinatura_id=$1 ORDER BY due_at DESC LIMIT 200',[id])};

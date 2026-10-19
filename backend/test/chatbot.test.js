@@ -10,6 +10,8 @@ test('WhatsApp oferece menu conversacional; webhook autenticado e idempotente',a
  const send=async(instance,phone,text)=>{sent.push({instance,phone,text});return {key:{id:crypto.randomUUID()},status:'PENDING'};};
  const payload=(text,instance='test-a',id=crypto.randomUUID())=>({event:'messages.upsert',instance,data:{key:{remoteJid:'5511999990001@s.whatsapp.net',fromMe:false,id},message:{conversation:text}}});
  for(const [id,instance,name] of [[1,'test-a','Studio Bella'],[2,'test-b','Espaco Ana']])await db.runAsync("INSERT INTO assinaturas (id,barbearia_nome,responsavel_nome,telefone,metodo_pagamento,dia_vencimento,suporte_numero,whatsapp_session,status,proximo_vencimento) VALUES ($1,$2,'Dono','5511999990000','mercado_pago',5,'',$3,'ativo','2099-01-01')",[id,name,instance]);
+ // This regression exercises existing registered contacts; first registration has dedicated coverage.
+ for(const tenant of [1,2]){const c=require('../services/whatsapp/customerIdentity');await c.identifyCustomer(db,tenant,'5511999990001');await c.saveCustomerName(db,tenant,'5511999990001','Contato Conhecido');}
  await assert.rejects(webhook.processarWebhookEvolution(payload('oi'),{}, {send}),e=>e.statusCode===401);
  const own=payload('oi');own.data.key.fromMe=true;assert.equal(webhook.extract(own),null);
  for(const jid of ['123@g.us','status@broadcast','123456789012@lid']){const p=payload('oi');p.data.key.remoteJid=jid;assert.equal(webhook.extract(p),null);}

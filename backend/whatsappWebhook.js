@@ -147,10 +147,10 @@ async function horarioDisponivel(assinaturaId, data, hora) {
 
 async function obterOuCriarCliente(nome, telefone) {
   await db.transaction(async connection => {
-    await connection.runAsync("INSERT INTO clientes (nome, telefone) SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM clientes WHERE telefone = $2)", [nome, telefone]);
+    await connection.runAsync("INSERT INTO clientes (nome, telefone) SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM clientes WHERE telefone = $2 AND assinatura_id IS NULL)", [nome, telefone]);
   });
-  await runAsync("UPDATE clientes SET nome = $1 WHERE telefone = $2", [nome, telefone]);
-  return getAsync("SELECT * FROM clientes WHERE telefone = $1", [telefone]);
+  await runAsync("UPDATE clientes SET nome = $1 WHERE telefone = $2 AND assinatura_id IS NULL", [nome, telefone]);
+  return getAsync("SELECT * FROM clientes WHERE telefone = $1 AND assinatura_id IS NULL", [telefone]);
 }
 
 async function obterOuCriarServicoPadrao(nome, preco) {
