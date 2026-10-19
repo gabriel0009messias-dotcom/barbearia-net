@@ -5,6 +5,7 @@ const {createReminderWorker}=require('../services/reminders');
 const {createEvolutionDelivery}=require('../services/evolutionDelivery');
 test('Appointment reminders: lifetime windows, revisions, durable frontier and recovery',{timeout:180000},async t=>{
  const env=require('./helpers/postgres').testEnvironment(),db=require('../database');await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
  const q=(sql,args=[])=>db.pool.query(sql,args),accepted=()=>({key:{id:randomUUID()},status:'PENDING'});
  const at=time=>'2030-01-02T'+time+':00-03:00';
  let tenant,appointment,professional,service,calls;

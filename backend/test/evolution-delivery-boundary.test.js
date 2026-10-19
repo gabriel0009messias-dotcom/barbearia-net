@@ -10,6 +10,7 @@ const accepted = () => ({ key: { id: randomUUID() }, status: 'PENDING' });
 test('OWN-FINAL-01: durable transport frontier, recovery and process crashes', { timeout: 180000 }, async t => {
   const env = require('./helpers/postgres').testEnvironment();
   const db = require('../database'); await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
   const delivery = createEvolutionDelivery(db), op = createEvolutionOwnershipOperation(db.pool);
   const q = (sql, args = []) => db.pool.query(sql, args);
   const owner = async () => (await q("SELECT * FROM evolution_instance_owners WHERE owner_id='3908'")).rows[0];

@@ -9,6 +9,7 @@ test('OWN-PUB-01: receipt IDs preserve the canonical BIGINT range', async t => {
   const env = require('./helpers/postgres').testEnvironment();
   const db = require('../database');
   await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
   const delivery = createEvolutionDelivery(db);
   const resolver = createEvolutionOwnershipResolver(db);
   const op = createEvolutionOwnershipOperation(db.pool);

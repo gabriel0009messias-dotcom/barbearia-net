@@ -9,6 +9,7 @@ const accepted = () => ({key:{id:randomUUID()},status:'PENDING'});
 
 test('OWN-01/02/03: durable PostgreSQL dispatch, isolation and uncertain outcomes', {timeout:120000}, async t => {
  const env=require('./helpers/postgres').testEnvironment(),db=require('../database');await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
  const api=require('../evolutionApi'),webhook=require('../evolutionWebhook');
  const {createReminderWorker}=require('./helpers/reminderClock');
  const delivery=createEvolutionDelivery(db),op=createEvolutionOwnershipOperation(db.pool);

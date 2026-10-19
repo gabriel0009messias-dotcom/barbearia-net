@@ -6,6 +6,7 @@ test('Studiofy: fluxo completo, isolamento, concorrência e lembretes persistent
  process.env.LEGACY_ADMIN_EMAIL='studiofy-admin@example.test';process.env.LEGACY_ADMIN_PASSWORD='test-password';
  process.env.MERCADO_PAGO_ACCESS_TOKEN='';process.env.EVOLUTION_API_URL='';process.env.EVOLUTION_API_KEY='';
  const db=require('../database');await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
  const {createStudio}=require('../services/studiofy');
  const app=express();app.use(express.json({limit:'6mb'}));app.use('/api',require('../routes'));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));

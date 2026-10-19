@@ -15,6 +15,7 @@ function createReminderWorker(db, send, clock) {
    const row=await db.transaction(async c=>{
     const r=await c.getAsync(`SELECT r.* FROM appointment_reminders r
      WHERE r.status='pending' AND r.reminder_kind<>'legacy_20m' AND r.due_at<=$1 AND r.expires_at>$1
+      AND studiofy_appointment_transport_allowed(r.assinatura_id)
       AND NOT (r.id=ANY($2::bigint[]))
       AND r.dispatch_started_at IS NULL AND (r.attempts=0 OR r.claim_token IS NOT NULL)
       AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=$1)
@@ -48,6 +49,10 @@ function createReminderWorker(db, send, clock) {
     await db.runAsync("UPDATE appointment_reminders SET status='cancelled',last_error='Acesso operacional indisponivel.' WHERE id=$1 AND claim_token=$2 AND status='sending'",[row.id,row.claim_token]);continue;
    }
    await delivery.dispatch('appointment_reminders',row,send,{validate:async()=>{
+    const policy=await db.getAsync('SELECT studiofy_appointment_transport_allowed($1) AS allowed',[row.assinatura_id]);
+    // Suspension is a safe deferral, not a failed delivery. The SQL trigger
+    // independently closes the gap between this read and durable intent.
+    if(policy?.allowed!==true)throw Object.assign(new Error('Appointment reminder transport deferred.'),{code:'APPOINTMENT_REMINDER_TRANSPORT_DEFERRED'});
     const current=await db.getAsync(`SELECT o.schedule_revision,studiofy_reminder_snapshot($1,$2) AS snapshot,
       studiofy_reminder_now() AS now FROM appointment_reminder_origins o WHERE o.assinatura_id=$1 AND o.appointment_id=$2`,[row.assinatura_id,row.appointment_id]);
     return current?.schedule_revision===row.schedule_revision && current.snapshot?.status==='confirmado' &&

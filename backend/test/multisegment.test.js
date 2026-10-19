@@ -32,6 +32,7 @@ test('PostgreSQL: quatro segmentos, isolamento, conflito, cancelamento e lembret
  const environment=require('./helpers/postgres').testEnvironment();
  process.env.MERCADO_PAGO_ACCESS_TOKEN='';process.env.EVOLUTION_API_URL='';process.env.EVOLUTION_API_KEY='';
  const db=require('../database');await db.ready;
+ await require('./helpers/appointmentTransportPolicy').enableAppointmentTransport(db);
  const express=require('express'),app=express();app.use(express.json({limit:'6mb'}));app.use('/api',require('../routes'));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await db.close();await environment.cleanup();});
