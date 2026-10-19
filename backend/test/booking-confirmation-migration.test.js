@@ -41,7 +41,9 @@ test('020: legacy upgrade, rollback, BIGINT identity and no historical confirmat
   });
   await t.test('normal runner upgrades and repeats without modifying historical bookings or enqueueing them', async () => {
     await migrate(pool); await migrate(pool); await materializeBookingConfirmations(wrapper);
-    assert.deepEqual((await c.query('SELECT * FROM agendamentos')).rows, legacy);
+    // 024 adds a nullable historical return snapshot without backfilling it.
+    assert.deepEqual((await c.query('SELECT * FROM agendamentos')).rows,
+      legacy.map(appointment => ({ ...appointment, return_history_snapshot: null })));
     const access = (await c.query('SELECT * FROM public_booking_access')).rows[0]; assert.equal(access.confirmation_snapshot, null);
     assert.equal(access.token_hash, legacyAccess[0].token_hash); assert.equal((await c.query('SELECT count(*)::int n FROM whatsapp_messages')).rows[0].n, 0);
     assert.equal((await c.query("SELECT count(*)::int n FROM schema_migrations WHERE name='020_booking_confirmation.sql'")).rows[0].n, 1);

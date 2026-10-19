@@ -89,25 +89,40 @@ async function drain(send = enviarTextoInstancia) {
   const { createEvolutionDelivery, newDeliveryClaim } = require('./services/evolutionDelivery');
   const delivery = createEvolutionDelivery(db);
   const { materializeBookingConfirmations, validateBookingConfirmation } = require('./services/bookingConfirmation');
+  const { materializeReturnReminders, validateReturnReminder } = require('./services/returnReminders');
   const { validateConversationResponse, createConversationProcessor } = require('./services/whatsapp/conversationStore');
   const conversations = createConversationProcessor(db);
   // Producer recovery is independent of dispatch: a transient materialization
   // failure keeps its durable origin and must not stop the existing outbox.
   try { await materializeBookingConfirmations(db); }
   catch { log('erro ao preparar confirmações de agendamento'); }
+  try { await materializeReturnReminders(db); }
+  catch { log('erro ao materializar retornos'); }
   await delivery.recoverInterrupted('whatsapp_messages');
+  // A revoked unstarted reservation is recovered by the shared delivery first.
+  // The persistent latch then ends the pending message without another claim.
+  const finishSuppressed = () => db.runAsync(`UPDATE whatsapp_messages SET status='failed',last_error='Return superseded before transport.'
+    WHERE return_reminder_id IS NOT NULL AND return_cancel_requested_at IS NOT NULL
+      AND status='pending' AND operation_token IS NULL AND dispatch_started_at IS NULL`);
+  await finishSuppressed();
   for (let i = 0; i < 50; i++) {
     // Durable input recovery runs before looking for the next outbox message,
     // including after a restart or explicit reconciliation of uncertain delivery.
     await conversations.consumePending();
     try { await materializeBookingConfirmations(db); }
     catch { log('erro ao preparar confirmações de agendamento'); }
+    try { await materializeReturnReminders(db); }
+    catch { log('erro ao materializar retornos'); }
+    await finishSuppressed();
     const row = await db.transaction(async client => {
       const pending = await client.getAsync(`SELECT m.* FROM whatsapp_messages m
         WHERE m.status='pending' AND m.lease_until<$1 AND m.dispatch_started_at IS NULL
           AND (m.attempts=0 OR m.claim_token IS NOT NULL)
+          AND (m.return_reminder_id IS NULL OR studiofy_return_outbox_ready(m))
         AND NOT EXISTS(SELECT 1 FROM whatsapp_messages older WHERE older.instance=m.instance
-          AND older.phone=m.phone AND older.status IN ('pending','sending','uncertain') AND older.id<m.id)
+          AND older.phone=m.phone AND older.status IN ('pending','sending','uncertain') AND older.id<m.id
+          AND (older.return_reminder_id IS NULL OR older.status<>'pending'
+            OR (older.lease_until<$1 AND studiofy_return_outbox_ready(older))))
         ORDER BY m.id LIMIT 1 FOR UPDATE OF m SKIP LOCKED`, [Date.now()]);
       if (!pending) return null;
       const claim = newDeliveryClaim();
@@ -132,7 +147,8 @@ async function drain(send = enviarTextoInstancia) {
       return result;
     };
     await delivery.dispatch('whatsapp_messages',row,sendWithContext, { validate: async () =>
-      await validateConversationResponse(db,row) && (!row.booking_confirmation_appointment_id || await validateBookingConfirmation(db,row)) });
+      await validateReturnReminder(db,row) && await validateConversationResponse(db,row)
+      && (!row.booking_confirmation_appointment_id || await validateBookingConfirmation(db,row)) });
   }
 }
 

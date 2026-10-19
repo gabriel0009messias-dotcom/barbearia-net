@@ -25,7 +25,10 @@ test('023 populated legacy upgrade, rollback, reexecution and appointment preser
  });
  await t.test('upgrade preserves evidence, retires unstarted 20m and seeds two new kinds',async()=>{
   await migrate(pool);
-  assert.deepEqual((await c.query('SELECT * FROM agendamentos ORDER BY id')).rows,appointments);
+  // The full runner also installs additive 024: legacy facts stay identical,
+  // and its historical snapshot must remain unavailable rather than backfilled.
+  assert.deepEqual((await c.query('SELECT * FROM agendamentos ORDER BY id')).rows,
+   appointments.map(appointment=>({...appointment,return_history_snapshot:null})));
   const legacy=(await c.query("SELECT * FROM appointment_reminders WHERE reminder_kind='legacy_20m' ORDER BY id")).rows;
   assert.equal(legacy.length,4);
   for(let i=0;i<4;i++)for(const [key,value] of Object.entries(original[i])){

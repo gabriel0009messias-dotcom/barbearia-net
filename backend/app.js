@@ -761,9 +761,7 @@ app.use(require('./services/httpErrors').createHttpErrorHandler());
 require('./database').ready.then(() => {
   const webhookTimer = require('./evolutionWebhook').startWorker();
   const reminderTimer = require('./services/reminders').startWorker(require('./database'));
-  // Explicit local simulation only; no real return transport exists in this stage.
-  const returnWorker = process.env.RETURN_REMINDER_WORKER_MODE === 'simulated'
-    ? require('./services/returnReminders').startWorker(require('./database')) : null;
+  // The shared outbox worker materializes returns; migration 024 defaults delivery off.
   const server = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });
@@ -774,7 +772,7 @@ require('./database').ready.then(() => {
     stopping = true;
     clearInterval(webhookTimer); clearInterval(reminderTimer);
     const closing = new Promise(resolve => server.close(resolve));
-    try { await returnWorker?.stop(); await closing; await require('./database').close(); }
+    try { await closing; await require('./database').close(); }
     catch { process.exitCode = 1; }
   };
   process.once('SIGTERM', shutdown);

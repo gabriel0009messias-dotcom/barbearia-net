@@ -3,10 +3,15 @@ const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
 const {transitionAppointment}=require('../services/agenda');
 
-test('return suppression: atomic newest reference, persistent terminal states and coordinated claims',async t=>{
+test('legacy return suppression through 023, followed by lossless upgrade to 024',async t=>{
  const env=require('./helpers/postgres').testEnvironment();
  Object.assign(process.env,{EVOLUTION_API_URL:'',EVOLUTION_API_KEY:'',MERCADO_PAGO_ACCESS_TOKEN:''});
- const db=require('../database');await db.ready;
+ // Exercise the retired source-owned claim protocol on its actual schema, then
+ // upgrade populated historical records. Outbox tests exercise 024 directly.
+ const fs=require('node:fs'),path=require('node:path'),directory=path.resolve(__dirname,'../database/migrations');
+ const read=fs.readdirSync;
+ const discovery=t.mock.method(fs,'readdirSync',function(dir,...args){const files=read.call(this,dir,...args);return path.resolve(String(dir))===directory?files.filter(name=>name<'024_'):files;});
+ const db=require('../database');try{await db.ready;}finally{discovery.mock.restore();}
  t.after(async()=>{await db.close();await env.cleanup();});
  const nativeFetch=global.fetch;
  let networkCalls=0;const logs=[];
@@ -183,5 +188,20 @@ test('return suppression: atomic newest reference, persistent terminal states an
  await t.test('historical final records are not backfilled and no network/private logging occurs',async()=>{
   const sid=await service(),id=await book(sid,{status:'concluido'});assert.equal(await row(id),undefined);assert.equal((await db.getAsync('SELECT completed_at FROM agendamentos WHERE id=$1',[id])).completed_at,null);
   assert.equal(networkCalls,0);assert.deepEqual(logs,[]);
+ });
+ await t.test('024 preserves every legacy fact and quarantines all historical delivery states',async()=>{
+  const before=await db.allAsync('SELECT * FROM return_reminders ORDER BY id');
+  await require('../database/migrate').migrate(db.pool,env.schema);
+  const after=await db.allAsync('SELECT * FROM return_reminders ORDER BY id');
+  assert.deepEqual(after.map(({transport_protocol,historical_snapshot_status,establishment_name_snapshot,materialized_at,historical_snapshot_at,snapshot_version,superseded_at,...r})=>{
+   assert.equal(transport_protocol,'legacy_simulated');assert.equal(historical_snapshot_status,'unavailable_legacy');
+   assert.equal(establishment_name_snapshot,null);assert.equal(materialized_at,null);return r;
+  }),before);
+  await db.runAsync("INSERT INTO configuracoes(chave,valor) VALUES('return_outbox_delivery_enabled','true') ON CONFLICT(chave) DO UPDATE SET valor='true'");
+  await db.runAsync(`CREATE OR REPLACE FUNCTION "${env.schema}".studiofy_return_now() RETURNS timestamptz LANGUAGE sql VOLATILE
+   SET search_path=pg_catalog AS $$SELECT '2030-06-03T15:00:00Z'::timestamptz$$`);
+  assert.equal((await db.getAsync('SELECT studiofy_return_delivery_open() ready')).ready,true);
+  assert.deepEqual(await require('../services/returnReminders').materializeReturnReminders(db),[]);
+  assert.equal((await db.getAsync('SELECT count(*)::int n FROM whatsapp_messages WHERE return_reminder_id IS NOT NULL')).n,0);
  });
 });
