@@ -3,6 +3,7 @@ const { transaction } = require('./services/whatsapp/sessionRepository');
 const { enviarTextoInstancia, receberEventoConexao, extrairEstadoInstancia } = require('./evolutionApi');
 const { sanitize } = require('./evolutionLog');
 const { diagnostic } = require('./services/whatsapp/diagnostics');
+let outboxWorker;
 
 function authorized(headers) {
   const expected = process.env.EVOLUTION_WEBHOOK_SECRET;
@@ -178,21 +179,26 @@ async function processarWebhookEvolution(payload = {}, headers = {}, options = {
   if (connectionEvent) return connectionEvent;
   const envelope = extract(payload);
   if (!envelope) { diagnostic('inbound_ignored', { reason: ignoredInboundReason(payload) }); return { ok: true, ignored: true }; }
+  diagnostic('inbound_received',{eventHash:safeId(envelope.messageId),instanceHash:safeId(envelope.instance)});
   const result = await require('./services/whatsapp/conversationStore').createConversationProcessor(require('./database')).process(envelope);
   diagnostic('inbound_routed', { type: 'MESSAGES_UPSERT', instanceHash: safeId(envelope.instance), eventHash: safeId(envelope.messageId),
     reason: result.reason || (result.duplicate ? 'duplicate' : result.pending ? 'awaiting_delivery' : 'processed') });
   // HTTP acknowledgements wait only for durable ingestion. The existing worker
   // delivers the outbox, so provider failures cannot delay webhook responses.
   if (!options.deferDelivery) await drain(options.send);
+  else outboxWorker?.wake();
   return result;
 }
 
-function startWorker() {
+function startWorker({ send = enviarTextoInstancia } = {}) {
+  if(outboxWorker) return outboxWorker;
   diagnostic('outbox_worker_started');
-  const run = () => drain().catch(() => log('erro de processamento da fila'));
-  void run();
-  const timer = setInterval(run, 15000); timer.unref();
-  return timer;
+  const worker = require('./services/whatsapp/outboxWorker').createOutboxWorker(() => drain(send),{
+    onError:() => log('erro de processamento da fila'),
+  });
+  const controller = { wake:worker.wake, stop:() => { worker.stop(); if(outboxWorker===controller) outboxWorker=undefined; } };
+  outboxWorker=controller;
+  return controller;
 }
 
 module.exports = { processarWebhookEvolution, extract, authorized, drain, startWorker };

@@ -770,7 +770,7 @@ require('./database').ready.then(() => {
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
-    clearInterval(webhookTimer); clearInterval(reminderTimer);
+    webhookTimer.stop(); clearInterval(reminderTimer);
     const closing = new Promise(resolve => server.close(resolve));
     try { await closing; await require('./database').close(); }
     catch { process.exitCode = 1; }

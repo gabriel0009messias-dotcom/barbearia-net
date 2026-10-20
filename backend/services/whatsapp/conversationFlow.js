@@ -12,7 +12,8 @@ const money = n => Number(n).toLocaleString('pt-BR', { style: 'currency', curren
 const dateLabel = d => d.split('-').reverse().join('/');
 const MENU = 'Como posso te ajudar?\n\n1 - 📅 Realizar agendamento\n2 - 💰 Preços\n3 - 📍 Endereço\n4 - ❌ Cancelar agendamento';
 
-async function transition(db, account, conversation, input, now) {
+async function transition(db, account, conversation, input, now, identity = {}) {
+  require('./diagnostics').diagnostic('conversation_flow_started',{...identity,step:conversation.state.step});
   const tenant = account.id, studio = createStudio(db, () => now);
   let state = structuredClone(conversation.state);
   const command = normalize(input);

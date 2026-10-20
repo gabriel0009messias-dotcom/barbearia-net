@@ -5,6 +5,7 @@ const { transition, normalize } = require('./conversationFlow');
 const { capture, fingerprint } = require('./conversationCapture');
 const reference = () => crypto.randomBytes(8).toString('hex');
 const globalCommands = new Set(['oi','ola','bom dia','boa tarde','boa noite','menu','inicio','recomecar']);
+const greetings = new Set(['oi','ola','bom dia','boa tarde','boa noite']);
 // Suspicion boundary only, never a delay or a deduplication TTL. Inbound
 // timestamps have second precision; adjacent timestamp buckets may overlap it.
 const BURST_MS = 1000;
@@ -80,6 +81,7 @@ function createConversationProcessor(database) {
         await db.runAsync(`INSERT INTO whatsapp_conversations(assinatura_id,instance_key,owner_epoch,sender,reference) VALUES($1,$2,$3,$4,$5)`,[tenant,key,owner.conversation_epoch,event.phone,reference()]);
         conversation=await db.getAsync('SELECT * FROM whatsapp_conversations WHERE assinatura_id=$1 AND instance_key=$2 AND sender=$3 FOR UPDATE',[tenant,key,event.phone]);
       }
+      const flowIdentity={eventHash:crypto.createHash('sha256').update(receipt.message_id).digest('hex').slice(0,16)};
       let input=event.text.trim(), supplied=event.reference || null;
       const qualified=input.match(/\s+([a-f0-9]{16})$/i);
       if(qualified) { supplied=qualified[1].toLowerCase();input=input.slice(0,qualified.index).trim(); }
@@ -89,6 +91,14 @@ function createConversationProcessor(database) {
       if(structured) input=structured[2].toLowerCase();
       const command=normalize(input), restart=globalCommands.has(command);
       const currentPrompt=conversation.last_response_id ? await db.getAsync('SELECT status,response,sent_at FROM whatsapp_messages WHERE id=$1 AND assinatura_id=$2',[conversation.last_response_id,tenant]) : null;
+      // A greeting sent before the initial question was observable is not an
+      // answer to it, nor an old menu selection. Retain its durable receipt
+      // without replacing the one question/outbox item already created.
+      const beforeQuestion=event.timestamp && event.timestamp<Math.floor(new Date(conversation.question_started_at).getTime()/1000);
+      const unseenGreeting=observed && (!observed.conversation_id || observed.question_id===conversation.question_id && observed.question_delivered!==true && observed.status!=='sent');
+      if(!first && !expired && !reassociated && greetings.has(command) && !supplied && !structured &&
+        !event.replyTo && !event.quotedText && !event.hasReplyContext && ['ASK_NAME','MENU'].includes(conversation.state.step) &&
+        (beforeQuestion || unseenGreeting || currentPrompt && ['pending','sending'].includes(currentPrompt.status))) return decide('greeting_coalesced');
       let stale=supplied && supplied!==conversation.reference ? 'stale_revision' : null, explicit=false;
       if(structured) {
         if(structured[1]===conversation.question_id) explicit=true;
@@ -102,7 +112,7 @@ function createConversationProcessor(database) {
         explicit=bindings.length===1 && bindings[0].question_id===conversation.question_id;
         if(!explicit) stale='stale_revision';
       } else if(supplied && supplied===conversation.reference) explicit=true;
-      if(!first && event.timestamp && event.timestamp<Math.floor(new Date(conversation.question_started_at).getTime()/1000)) stale='stale_event';
+      if(!first && beforeQuestion) stale='stale_event';
       // Captured observations never move forward to another logical question.
       // A re-prompt can change delivery/reference/version without changing it.
       if(!first && !expired && !reassociated && observed && (observed.conversation_id!==conversation.id || observed.question_id!==conversation.question_id) && !(restart && !stale)) return decide(wasPending?'pending_obsolete':'captured_obsolete');
@@ -112,7 +122,7 @@ function createConversationProcessor(database) {
       const promptText=(currentPrompt?.response || 'Digite MENU para começar novamente.').replace(/^(?:(?:Essa opção pertence a uma etapa anterior\. Escolha uma das opções da mensagem mais recente\.|Não encontrei essa opção\. Escolha uma das opções abaixo:)\n\n)+/,'');
       if(first || expired || reassociated || restart && !stale) {
         conversation.state={step:'MENU'};conversation.owner_epoch=owner.conversation_epoch;
-        next=await transition(db,account,conversation,'menu',now);
+        next=await transition(db,account,conversation,'menu',now,flowIdentity);
         clarification=null;guard={};forceQuestion=true;
         if(expired) next.text='Sua conversa expirou. Vamos começar novamente.\n'+next.text;
         if(reassociated) next.text='O contexto do atendimento mudou. Comece novamente.\n'+next.text;
@@ -133,7 +143,7 @@ function createConversationProcessor(database) {
         } else if(clarification) {
           if(['confirmar','sim'].includes(command)) {
             acceptedInput=clarification.input;
-            next=await transition(db,account,conversation,acceptedInput,now);
+            next=await transition(db,account,conversation,acceptedInput,now,flowIdentity);
             clarification=null;accepted=!next.invalid;forceQuestion=true;
           } else if(command==='voltar' || input==='0') {
             next={state:conversation.state,text:clarification.return_text};
@@ -156,7 +166,7 @@ function createConversationProcessor(database) {
             decision='clarification_requested';
           } else {
             acceptedInput=['sim','confirmar'].includes(command) && ['REVIEW','CANCEL_REVIEW'].includes(conversation.state.step)?'1':input;
-            next=await transition(db,account,conversation,acceptedInput,now);accepted=!next.invalid;
+            next=await transition(db,account,conversation,acceptedInput,now,flowIdentity);accepted=!next.invalid;
           }
         }
         if(next.invalid) next={state:conversation.state,text:'Não encontrei essa opção. Escolha uma das opções abaixo:\n\n'+promptText};
@@ -175,7 +185,7 @@ function createConversationProcessor(database) {
         question_started_at=CASE WHEN question_id<>$6::uuid THEN clock_timestamp() ELSE question_started_at END,
         question_id=$6,input_guard=$7::jsonb,clarification=$8::jsonb WHERE id=$5`,
         [owner.conversation_epoch,JSON.stringify(next.state),ref,responseId,conversation.id,questionId,JSON.stringify(guard),clarification?JSON.stringify(clarification):null]);
-      committedTransition={step:next.state.step,reason:decision};
+      committedTransition={step:next.state.step,reason:decision,eventHash:crypto.createHash('sha256').update(receipt.message_id).digest('hex').slice(0,16),...(responseId?{deliveryId:String(responseId)}:{})};
       return {...await decide(decision),...(next.appointmentId?{appointmentId:next.appointmentId}:{})};
     });
     if(committedTransition) require('./diagnostics').diagnostic('conversation_transition',committedTransition);
@@ -183,6 +193,7 @@ function createConversationProcessor(database) {
   }
   async function process(event) {
     const admitted=await capture(database,event);
+    if(admitted.row) require('./diagnostics').diagnostic('inbound_persisted',{eventHash:crypto.createHash('sha256').update(event.messageId).digest('hex').slice(0,16)});
     return admitted.row?processCaptured(admitted.row):admitted;
   }
   async function consumePending({limit=50}={}) {

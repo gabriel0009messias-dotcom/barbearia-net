@@ -75,6 +75,7 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
           [row.id,row.assinatura_id,token,context.operationToken,'principal',schema,String(row.assinatura_id)]);
         if (started.changes !== 1) throw new Error('Delivery claim no longer active.');
         context.assertActive();
+        if(table==='whatsapp_messages') require('./whatsapp/diagnostics').diagnostic('delivery_started',{deliveryId:String(row.id)});
         let result;
         try { result = await send(context.instanceName,row.phone,row.response); }
         catch (failure) {
@@ -85,6 +86,7 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         }
         context.assertActive();
         if (!acceptedEvolutionMessage(result)) throw new Error('Unconfirmed provider acceptance.');
+        if(table==='whatsapp_messages') require('./whatsapp/diagnostics').diagnostic('delivery_accepted',{deliveryId:String(row.id)});
         return { status: 'sent', reason: null };
       }, { expectedInstance: row.instance, timeoutMs, onReserved: async (client, context) => {
         const claim = (await client.query('SELECT * FROM ' + target + ' WHERE id=$1 FOR UPDATE',[row.id])).rows[0];
