@@ -1,12 +1,12 @@
 const crypto = require('node:crypto');
 const { normalizeInstanceName } = require('../evolutionOwnership');
-const { normalizeBrazilianDestination } = require('./phone');
+const { isBrazilianWhatsAppIdentity } = require('./phone');
 
 const fingerprint = event => crypto.createHash('sha256').update(JSON.stringify([event.phone,event.text,event.reference || null,event.timestamp || null,event.replyTo || null,event.quotedText || null,Boolean(event.hasReplyContext)])).digest('hex');
 function validEvent(event) {
   if (!event || typeof event !== 'object') return false;
   let instance; try { instance = normalizeInstanceName(event.instance); } catch { return false; }
-  return Boolean(instance && instance === event.instance && normalizeBrazilianDestination(event.phone) === event.phone &&
+  return Boolean(instance && instance === event.instance && isBrazilianWhatsAppIdentity(event.phone) &&
     typeof event.messageId === 'string' && event.messageId.length > 0 && event.messageId.length <= 200 &&
     typeof event.text === 'string' && event.text.trim() && event.text.length <= 2000 &&
     (event.timestamp == null || Number.isSafeInteger(event.timestamp) && event.timestamp > 0));

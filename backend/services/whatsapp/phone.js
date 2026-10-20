@@ -15,4 +15,11 @@ function classifyBrazilianDestination(value) {
   const destination = normalizeBrazilianDestination(value);
   return { state: destination ? 'routable' : value == null || value === '' ? 'missing' : 'invalid', destination };
 }
-module.exports = { normalizeBrazilianDestination, classifyBrazilianDestination };
+// Authenticated WhatsApp PN identities can retain the eight-digit mobile form.
+// Preserve the provider's exact identity: never insert digits or merge aliases.
+// Public booking/reminder destinations keep their stricter validation above.
+function isBrazilianWhatsAppIdentity(value) {
+  return typeof value === 'string' && (normalizeBrazilianDestination(value) === value ||
+    /^55[1-9]{2}[6-9]\d{7}$/.test(value));
+}
+module.exports = { normalizeBrazilianDestination, classifyBrazilianDestination, isBrazilianWhatsAppIdentity };

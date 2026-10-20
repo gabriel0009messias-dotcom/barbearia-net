@@ -25,7 +25,7 @@ function createPublicBookings(db,clock=()=>new Date()){
  }
  async function find(token,lock=false){return lookup('t.token_hash=$1',[tokenHash(token)],lock);}
  function contactIdentity(tenant,phone){
-  if(!Number.isSafeInteger(tenant)||tenant<=0||require('./whatsapp/phone').normalizeBrazilianDestination(phone)!==phone)fail('Contato inválido.',400);
+  if(!Number.isSafeInteger(tenant)||tenant<=0||!require('./whatsapp/phone').isBrazilianWhatsAppIdentity(phone))fail('Contato inválido.',400);
  }
  async function forContact(tenant,phone){
   contactIdentity(tenant,phone);

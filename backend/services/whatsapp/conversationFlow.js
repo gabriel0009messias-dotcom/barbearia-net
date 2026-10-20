@@ -165,7 +165,7 @@ async function transition(db, account, conversation, input, now) {
         // back only the booking attempt; no catalog/agenda changes are fabricated.
         await db.runAsync('SAVEPOINT conversation_booking');
         let booked;
-        try { booked = await confirmBooking(db,studio,tenant,body,attempt.key); await db.runAsync('RELEASE SAVEPOINT conversation_booking'); }
+        try { booked = await confirmBooking(db,studio,tenant,body,attempt.key,attempt.id); await db.runAsync('RELEASE SAVEPOINT conversation_booking'); }
         catch(e) { await db.runAsync('ROLLBACK TO SAVEPOINT conversation_booking'); await db.runAsync('RELEASE SAVEPOINT conversation_booking'); if(e.statusCode===409 || e.code==='23505') { delete state.time; delete state.attempt; return times(0,'Esse horário acabou de ficar indisponível. Escolha outro.\n'); } throw e; }
         const appointment = await db.getAsync('SELECT appointment_id FROM public_booking_requests WHERE assinatura_id=$1 AND key_hash=$2',[tenant,crypto.createHash('sha256').update(attempt.key).digest('hex')]);
         if (!appointment || !booked.agendamento) throw Error('Conversation booking receipt missing');

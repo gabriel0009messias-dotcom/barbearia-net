@@ -96,7 +96,7 @@ test('Agenda: filtros, conclusão segura, profissionais, financeiro e responsivi
     assert.match(await page.$eval(`[data-agenda-booking="${cancelled}"]`,e=>e.textContent),/Cancelado/);
     await page.click(`[data-view-booking="${early}"]`);await page.waitForSelector('.agenda-dialog[open]');
     const details=await page.$eval('.agenda-dialog',e=>e.textContent);assert.match(details,/Cliente 08/);assert.match(details,/Ana/);assert.match(details,/R\$\s30,00/);
-    await page.click('.agenda-dialog button');
+    await page.click('[data-close-details]');
     await page.screenshot({path:path.join(folder,`agenda-${width}.png`),fullPage:true});
     await filter('proximos');
     const expected=(await req('/studiofy/painel',a.token)).data.agendamentos.filter(x=>x.futuro&&x.status==='confirmado').map(x=>x.id);
@@ -108,12 +108,15 @@ test('Agenda: filtros, conclusão segura, profissionais, financeiro e responsivi
    }
    await filter('todos');page.once('dialog',dialog=>dialog.accept());await page.select(`[data-status="${viaUI}"]`,'concluido');
    await page.waitForFunction(id=>document.querySelector(`[data-agenda-booking="${id}"] .status-concluido`),{},viaUI);
-   await openMobileMenu(page);await page.click('[data-section="Financeiro"]');await page.waitForSelector('#view table');
-   assert.match(await page.$eval('#view',e=>e.textContent),/R\$\s70,00/);
+   await openMobileMenu(page);await page.click('[data-section="Financeiro"]');await page.waitForSelector('[data-finance="total"]');
+   assert.match(await page.$eval('[data-finance="total"]',e=>e.textContent),/R\$\s70,00/);
    await openMobileMenu(page);await page.click('[data-section="Agendamentos"]');await page.click('#agendaMode');
    for(let i=0;i<2&&!await page.$(`[data-calendar-booking="${tomorrowB}"]`);i++)await page.click('#nextWeek');
-   const boxes=await page.evaluate(([a,b])=>[a,b].map(id=>{const r=document.querySelector(`[data-calendar-booking="${id}"]`).getBoundingClientRect();return {left:r.left,right:r.right};}),[tomorrowA,tomorrowB]);
-   assert.ok(boxes[0].right<=boxes[1].left || boxes[1].right<=boxes[0].left,'Profissionais simultâneos não se sobrepõem');
+   for(const [professional,visible,hidden] of [[a.professional,tomorrowA,tomorrowB],[second.data.id,tomorrowB,tomorrowA]]){
+    await page.select('#agendaProfessional',String(professional));
+    assert.ok(await page.$(`[data-calendar-booking="${visible}"]`));
+    assert.equal(await page.$(`[data-calendar-booking="${hidden}"]`),null);
+   }
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
    assert.deepEqual(errors,[]);
   }finally{await browser.close();}

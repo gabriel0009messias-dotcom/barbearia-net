@@ -100,9 +100,11 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     assert.equal((await checkout.json()).plan.amountCents, 6500);
     assert.deepEqual(await list(), []);
   });
+  const approvedAt = new Date().toISOString();
+  const expectedDue = new Date(Date.parse(approvedAt) + 30 * 86400000).toISOString().slice(0, 10);
   const notify = async status => {
     payment = { id: 12345, status, currency_id: 'BRL', transaction_amount: 65, live_mode: false,
-      external_reference: preference.external_reference, date_approved: '2026-09-15T12:00:00Z' };
+      external_reference: preference.external_reference, date_approved: approvedAt };
     const ts = String(Date.now());
     const requestId = 'listing-webhook';
     const signature = crypto.createHmac('sha256', process.env.MERCADO_PAGO_WEBHOOK_SECRET)
@@ -129,7 +131,7 @@ test('listagem administrativa exige pagamento aprovado ou liberacao manual', asy
     assert.ok(!(await groups()).pendentes.some(row => row.id === ids[0]));
     assert.equal((await request('/barbeiro/login', 'POST', { identificador: 'list1@example.test', senha: 'test-password' })).status, 200);
     const row = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1', [ids[0]]);
-    assert.equal(row.proximo_vencimento, '2026-10-15');
+    assert.equal(row.proximo_vencimento, expectedDue);
     assert.equal(row.bloqueado, 0);
     await notify('approved');
     assert.deepEqual((await list()).map(row => row.id), [ids[0]]);

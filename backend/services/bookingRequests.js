@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const { fail } = require('./studiofy');
 const { createPublicBookings } = require('./publicBookings');
 const { captureBookingConfirmation } = require('./bookingConfirmation');
-const { classifyBrazilianDestination } = require('./whatsapp/phone');
+const { classifyBrazilianDestination, isBrazilianWhatsAppIdentity } = require('./whatsapp/phone');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function requestIdentity(key, tenant, body) {
@@ -16,8 +16,19 @@ function requestIdentity(key, tenant, body) {
 
 // Must run inside the existing serialized booking transaction. The receipt,
 // appointment and cancellation capability commit or roll back together.
-async function confirmBooking(connection, studio, tenant, body, key) {
- const phoneRouting = classifyBrazilianDestination(body.telefone);
+async function confirmBooking(connection, studio, tenant, body, key, conversationActionId) {
+ let phoneRouting = classifyBrazilianDestination(body.telefone);
+ // Internal capability supplied by the conversation engine, never request JSON.
+ // Bind it to the persisted action before accepting the provider's exact PN.
+ if (conversationActionId !== undefined) {
+  const action = await connection.getAsync(`SELECT x.id FROM whatsapp_conversation_actions x
+   JOIN whatsapp_conversations c ON c.id=x.conversation_id AND c.assinatura_id=x.assinatura_id
+   WHERE x.id=$1 AND x.assinatura_id=$2 AND x.sender=$3 AND x.booking_key=$4
+    AND x.booking_body=$5::jsonb AND c.sender=x.sender AND c.owner_epoch=x.owner_epoch`,
+   [conversationActionId,tenant,body.telefone,key,JSON.stringify(body)]);
+  if (!action || !isBrazilianWhatsAppIdentity(body.telefone)) fail('Identidade WhatsApp inválida.',400);
+  phoneRouting = {state:'routable',destination:body.telefone,identity:'whatsapp',actionId:action.id};
+ }
  if (key === undefined) {
   const booking = await studio.book(tenant, body), access = createPublicBookings(connection);
   const token = await access.issue(booking.id);
@@ -33,6 +44,9 @@ async function confirmBooking(connection, studio, tenant, body, key) {
   return {token:identity.token, agendamento:await access.get(identity.token)};
  }
  const booking = await studio.book(tenant, body);
+ if (conversationActionId !== undefined) await connection.runAsync(
+  'UPDATE whatsapp_conversation_actions SET appointment_id=$1 WHERE id=$2 AND assinatura_id=$3',
+  [booking.id,conversationActionId,tenant]);
  await access.issue(booking.id, identity.token);
  await connection.runAsync('INSERT INTO public_booking_requests (assinatura_id,key_hash,request_hash,appointment_id) VALUES ($1,$2,$3,$4)',[tenant,identity.keyHash,identity.requestHash,booking.id]);
  await captureBookingConfirmation(connection, tenant, booking.id, phoneRouting);
