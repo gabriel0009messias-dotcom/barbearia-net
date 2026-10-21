@@ -279,7 +279,7 @@ async function requestTransport(path, options = {}) {
     logEvolution('request_start', context);
     try {
       if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_CALLING_EVOLUTION', { requestId });
-      if (/^\/message\//i.test(endpoint)) require('./services/evolutionOwnershipOperation').assertEvolutionOperation(decodeURIComponent(endpoint.split('/')[3] || ''));
+      await require('./services/evolutionOwnershipOperation').authorizeEvolutionEffect(instance || '', { required: /^\/message\//i.test(endpoint) });
       transmitted = true;
       const response = await fetch(`${config.baseUrl}${path}`, {
         ...fetchOptions, redirect: 'manual', signal: /^\/message\//i.test(endpoint)

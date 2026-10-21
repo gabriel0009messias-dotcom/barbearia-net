@@ -61,6 +61,10 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
     for (let attempt = 0; attempt < 2; attempt++) {
       const row = await db.getAsync('SELECT * FROM ' + target + ' WHERE id=$1', [original.id]);
       if (!row || row.status !== 'sending' || !row.claim_token || row.claim_token !== original.claim_token || row.dispatch_started_at) return false;
+      if (row.operation_token) {
+        const authorization = await db.getAsync('SELECT a.authorization_state FROM "' + schema + '".evolution_execution_authorization_status a JOIN "' + schema + '".evolution_operation_executions e USING(execution_id) WHERE e.operation_token=$1', [row.operation_token]);
+        if (authorization?.authorization_state === 'UNKNOWN') return false;
+      }
       const sql = 'UPDATE ' + target + " SET status='pending',claim_token=$1,operation_token=NULL,claimed_at=NULL,last_error='Transport not started; safely deferred.'," +
         (table === 'whatsapp_messages' ? 'lease_until=$2' : 'next_attempt_at=$2') +
         " WHERE id=$3 AND claim_token IS NOT DISTINCT FROM $4::uuid AND status='sending' AND dispatch_started_at IS NULL AND operation_token IS NOT DISTINCT FROM $5::uuid RETURNING id";
@@ -76,6 +80,8 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         await operation().acknowledgeStoppedOperation(row.assinatura_id, row.operation_token, async client => {
           const current = (await client.query('SELECT * FROM ' + target + ' WHERE id=$1 FOR UPDATE', [row.id])).rows[0];
           if (!current || current.status !== 'sending' || current.claim_token !== row.claim_token || current.operation_token !== row.operation_token || current.dispatch_started_at) throw new Error('Delivery already started or revoked.');
+          const authorization = (await client.query('SELECT a.state,a.lease_until FROM "' + schema + '".evolution_execution_authorizations a JOIN "' + schema + '".evolution_operation_executions e USING(execution_id) WHERE e.operation_token=$1 FOR UPDATE OF a', [row.operation_token])).rows[0];
+          if (authorization && (authorization.state !== 'ACTIVE' || !(await client.query('SELECT $1::timestamptz>clock_timestamp() AS valid',[authorization.lease_until])).rows[0].valid)) throw new Error('Execution authorization unavailable.');
           const changed = await client.query(sql, values);
           if (changed.rowCount !== 1) throw new Error('Delivery recovery mismatch.');
         });
@@ -106,9 +112,13 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
     if (typeof token !== 'string' || !/^[a-f0-9-]{36}$/.test(token)) return;
     const acceptedAt = table === 'whatsapp_messages' ? 'CURRENT_TIMESTAMP::text' : 'CURRENT_TIMESTAMP';
     try {
+      // Capacity rejection precedes acquiring a new authorization. It retains
+      // the existing safe, unreserved pre-transport deferral behavior.
+      if ((executionSlots.get(db.pool) || 0) >= Math.max(0,(db.pool.options?.max || 5)-2)) throw new Error('Delivery execution capacity unavailable.');
       await operation().run(row.assinatura_id, async context => guardedTransport(context, async () => {
         if (!await validate()) return { status: 'failed', reason: 'Delivery no longer authorized.' };
         context.assertActive();
+        await context.authorizeEffect();
         // Write-ahead intent is the frontier: AFTER its commit HTTP may start.
         // A lost acknowledgement of this write never authorizes calling send.
         const started = await db.runAsync('UPDATE ' + target +
@@ -151,7 +161,7 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
     } catch (failure) {
       if (['INSTANCE_NOT_CONFIGURED','INSTANCE_INVALID','INSTANCE_OWNER_MISMATCH','INSTANCE_AMBIGUOUS','INSTANCE_INVALID_TENANT','INSTANCE_DELIVERY_CLAIM_MISMATCH'].includes(failure.code)) {
         await db.runAsync('UPDATE ' + target + " SET status='failed',last_error='Instance ownership could not be confirmed.' WHERE id=$1 AND claim_token=$2 AND status='sending' AND dispatch_started_at IS NULL",[row.id,token]);
-      } else if (!await recoverUnstarted(table, row)) {
+      } else if (failure.authorizationLost || !await recoverUnstarted(table, row)) {
         await db.runAsync('UPDATE ' + target + " SET status='uncertain',last_error='Operation requires explicit reconciliation.' WHERE id=$1 AND claim_token=$2 AND status='sending' AND (dispatch_started_at IS NOT NULL OR operation_token IS NOT NULL)",[row.id,token]);
       }
     }

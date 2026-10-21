@@ -90,8 +90,13 @@ test('OWN-AUD-01: atomic finalization and durable explicit reconciliation', { ti
     assert.equal((await state(row.id)).status, 'sent'); assert.equal((await owner()).operation_token, null);
   });
   await t.test('lost finalization COMMIT acknowledgement leaves sent and released together', async () => {
-    const row = await message(); let commits = 0;
-    const pool = wrappedPool(async (client, config) => { const result = await client.query(config); if (config.text === 'COMMIT' && ++commits === 2) throw Error('Synthetic acknowledgement loss'); return result; });
+    const row = await message(); let finalizing = false;
+    const pool = wrappedPool(async (client, config) => {
+      if (config.text.includes('SET operation_token=NULL,operation_started_at=NULL')) finalizing = true;
+      const result = await client.query(config);
+      if (config.text === 'COMMIT' && finalizing) { finalizing = false; throw Error('Synthetic acknowledgement loss'); }
+      return result;
+    });
     await createEvolutionDelivery({ ...db, pool }).dispatch('whatsapp_messages', row, accepted);
     assert.equal((await state(row.id)).status, 'sent'); assert.equal((await owner()).operation_token, null);
     await drain(() => assert.fail('accepted message cannot retry'));

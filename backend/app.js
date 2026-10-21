@@ -770,6 +770,7 @@ require('./database').ready.then(() => {
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
+    require('./services/evolutionOwnershipOperation').stopExecutionAuthorization();
     webhookTimer.stop(); clearInterval(reminderTimer);
     const closing = new Promise(resolve => server.close(resolve));
     try { await closing; await require('./database').close(); }

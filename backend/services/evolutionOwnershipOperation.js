@@ -2,7 +2,9 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const execution = new AsyncLocalStorage();
 const { randomUUID } = require('node:crypto');
 const { createEvolutionOwnershipResolver } = require('./evolutionOwnership');
-const { deliveryIdentity, registerExecution } = require('./executionLifecycle');
+const { deliveryIdentity, registerExecution, checkAuthorization } = require('./executionLifecycle');
+let shuttingDown = false;
+function stopExecutionAuthorization() { shuttingDown = true; }
 const error = code => Object.assign(new Error('Evolution ownership operation could not be completed.'), { code });
 
 // Internal API only: callers provide an authenticated/internal tenant, never a
@@ -63,6 +65,7 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     });
   }
   async function run(tenant, operation, { timeoutMs = 5000, expectedInstance, onReserved, onCompleted, delivery } = {}) {
+    if (shuttingDown) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
     if (!Number.isSafeInteger(tenant) || tenant <= 0) throw error('INSTANCE_INVALID_TENANT');
     if ((onReserved !== undefined && typeof onReserved !== 'function') || (onCompleted !== undefined && typeof onCompleted !== 'function') || typeof operation !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15000) throw error('INSTANCE_INVALID_OPERATION');
     const binding = deliveryIdentity(delivery);
@@ -79,28 +82,72 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     // Reservation commits BEFORE invoking the operation. All association writers
     // are fenced by migration 018, even across models/processes or after a crash.
     const controller = new AbortController();
-    let timer, active = true;
+    let timer, heartbeatTimer, active = true, authorizationDenied = false, heartbeatInFlight;
     const assertActive = () => { if (!active || controller.signal.aborted) throw error('INSTANCE_OPERATION_EXPIRED'); };
+    const identity = Object.freeze({ ...owner, operationToken: token });
+    const authorization = async options => {
+      const allowed = await transaction(async client => {
+        const { record } = await locked(client, tenant, owner.instanceName);
+        if (record.operation_token !== token) return false;
+        if (options?.renew && (!active || shuttingDown)) return false;
+        const allowed = await checkAuthorization(client, schema, identity, binding, options);
+        if (options?.renew && (!active || shuttingDown)) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
+        return allowed;
+      });
+      return allowed;
+    };
+    const deny = () => { authorizationDenied = true; active = false; /* Never abort an already authorized HTTP call for lease loss. */ };
+    const authorizeEffect = async () => {
+      assertActive();
+      try {
+        if (shuttingDown || !await authorization()) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
+        if (shuttingDown) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
+        assertActive();
+      } catch { deny(); throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE'); }
+    };
+    const heartbeat = async () => {
+      if (!active || shuttingDown) { deny(); return; }
+      try { if (!await authorization({ renew: true })) deny(); }
+      catch { deny(); }
+    };
     try {
-      const context = Object.freeze({ ...owner, operationToken: token, signal: controller.signal, assertActive });
+      const context = Object.freeze({ ...identity, signal: controller.signal, assertActive, authorizeEffect });
       const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
         active = false; controller.abort(); reject(error('INSTANCE_OPERATION_TIMEOUT'));
       }, timeoutMs); });
-      const result = await Promise.race([Promise.resolve().then(() => { assertActive(); return execution.run(context, () => operation(context)); }), timeout]);
+      heartbeatTimer = setInterval(() => {
+        if (!heartbeatInFlight) heartbeatInFlight = heartbeat().finally(() => { heartbeatInFlight = undefined; });
+      }, 3000);
+      heartbeatTimer.unref();
+      const result = await Promise.race([Promise.resolve().then(async () => { await authorizeEffect(); return execution.run(context, () => operation(context)); }), timeout]);
       assertActive(); active = false; clearTimeout(timer);
       // Transport has ended. Finalize its persisted result and release the fence
       // in ONE short, SQL-only transaction, bounded by the database timeouts.
       // A failure rolls back both facts; a lost COMMIT acknowledgement cannot
       // leave a terminal delivery with an orphan reservation.
-      await release(tenant, token, onCompleted && (client => onCompleted(client, { ...owner, operationToken: token }, result)));
+      await release(tenant, token, async client => {
+        if (onCompleted) await onCompleted(client, { ...owner, operationToken: token }, result);
+        // Successful existing finalization ends authorization, not evidence of
+        // executor death. It commits together with result/fence finalization.
+        await client.query('UPDATE ' + s + ".evolution_execution_authorizations SET state='UNKNOWN' WHERE execution_id=$1 AND state='ACTIVE'", [owner.executionId]);
+      });
       return result;
     } catch (cause) {
       // An exception/timeout may follow provider acceptance. Do not expire or
       // silently release this durable fence. No retry or new owner is authorized.
+      active = false;
+      // Best effort persistence only. Failure cannot restore local authority or
+      // release a fence. The effective-state view also handles crashed processes.
+      // Other errors may be conclusively PRE-TRANSPORT. Preserve the existing
+      // atomic claim-revocation recovery, which now also checks permission.
+      if (authorizationDenied || !binding) {
+        try { await authorization({ revoke: true }); } catch { /* PostgreSQL may be unavailable. */ }
+      }
       const failure = error(cause?.code === 'INSTANCE_OPERATION_TIMEOUT' ? 'INSTANCE_OPERATION_TIMEOUT' : 'INSTANCE_OPERATION_UNCERTAIN');
       failure.operationToken = token;
+      failure.authorizationLost = authorizationDenied;
       throw failure;
-    } finally { active = false; clearTimeout(timer); controller.abort(); }
+    } finally { active = false; clearTimeout(timer); clearInterval(heartbeatTimer); controller.abort(); }
   }
   // Privileged INTERNAL reconciliation only, after verifying the old execution
   // has stopped and its outcome. Never expose this as a customer HTTP endpoint,
@@ -123,4 +170,10 @@ function assertEvolutionOperation(instanceName) {
   context.assertActive();
   return context;
 }
-module.exports = { createEvolutionOwnershipOperation, assertEvolutionOperation };
+async function authorizeEvolutionEffect(instanceName, { required = true } = {}) {
+  if (!execution.getStore() && !required) return null; // Existing non-execution callers.
+  const context = assertEvolutionOperation(instanceName);
+  await context.authorizeEffect();
+  return context;
+}
+module.exports = { createEvolutionOwnershipOperation, assertEvolutionOperation, authorizeEvolutionEffect, stopExecutionAuthorization };

@@ -224,7 +224,9 @@ test('public booking confirmation: committed snapshots and the existing protecte
   });
   await t.test('post-frontier timeout retains fence; late acceptance cannot retry or alter appointment', async () => {
     const row = await booking(); await materializeBookingConfirmations(db); const queued = await claim(await message(row.id)); let finish, calls = 0;
-    await createEvolutionDelivery(db, { timeoutMs: 25 }).dispatch('whatsapp_messages', queued, () => { calls++; return new Promise(resolve => { finish = resolve; }); });
+    // Exercise a deadline AFTER HTTP starts, rather than assuming all durable
+    // authorization transactions finish within an incidental 25ms budget.
+    await createEvolutionDelivery(db, { timeoutMs: 1000 }).dispatch('whatsapp_messages', queued, () => { calls++; return new Promise(resolve => { finish = resolve; }); });
     assert.equal((await message(row.id)).status, 'uncertain'); assert.ok((await accountFence(a)).operation_token);
     finish(accepted()); await new Promise(resolve => setImmediate(resolve)); await webhook.drain(() => assert.fail());
     const uncertain = await message(row.id); await delivery.reconcile('whatsapp_messages', uncertain.id, a.id, uncertain.operation_token, { stopped: true, outcome: 'accepted' });

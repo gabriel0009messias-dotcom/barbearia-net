@@ -82,7 +82,8 @@ test('execution lifecycle Stage 1: durable identity without new recovery semanti
       "started_at=started_at+interval '1 second'", "service_id='other'", "deployment_id='other'", "instance_id='other'", "revision='other'"])
       await assert.rejects(q('UPDATE evolution_executors SET ' + expression + ' WHERE executor_id=$1', [e.executor_id]), error => error.code === '23514');
     await assert.rejects(q('DELETE FROM evolution_operation_executions WHERE execution_id=$1', [e.execution_id]), error => error.code === '23514');
-    await assert.rejects(q('TRUNCATE evolution_operation_executions'), error => error.code === '23514');
+    await assert.rejects(q('TRUNCATE evolution_operation_executions'), error => ['23514','0A000'].includes(error.code));
+    await assert.rejects(q('TRUNCATE evolution_operation_executions CASCADE'), error => error.code === '23514');
     await assert.rejects(q('DELETE FROM evolution_executors WHERE executor_id=$1', [e.executor_id]));
     assert.deepEqual(await execution(successful.id), e);
   });

@@ -69,7 +69,7 @@ test('execution foundation migration: upgrade, rollback, legacy preservation and
     assert.deepEqual(await snapshot(),before);
     for (const table of ['evolution_executors','evolution_operation_executions'])
       assert.equal((await pool.query('SELECT count(*)::int n FROM ' + table)).rows[0].n,0);
-    assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(r => r.name),[...oldNames,filename]);
+    assert.deepEqual((await pool.query('SELECT name FROM schema_migrations ORDER BY name')).rows.map(r => r.name),fs.readdirSync(directory).filter(name => name.endsWith('.sql')).sort());
     const afterColumns = (await pool.query("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name=ANY($2::text[]) ORDER BY table_name,ordinal_position", [env.schema,tables])).rows;
     assert.deepEqual(afterColumns,columns);
     for (const name of oldNames) assert.equal((await pool.query('SELECT checksum FROM schema_migrations WHERE name=$1',[name])).rows[0].checksum,
