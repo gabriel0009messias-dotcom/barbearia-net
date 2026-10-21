@@ -61,6 +61,9 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     return transaction(async client => {
       const { record } = await locked(client, tenant);
       if (record.operation_token !== operationToken) throw error('INSTANCE_OPERATION_MISMATCH');
+      // No-op for current/unbound boots. Bound boots lock delivery/correlation
+      // before gate and authorization; proof acceptance never locks business rows.
+      await client.query('SELECT ' + s + '.studiofy_execution_lock_finalization($1)', [operationToken]);
       if (reconcile !== undefined) {
         if (typeof reconcile !== 'function') throw error('INSTANCE_INVALID_OPERATION');
         await reconcile(client);

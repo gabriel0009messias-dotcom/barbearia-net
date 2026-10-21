@@ -89,6 +89,10 @@ async function checkAuthorization(client, schema, context, delivery, { renew = f
   delivery = deliveryIdentity(delivery === null ? undefined : delivery);
   const s = '"' + schema + '"', identity = processIdentity();
   if (context.executorId !== identity.executorId || context.bootId !== identity.bootId) return false;
+  // 3B.1 is dormant for unbound boots. For explicitly enrolled executors,
+  // acquire the gate BEFORE SELECT FOR UPDATE of authorization.
+  await client.query('SELECT ' + s + '.studiofy_execution_lock_gate($1,$2)',
+    [context.executorId, revoke ? 'revoke' : renew ? 'renew' : 'boundary']);
   const found = await client.query('SELECT a.state,a.lease_until>clock_timestamp() AS valid FROM ' + s + '.evolution_execution_authorizations a' +
     ' JOIN ' + s + '.evolution_operation_executions e USING(execution_id)' +
     ' JOIN ' + s + '.evolution_executors x USING(executor_id)' +

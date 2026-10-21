@@ -76,9 +76,16 @@ test('Evolution ownership operation: durable fencing, deadlines and explicit rec
     await operation.acknowledgeStoppedOperation(806, failure.operationToken); assert.equal((await record(806)).operation_token, null);
     await assert.rejects(operation.acknowledgeStoppedOperation(806, failure.operationToken), { code: 'INSTANCE_OPERATION_MISMATCH' });
   });
-  await t.test('timeout is bounded even for uncooperative callback; durable fence survives deadline until verified stop', async () => {
-    let context, finish; const pending = new Promise(resolve => { finish = resolve; }); const start = Date.now();
-    let failure; try { await operation.run(806, async value => { context = value; await pending; }, { timeoutMs: 25 }); } catch (error) { failure = error; }
+  await t.test('timeout is bounded even for uncooperative callback; durable fence survives deadline until verified stop', async sub => {
+    let context, finish, enter; const pending = new Promise(resolve => { finish = resolve; });
+    const entered = new Promise(resolve => { enter = resolve; }); const start = Date.now();
+    sub.after(async () => { finish(); await new Promise(resolve => setImmediate(resolve)); });
+    // Exercise an ACTIVE uncooperative callback, not a deadline exhausted by SQL
+    // authorization before entry. Keep the existing 1500ms total upper bound.
+    const result = operation.run(806, async value => { context = value; enter(); await pending; }, { timeoutMs: 500 })
+      .then(() => assert.fail('Uncooperative callback must time out'), error => error);
+    await Promise.race([entered, result.then(error => { throw error; })]);
+    const failure = await result;
     assert.equal(failure.code, 'INSTANCE_OPERATION_TIMEOUT'); assert.ok(Date.now() - start < 1500); assert.equal(context.signal.aborted, true);
     assert.throws(() => context.assertActive(), { code: 'INSTANCE_OPERATION_EXPIRED' });
     await new Promise(resolve => setTimeout(resolve, 50));
