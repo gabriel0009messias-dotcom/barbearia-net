@@ -258,9 +258,9 @@ test('public booking confirmation: committed snapshots and the existing protecte
     } finally { await connection.query('ROLLBACK'); connection.release(); }
   });
   await t.test('HTTP booking does not wait for Evolution even while a transport is stalled', async () => {
-    const first = await booking(); let enter, finish;
+    const first = await booking(); let enter, finish, calls=0;
     const entered = new Promise(resolve => { enter = resolve; });
-    const worker = webhook.drain(() => { enter(); return new Promise(resolve => { finish = resolve; }); });
+    const worker = webhook.drain(() => { if (++calls>1) return accepted(); enter(); return new Promise(resolve => { finish = resolve; }); });
     await entered;
     try {
       let timer;
