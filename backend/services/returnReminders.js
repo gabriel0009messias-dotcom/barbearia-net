@@ -93,11 +93,13 @@ function createReturnReminderWorker(db, {
     if (stopped) return Promise.resolve([]);
     if (!active) {
       const task = scope.admit('return.materialize', run);
-      active = task.finally(() => { active = undefined; });
+      if (!task.completion) return task;
+      active = { result: task, completion: task.completion };
+      task.completion.then(() => { active = undefined; });
     }
-    return active;
+    return active.result;
   }
-  async function stop() { stopped = true; await active; }
+  async function stop() { stopped = true; await active?.completion; }
   return { drain, stop };
 }
 function materializeReturnReminders(db, options) { return createReturnReminderWorker(db, options).drain(); }
@@ -121,6 +123,7 @@ async function validateReturnReminder(db, row, { schema = process.env.DATABASE_S
 }
 
 function startWorker(db, options = {}) {
+  scope.assertOpen();
   if (registry.has(db)) return registry.get(db);
   const worker = createReturnReminderWorker(db, options);
   let stopped = false;
@@ -133,11 +136,11 @@ function startWorker(db, options = {}) {
     return task;
   };
   const timer = setInterval(run, INTERVAL_MS); timer.unref();
-  const handle = { stop: async () => {
+  const handle = { stop: require('./executionCapabilities').coordinatorFor(scope).register('scheduler.return-reminders', async () => {
     stopped = true; clearInterval(timer);
     try { await worker.stop(); await Promise.all([...completions]); }
     finally { registry.delete(db); }
-  } };
+  }) };
   registry.set(db, handle); run(); return handle;
 }
 module.exports = { createReturnReminderWorker, materializeReturnReminders, validateReturnReminder, startWorker, inProcessingWindow, INTERVAL_MS };

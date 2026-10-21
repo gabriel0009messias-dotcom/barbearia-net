@@ -19,7 +19,7 @@ function registerTemporaryEvolutionWebhookAdmin(router, requireAdmin) {
       status(code) { res.status(code); return this; },
       json() { return res.json({ autorizado: false }); },
     }, next);
-  }, async (req, res) => {
+  }, (req, res) => require('./services/executionScope').executionScope.admit('whatsapp.admin-handler', async () => {
     if (Object.keys(req.query || {}).length ||
         (req.body != null && (typeof req.body !== 'object' ||
           Array.isArray(req.body) || Object.keys(req.body).length))) {
@@ -70,7 +70,7 @@ function registerTemporaryEvolutionWebhookAdmin(router, requireAdmin) {
     } finally {
       busy = false;
     }
-  });
+  }).catch(() => res.status(503).json({ autorizado: true, verificacaoConcluida: false })));
 }
 
 module.exports = { registerTemporaryEvolutionWebhookAdmin };

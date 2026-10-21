@@ -87,8 +87,10 @@ test('legacy bridge generic routes fail closed and private binding remains immut
 
 test('whatsappManager clears pairing state on synchronous and asynchronous SDK failures', async t => {
   const source=fs.readFileSync(path.resolve(__dirname,'../whatsappManager.js'),'utf8');
-  let mode='async'; const attached=[];
+  const localScope=require('../services/executionScope').createExecutionScope({certifiable:true});
+  let mode='async',creates=0; const attached=[];
   const sdk={create(options){
+    creates++;
     options.catchQR('data:image/png;base64,'+Buffer.from(privateText).toString('base64'));
     options.statusFind(privateText);
     const error=Object.assign(new Error(privateText), { diagnostic:{ qr:privateText }, cause:new Error(privateText), response:{ headers:privateText,body:privateText }, stack:privateText });
@@ -100,6 +102,7 @@ test('whatsappManager clears pairing state on synchronous and asynchronous SDK f
     if(name==='./whatsappError')return {safeWhatsappException};
     if(name==='./botFlow')return {attachBotHandlers(client,options){attached.push(options);}};
     if(name==='./whatsappBrowser')return {criarOpcoesWppconnect:options=>({...options,logQR:false})};
+    if(name==='./services/executionScope')return {executionScope:localScope};
     if(name==='@wppconnect-team/wppconnect')return sdk;
     throw Error('Unexpected dependency');
   },module:{exports:{}},Map,Date,Promise};
@@ -114,5 +117,11 @@ test('whatsappManager clears pairing state on synchronous and asynchronous SDK f
   await t.test('legitimate private local flow still connects without real SDK or messages',async()=>{
     mode='success';await manager.reiniciarSessao(806);
     assert.equal(manager.statusSessao(806).status,'conectado');assert.equal(manager.statusSessao(806).qrCode,null);assert.equal(attached[0].assinaturaId,806);assertClean(manager.statusSessao(806));
+  });
+  await t.test('legacy SDK blocks certification and cannot start after drain',async()=>{
+    assert.ok(localScope.snapshot().certificationBlocked.includes('LEGACY_PROVIDER_OUTSIDE_CERTIFIED_PROFILE'));
+    localScope.beginDrain();const before=creates;
+    await assert.rejects(manager.reiniciarSessao(807),{code:'WHATSAPP_LOCAL_START_FAILED'});
+    assert.equal(creates,before);await localScope.drain();assert.throws(localScope.sealClosedScope);
   });
 });

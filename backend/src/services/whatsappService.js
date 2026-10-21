@@ -133,6 +133,6 @@ async function startInternal(salonId) {
 }
 
 module.exports = {
-  getStatus,
-  start,
+  getStatus: (...args) => require('../../services/executionSql').accounting.run('whatsapp.alternative-status', () => getStatus(...args)),
+  start: (...args) => require('../../services/executionSql').accounting.run('whatsapp.alternative-start', () => start(...args)),
 };

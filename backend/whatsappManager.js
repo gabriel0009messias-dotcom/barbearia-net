@@ -7,6 +7,9 @@ let wppconnectInstance = null;
 const SESSION_START_TIMEOUT_MS = 45000;
 
 function obterWppconnect() {
+  const scope = require('./services/executionScope').executionScope;
+  scope.assertOpen();
+  scope.blockCertification('LEGACY_PROVIDER_OUTSIDE_CERTIFIED_PROFILE');
   if (!wppconnectInstance) {
     // Carrega o WPPConnect somente quando alguem realmente iniciar uma sessao.
     wppconnectInstance = require('@wppconnect-team/wppconnect');

@@ -11,7 +11,7 @@ const {localMoment,appointmentPermissions,appointmentId,transitionAppointment}=r
 const {createStudio,serviceInput,image,validateHours,validDate,time,text,fail,effectiveHours}=require('./services/studiofy');
 module.exports=function studioRoutes(db,auth,access) {
  const router=express.Router();
- const wrap=fn=>async(req,res)=>{try{await fn(req,res);}catch(e){res.status(e.code==='23505'?409:e.statusCode || 500).json({error:e.code==='23505'?'Horário ou link já utilizado.':e.statusCode?e.message:'Não foi possível concluir a operação.',...(e.publicCode==='TELEFONE_JA_UTILIZADO'?{code:e.publicCode}:{})});}};
+ const wrap=fn=>async(req,res)=>{try{await require('./services/executionSql').accounting.run('booking.http-handler',()=>fn(req,res));}catch(e){res.status(e.code==='23505'?409:e.statusCode || 500).json({error:e.code==='23505'?'Horário ou link já utilizado.':e.statusCode?e.message:'Não foi possível concluir a operação.',...(e.publicCode==='TELEFONE_JA_UTILIZADO'?{code:e.publicCode}:{})});}};
  const tx=fn=>db.transaction(c=>fn(createStudio(c),c));
  const publicTenant=async slug=>{
   const a=await db.getAsync("SELECT * FROM assinaturas WHERE COALESCE(public_slug,'studio-' || id)=$1",[slug]);

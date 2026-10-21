@@ -220,7 +220,7 @@ async function upstream429Body(response) {
     return { body: '[BODY OMITTED: read failure]', bodyTruncated: true };
   } finally {
     clearTimeout(timer);
-    if (reader) scope.follow('evolution.body-cancel', () => reader.cancel()).catch(() => {});
+    if (reader) scope.follow('evolution.body-cancel', () => reader.cancel()).catch(() => scope.blockCertification('TRANSPORT_CLEANUP_UNCONFIRMED'));
   }
 }
 
@@ -280,7 +280,7 @@ async function requestTransportBody(path, options = {}) {
     const statusBeforeTransport = instance ? statusCache.get(connectionKey(instance)) : null;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), budget);
-    let httpStatus = null, transmitted = false;
+    let httpStatus = null, transmitted = false, responseComplete = false;
     const context = { ...requestContext.current(), requestId, endpoint, instance, instanceName: instance, method: fetchOptions.method || 'GET', attempt,
       origin: new URL(config.baseUrl).origin, timeoutMs: budget };
     logEvolution('request_start', context);
@@ -326,6 +326,7 @@ async function requestTransportBody(path, options = {}) {
         throw Object.assign(createEvolutionError(message, status, code), { upstreamStatus: httpStatus, upstreamDiagnostic });
       }
       const raw = await response.text();
+      responseComplete = true;
       let payload;
       try { payload = JSON.parse(raw); }
       catch { payload = { nonJson: true, body: raw }; }
@@ -341,6 +342,9 @@ async function requestTransportBody(path, options = {}) {
       if (endpoint.startsWith('/instance/delete/') && instance) invalidarExistenciaInstancia(instance);
       return payload;
     } catch (original) {
+      if (transmitted && !responseComplete) {
+        scope.blockCertification('TRANSPORT_TERMINATION_UNCONFIRMED');
+      }
       let error = original;
       if (original.name === 'AbortError' || original.name === 'TimeoutError') {
         error = createEvolutionError('Tempo limite excedido ao acessar a Evolution API.', 504, 'EVOLUTION_TIMEOUT');

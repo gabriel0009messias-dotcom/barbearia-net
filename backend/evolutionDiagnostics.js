@@ -79,7 +79,7 @@ async function readSafeBody(response) {
     return { body: '[BODY OMITTED: read failure]', bodyTruncated: true, bodyOmitted: true };
   } finally {
     clearTimeout(timer);
-    if (reader) scope.follow('evolution.diagnostic-cancel', () => reader.cancel()).catch(() => {});
+    if (reader) scope.follow('evolution.diagnostic-cancel', () => reader.cancel()).catch(() => scope.blockCertification('TRANSPORT_CLEANUP_UNCONFIRMED'));
   }
 }
 

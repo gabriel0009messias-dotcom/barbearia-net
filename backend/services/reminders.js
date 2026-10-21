@@ -74,6 +74,7 @@ function createReminderWorker(db, send, clock) {
 const workerStatus={startedAt:null,lastCompletedAt:null,lastErrorAt:null,running:false};
 function getWorkerStatus() { return {...workerStatus}; }
 function startWorker(db, { drain: customDrain, intervalMs = 1000, taskScope = scope } = {}) {
+ taskScope.assertOpen();
  const worker=createReminderWorker(db,require('../evolutionApi').enviarTextoInstancia);
  let running=false, stopped=false, flight;
  const completions=new Set();
@@ -91,7 +92,7 @@ function startWorker(db, { drain: customDrain, intervalMs = 1000, taskScope = sc
   return flight;
  };
  run();const timer=setInterval(run,intervalMs);timer.unref();
- timer.stop=()=>{stopped=true;clearInterval(timer);return Promise.all([...completions]);};
+ timer.stop=require('./executionCapabilities').coordinatorFor(taskScope).register('scheduler.reminders',()=>{stopped=true;clearInterval(timer);return Promise.all([...completions]);});
  return timer;
 }
 module.exports={createReminderWorker,startWorker,getWorkerStatus};

@@ -1,7 +1,8 @@
 const { Pool } = require('pg');
 const { connectionConfig } = require('./config');
 const { migrate } = require('./migrate');
-const pool = new Pool(connectionConfig());
+const { accounting } = require('../services/executionSql');
+const pool = accounting.wrapPool(new Pool(connectionConfig()));
 pool.on('error', error => console.error('[database] Conexao PostgreSQL interrompida', { code: error.code || 'CONNECTION_ERROR' }));
 
 function access(query) {
@@ -16,15 +17,18 @@ function access(query) {
   };
   api.run = (sql, params, callback) => {
     if (typeof params === 'function') { callback = params; params = []; }
-    api.runAsync(sql, params).then(result => callback?.call(result, null), error => callback?.(error));
+    if (callback) callback = accounting.bindCallback(callback);
+    accounting.run('sql.adapter-callback', () => api.runAsync(sql, params).then(result => callback?.call(result, null), error => callback?.(error))).catch(() => {});
   };
   api.get = (sql, params, callback) => {
     if (typeof params === 'function') { callback = params; params = []; }
-    api.getAsync(sql, params).then(row => callback?.(null, row), error => callback?.(error));
+    if (callback) callback = accounting.bindCallback(callback);
+    accounting.run('sql.adapter-callback', () => api.getAsync(sql, params).then(row => callback?.(null, row), error => callback?.(error))).catch(() => {});
   };
   api.all = (sql, params, callback) => {
     if (typeof params === 'function') { callback = params; params = []; }
-    api.allAsync(sql, params).then(rows => callback?.(null, rows), error => callback?.(error));
+    if (callback) callback = accounting.bindCallback(callback);
+    accounting.run('sql.adapter-callback', () => api.allAsync(sql, params).then(rows => callback?.(null, rows), error => callback?.(error))).catch(() => {});
   };
   return api;
 }
@@ -33,7 +37,7 @@ const db = access(async (sql, params) => { await ready; return pool.query(sql, p
 db.ready = ready;
 db.pool = pool;
 db.dialect = 'postgres';
-db.transaction = async (callback, { serialize = true } = {}) => {
+db.transaction = (callback, { serialize = true } = {}) => accounting.run('sql.transaction-body', async () => {
   await ready;
   const client = await pool.connect();
   try {
@@ -45,7 +49,7 @@ db.transaction = async (callback, { serialize = true } = {}) => {
     return result;
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
-};
+});
 db.close = callback => {
   const closing = ready.catch(() => {}).then(() => pool.end());
   if (callback) closing.then(() => callback(null), callback);

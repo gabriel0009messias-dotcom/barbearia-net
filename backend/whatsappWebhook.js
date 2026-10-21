@@ -253,7 +253,7 @@ async function handleWhatsappWebhook({
 }
 
 module.exports = {
-  handleWhatsappWebhook,
+  handleWhatsappWebhook: (...args) => require('./services/executionSql').accounting.run('webhook.legacy-handler', () => handleWhatsappWebhook(...args)),
   processarMensagemWhatsapp,
   sendMessage,
 };

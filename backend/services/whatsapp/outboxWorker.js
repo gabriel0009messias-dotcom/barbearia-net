@@ -1,6 +1,7 @@
 // Wakeups share one drain in this process. Durable claims and ownership remain
 // responsible for safety across processes; periodic polling recovers missed work.
 function createOutboxWorker(drain, { intervalMs = 15000, errorDelayMs = 1000, timers = globalThis, onError = () => {}, scope = require('../executionScope').executionScope } = {}) {
+  scope.assertOpen();
   let running = false, requested = false, stopped = false, scheduled = null, retryAt = 0;
   let flight;
   const completions = new Set();
@@ -25,7 +26,8 @@ function createOutboxWorker(drain, { intervalMs = 15000, errorDelayMs = 1000, ti
     return flight;
   }
   const timer = timers.setInterval(wake, intervalMs); timer?.unref?.();
-  const stop = () => { stopped = true; requested = false; timers.clearInterval(timer); if (scheduled !== null) timers.clearTimeout(scheduled); scheduled = null; return Promise.all([...completions]); };
+  const stopScheduling = () => { stopped = true; requested = false; timers.clearInterval(timer); if (scheduled !== null) timers.clearTimeout(scheduled); scheduled = null; return Promise.all([...completions]); };
+  const stop = require('../executionCapabilities').coordinatorFor(scope).register('scheduler.outbox', stopScheduling);
   wake();
   return { wake, stop };
 }

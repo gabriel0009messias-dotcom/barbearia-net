@@ -1,12 +1,18 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
+const { performance } = require('node:perf_hooks');
 
 const admissionError = () => Object.assign(new Error('Executor admission is closed.'), { code: 'INSTANCE_ADMISSION_CLOSED' });
 
 // Local structured accounting, NOT evidence of process death. No persistence,
 // STOPPED, transport outcome, token release or recovery belongs to this module.
-function createExecutionScope() {
+function createExecutionScope({ certifiable = false, runtimeProfile = 'evolution-single-process-v1' } = {}) {
+  if (typeof certifiable !== 'boolean' || runtimeProfile !== 'evolution-single-process-v1') throw Error('Unsupported execution profile.');
   const storage = new AsyncLocalStorage(), tasks = new Map(), history = [], waiters = new Set();
+  const capabilities = new Map(), obligations = new Map(), blockers = new Set();
+  const registeredKinds = new Set();
+  let requiredKinds = [];
+  let seal, generation = 0;
   let state = 'OPEN', executor, draining = false;
   const describe = task => Object.freeze({
     taskId: task.id, parentTaskId: task.parent?.id || null, kind: task.kind,
@@ -15,7 +21,7 @@ function createExecutionScope() {
     state: task.ownSettled ? 'WAITING_FOR_CHILDREN' : 'RUNNING',
   });
   const notify = () => {
-    if (draining && tasks.size === 0) {
+    if (draining && tasks.size === 0 && (!certifiable || (capabilities.size === 0 && obligations.size === 0))) {
       state = 'CLOSED';
       for (const resolve of waiters) resolve(true);
       waiters.clear();
@@ -40,7 +46,7 @@ function createExecutionScope() {
     if (canAdmit !== undefined && typeof canAdmit !== 'function') throw Error('Invalid task admission guard.');
     const parent = storage.getStore();
     canAdmit = parent?.canAdmit || canAdmit;
-    if (state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
+    if ((certifiable && continuation && !parent) || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
         (state !== 'OPEN' && (!continuation || !parent)) ||
         (!continuation && canAdmit && !canAdmit())) return Promise.reject(admissionError());
     let resolveCompletion;
@@ -60,7 +66,57 @@ function createExecutionScope() {
     result.catch(() => {});
     return result;
   }
-  const beginDrain = () => { if (state === 'OPEN') state = 'DRAINING'; return state; };
+  const beginDrain = () => { if (state === 'OPEN') { state = 'DRAINING'; generation++; } return state; };
+  function assertContinuation() {
+    const parent = storage.getStore();
+    if (seal || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
+        (state !== 'OPEN' && !parent)) throw admissionError();
+  }
+  function obligation(kind) {
+    assertContinuation();
+    const id = randomUUID(); obligations.set(id, kind);
+    let done = false, unknown = false;
+    return Object.freeze({
+      finish() { if (!done && !unknown) { done = true; obligations.delete(id); notify(); } },
+      unknown(reason = 'CERTIFICATION_BLOCKED_UNKNOWN_SQL') {
+        unknown = true; blockers.add(reason); // Irreversible for this boot, even after later ROLLBACK.
+        if (!done) obligations.set(id, 'unknown.' + kind);
+      },
+    });
+  }
+  function registerCapability(kind) {
+    assertOpen();
+    registeredKinds.add(kind);
+    const id = randomUUID(); capabilities.set(id, kind);
+    let closed = false;
+    return Object.freeze({ close() { if (!closed) { closed = true; capabilities.delete(id); notify(); } } });
+  }
+  function sealClosedScope() {
+    if (seal) return seal;
+    if (!certifiable || state !== 'CLOSED' || !executor || tasks.size || capabilities.size || obligations.size || blockers.size || requiredKinds.some(kind => !registeredKinds.has(kind))) {
+      throw Object.assign(Error('Scope is not certifiably closed.'), { code: 'CERTIFICATION_BLOCKED' });
+    }
+    // No callbacks, getters supplied by callers, or await in this critical section.
+    const counters = Object.freeze({ active_tasks: 0, active_descendants: 0, active_transports: 0,
+      pending_callbacks: 0, pending_correlations: 0, pending_sql: 0, unresolved_sql: 0, capabilities: 0 });
+    seal = Object.freeze({ seal_id: randomUUID(), executor_id: executor.executorId, boot_id: executor.bootId,
+      protocol_version: 1, runtime_profile: runtimeProfile, closure_generation: generation,
+      admission_closed: true, scope_closed: true, counters, monotonic_ms: performance.now() });
+    return seal;
+  }
+  function enqueue(kind, work, { schedule = setImmediate, cancel = clearImmediate } = {}) {
+    let handle, cancelWork;
+    const result = track(kind, () => new Promise((resolve, reject) => {
+      let started = false;
+      cancelWork = () => { if (!started) { started = true; cancel(handle); resolve(); } };
+      handle = schedule(require('node:async_hooks').AsyncResource.bind(() => {
+        if (started) return;
+        started = true;
+        try { Promise.resolve(work()).then(resolve, reject); } catch (error) { reject(error); }
+      }));
+    }), true);
+    return Object.freeze({ result, completion: result.completion, cancel: () => cancelWork?.() });
+  }
   async function drain({ timeoutMs } = {}) {
     if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0)) throw Error('Invalid drain timeout.');
     beginDrain(); draining = true; notify();
@@ -74,8 +130,10 @@ function createExecutionScope() {
     } finally { clearTimeout(timer); waiters.delete(resolveWait); }
   }
   function setExecutor(identity) {
+    if (seal || state === 'CLOSED') throw admissionError();
     if (!identity?.executorId || !identity?.bootId || (executor &&
       (executor.executorId !== identity.executorId || executor.bootId !== identity.bootId))) throw Error('Executor identity mismatch.');
+    if (typeof identity.executorId !== 'string' || typeof identity.bootId !== 'string') throw Error('Invalid executor identity.');
     executor = Object.freeze({ executorId: identity.executorId, bootId: identity.bootId });
     const task = storage.getStore(); if (task) task.executorId = executor.executorId;
   }
@@ -90,8 +148,20 @@ function createExecutionScope() {
     // creation context. OPEN is still mandatory; this cannot bypass shutdown.
     admitRoot: (kind, work, { canAdmit } = {}) => storage.run(undefined, () => track(kind, work, false, canAdmit)),
     follow: (kind, work) => track(kind, work, true),
-    assertOpen, isOpen, beginDrain, drain, setExecutor, bindExecution,
+    assertOpen, isOpen, beginDrain, drain, setExecutor, bindExecution, assertContinuation,
+    obligation, registerCapability, sealClosedScope, enqueue,
+    ownsSeal: candidate => seal !== undefined && candidate === seal,
+    blockCertification: reason => { blockers.add(String(reason)); },
+    certifyProfile: ({ requiredCapabilities = [] } = {}) => {
+      assertOpen();
+      if (!Array.isArray(requiredCapabilities) || requiredCapabilities.some(kind => typeof kind !== 'string')) throw Error('Invalid capability manifest.');
+      requiredKinds = [...new Set([...requiredKinds, ...requiredCapabilities])]; certifiable = true;
+    },
+    hasTask: () => Boolean(storage.getStore()),
+    bindCallback: callback => require('node:async_hooks').AsyncResource.bind(callback),
     snapshot: () => Object.freeze({ state, activeCount: tasks.size, executor,
+      certifiable, capabilities: Object.freeze([...capabilities.values()]),
+      obligations: Object.freeze([...obligations.values()]), certificationBlocked: Object.freeze([...blockers]),
       tasks: Object.freeze([...tasks.values()].map(describe)), history: Object.freeze([...history]) }),
   });
 }

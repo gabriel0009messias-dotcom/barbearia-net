@@ -22,7 +22,7 @@ function obterPrimeiroEnvPreenchido(chaves = [], fallback = '') {
 
 const app = express();
 app.set('trust proxy', true);
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = process.env.PORT === '0' ? 0 : Number(process.env.PORT) || 3000;
 const painelPath = path.join(__dirname, 'public');
 const runtimeErrorLogPath = path.join(__dirname, 'server-error.log');
 const assinaturasCadastradas = [];
@@ -759,6 +759,8 @@ app.post('/webhook', (req, res) => {
 app.use(require('./services/httpErrors').createHttpErrorHandler());
 
 const executorScope = require('./services/executionScope').executionScope;
+const capabilityCoordinator = require('./services/executionCapabilities').coordinator;
+executorScope.certifyProfile({ requiredCapabilities: ['listener.http', 'scheduler.outbox', 'scheduler.reminders', 'timer.evolution-cleanup'] });
 let executorServer, executorOutbox, executorReminders, executorShutdown;
 const shutdownExecutor = () => {
   if (executorShutdown) return executorShutdown;
@@ -766,8 +768,7 @@ const shutdownExecutor = () => {
   require('./services/evolutionOwnershipOperation').stopExecutionAuthorization();
   const outboxClosing = executorOutbox?.stop();
   const remindersClosing = executorReminders?.stop();
-  const serverClosing = executorServer ? new Promise(resolve => executorServer.close(resolve)) : Promise.resolve();
-  executorShutdown = Promise.all([serverClosing, outboxClosing, remindersClosing, executorScope.drain()])
+  executorShutdown = Promise.all([outboxClosing, remindersClosing, capabilityCoordinator.drain()])
     .then(() => require('./database').close()).catch(() => { process.exitCode = 1; });
   return executorShutdown;
 };
@@ -784,6 +785,7 @@ executorScope.admit('startup.identity', async () => {
   executorServer = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });
+  capabilityCoordinator.register('listener.http', () => new Promise((resolve, reject) => executorServer.close(error => error ? reject(error) : resolve())));
   executorServer.on('error', (erro) => registrarErroRuntime('serverError', erro));
 }).catch(async (erro) => {
   console.error('Falha ao inicializar o banco de dados:', erro);

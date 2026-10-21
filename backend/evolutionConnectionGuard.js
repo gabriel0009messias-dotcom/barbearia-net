@@ -89,5 +89,6 @@ const cleanup = setInterval(() => {
   for (const [key, state] of cooldowns) if (Date.now() - state.until > 600000) cooldowns.delete(key);
 }, 60000);
 cleanup.unref();
+require('./services/executionCapabilities').coordinator.register('timer.evolution-cleanup', () => clearInterval(cleanup));
 
 module.exports = { retryAfterMs, checkCooldown, recordRateLimit, serialize, connectOnce, invalidateConnection, hasConnection, connectionAttempt, clearRateLimit };
