@@ -2,6 +2,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const execution = new AsyncLocalStorage();
 const { randomUUID } = require('node:crypto');
 const { createEvolutionOwnershipResolver } = require('./evolutionOwnership');
+const { deliveryIdentity, registerExecution } = require('./executionLifecycle');
 const error = code => Object.assign(new Error('Evolution ownership operation could not be completed.'), { code });
 
 // Internal API only: callers provide an authenticated/internal tenant, never a
@@ -61,9 +62,10 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
       await client.query('UPDATE ' + s + '.evolution_instance_owners SET operation_token=NULL,operation_started_at=NULL WHERE model=$1 AND source_schema=$2 AND owner_id=$3 AND operation_token=$4', ['principal', schema, String(tenant), operationToken]);
     });
   }
-  async function run(tenant, operation, { timeoutMs = 5000, expectedInstance, onReserved, onCompleted } = {}) {
+  async function run(tenant, operation, { timeoutMs = 5000, expectedInstance, onReserved, onCompleted, delivery } = {}) {
     if (!Number.isSafeInteger(tenant) || tenant <= 0) throw error('INSTANCE_INVALID_TENANT');
     if ((onReserved !== undefined && typeof onReserved !== 'function') || (onCompleted !== undefined && typeof onCompleted !== 'function') || typeof operation !== 'function' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 15000) throw error('INSTANCE_INVALID_OPERATION');
+    const binding = deliveryIdentity(delivery);
     const token = randomUUID();
     const owner = await transaction(async client => {
       const { owner, record } = await locked(client, tenant, expectedInstance);
@@ -71,7 +73,8 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
       await client.query('UPDATE ' + s + '.evolution_instance_owners SET operation_token=$1,operation_started_at=clock_timestamp() WHERE instance_key=$2 COLLATE "C"', [token, owner.instanceName.toLowerCase()]);
       // Optional persistence hook is SQL-only: delivery claim and reservation commit atomically.
       if (onReserved) await onReserved(client, { ...owner, operationToken: token });
-      return owner;
+      const identity = await registerExecution(client, schema, owner, token, binding);
+      return { ...owner, ...identity };
     });
     // Reservation commits BEFORE invoking the operation. All association writers
     // are fenced by migration 018, even across models/processes or after a crash.

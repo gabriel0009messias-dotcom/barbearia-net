@@ -130,7 +130,8 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         if (!acceptedEvolutionMessage(result)) throw new Error('Unconfirmed provider acceptance.');
         if(table==='whatsapp_messages') require('./whatsapp/diagnostics').diagnostic('delivery_accepted',{deliveryId:String(row.id)});
         return { status: 'sent', reason: null };
-      }), { expectedInstance: row.instance, timeoutMs, onReserved: async (client, context) => {
+      }), { expectedInstance: row.instance, timeoutMs,
+        delivery: { kind: table, id: row.id, claimToken: token }, onReserved: async (client, context) => {
         const claim = (await client.query('SELECT * FROM ' + target + ' WHERE id=$1 FOR UPDATE',[row.id])).rows[0];
         if (!claim || claim.status !== 'sending' || claim.claim_token !== token || claim.assinatura_id !== row.assinatura_id || claim.dispatch_started_at ||
           (table === 'whatsapp_messages' && (claim.instance !== row.instance || claim.phone !== row.phone || claim.response !== row.response))) throw Object.assign(new Error('Delivery claim mismatch.'),{code:'INSTANCE_DELIVERY_CLAIM_MISMATCH'});
