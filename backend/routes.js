@@ -10,6 +10,14 @@ const { transitionAppointment } = require('./services/agenda');
 require('./loadEnv');
 
 const db = require('./database');
+const { executionScope: whatsappScope } = require('./services/executionScope');
+// Keep post-transport session persistence inside the same awaited task as the
+// HTTP handler, even when the client disconnects before the handler finishes.
+function whatsappRoute(method, path, ...handlers) {
+  const handler = handlers.pop();
+  router[method](path, ...handlers, (req, res, next) =>
+    whatsappScope.admit('whatsapp.http-handler', () => handler(req, res, next)).catch(next));
+}
 const securityLimits = require('./services/securityLimits').createSecurityLimits(db);
 function securityGate(scope, identify) {
   return async (req,res,next) => {
@@ -1307,7 +1315,7 @@ function compartilharGeracaoQr(instanceName, executor, modo = 'qr') {
     }
     return atual.promise;
   }
-  const promise = Promise.resolve().then(executor).finally(() => whatsappQrJobs.delete(chave));
+  const promise = whatsappScope.admit('whatsapp.connection-job', () => Promise.resolve().then(executor).finally(() => whatsappQrJobs.delete(chave)));
   whatsappQrJobs.set(chave, { modo, promise });
   return promise;
 }
@@ -1709,7 +1717,7 @@ router.get('/bloqueios', requirePainelOuBridge, (req, res) => {
   );
 });
 
-router.post('/webhook', requirePainelOuBridge, async (req, res) => {
+whatsappRoute('post', '/webhook', requirePainelOuBridge, async (req, res) => {
   try {
     const resultado = await handleWhatsappWebhook({
       body: req.body,
@@ -1723,7 +1731,7 @@ router.post('/webhook', requirePainelOuBridge, async (req, res) => {
   }
 });
 
-router.post('/webhook/evolution', async (req, res) => {
+whatsappRoute('post', '/webhook/evolution', async (req, res) => {
   try {
     const resultado = await processarWebhookEvolution(req.body || {}, req.headers, { deferDelivery: true });
     res.json(resultado);
@@ -2324,7 +2332,7 @@ function responderErroWhatsapp(res, error) {
     ...(safe.retryAt ? { retryAt: safe.retryAt } : {}) });
 }
 
-router.post('/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('post', '/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiroWhatsapp, async (req, res) => {
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) return;
     const assinatura = await carregarAssinaturaAtualizada(req.assinatura.id);
@@ -2343,7 +2351,7 @@ router.post('/publico/assinaturas/:id/whatsapp/recuperar', requireBarbeiroWhatsa
   } catch (error) { responderErroWhatsapp(res, error); }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('post', '/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
   try {
     if (!assinaturaPertenceAoBarbeiro(req, res)) return;
@@ -2360,7 +2368,7 @@ router.post('/publico/assinaturas/:id/whatsapp/pairing-code', requireBarbeiroWha
   }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('post', '/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
 
   try {
@@ -2390,7 +2398,7 @@ router.post('/publico/assinaturas/:id/whatsapp/iniciar', requireBarbeiroWhatsapp
   }
 });
 
-router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('get', '/publico/assinaturas/:id/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
   res.set('Cache-Control', 'no-store');
 
@@ -2418,7 +2426,7 @@ router.get('/publico/assinaturas/:id/whatsapp/qr', requireBarbeiroWhatsapp, asyn
   }
 });
 
-router.get('/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('get', '/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
     const assinatura = await carregarAssinaturaAtualizada(req.assinatura.id);
@@ -2485,7 +2493,7 @@ router.get('/whatsapp/qr', requireBarbeiroWhatsapp, async (req, res) => {
   }
 });
 
-router.post('/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('post', '/publico/assinaturas/:id/whatsapp/bridge-token', requireBarbeiroWhatsapp, async (req, res) => {
   const { id } = req.params;
 
   try {
@@ -2644,7 +2652,7 @@ router.patch('/publico/assinaturas/:id', requirePainelOuBridge, async (req, res)
   }
 });
 
-router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('get', '/publico/assinaturas/:id/whatsapp/status', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
   console.info('[WHATSAPP] Buscando status da assinatura:', id);
   res.set('Cache-Control', 'no-store');
@@ -2665,7 +2673,7 @@ router.get('/publico/assinaturas/:id/whatsapp/status', requireBarbeiroWhatsapp, 
   }
 });
 
-router.delete('/publico/assinaturas/:id/whatsapp/logout', requireBarbeiroWhatsapp, async (req, res) => {
+whatsappRoute('delete', '/publico/assinaturas/:id/whatsapp/logout', requireBarbeiroWhatsapp, async (req, res) => {
   const id = req.assinatura.id;
 
   try {

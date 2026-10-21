@@ -213,10 +213,18 @@ function createConversationProcessor(database) {
       WHERE a.decision='captured' AND NOT EXISTS(SELECT 1 FROM whatsapp_conversation_inbox i WHERE i.instance_key=a.instance_key AND i.message_id=a.message_id)
       ORDER BY received_at,instance_key,message_id LIMIT $1`,[limit]);
     const results=[];
-    for(const row of rows) results.push(await processCaptured(row,true));
+    for(const row of rows) {
+      if (!require('../executionScope').executionScope.isOpen()) break;
+      results.push(await processCaptured(row,true));
+    }
     return results;
   }
-  return {process,capture:event=>capture(database,event),consumePending};
+  const scope = require('../executionScope').executionScope;
+  return {
+    process: (...args) => scope.admit('conversation.process', () => process(...args)),
+    capture: event => scope.admit('conversation.capture', () => capture(database,event)),
+    consumePending: (...args) => scope.admit('conversation.pending', () => consumePending(...args)),
+  };
 }
 async function validateConversationResponse(db,row) {
   const binding=await db.getAsync(`SELECT r.*,c.owner_epoch AS current_epoch,c.reference AS current_reference,c.last_response_id,

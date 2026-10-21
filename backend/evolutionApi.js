@@ -9,6 +9,7 @@ const recoveryWindows = new Map();
 const requestContext = require('./evolutionContext');
 const { responseDiagnostic, safeBody, safeHeaders, safeRetryAfter } = require('./evolutionDiagnostics');
 const { STATUS_CODES } = require('node:http');
+const { executionScope: scope } = require('./services/executionScope');
 function invalidateStatus(instanceName) { statusCache.delete(connectionKey(instanceName)); }
 function traceStatus(event, data) {
   if (process.env.EVOLUTION_STATUS_TRACE === 'true') logEvolution(event, data);
@@ -212,14 +213,14 @@ async function upstream429Body(response) {
   try {
     reader = response.body?.getReader();
     if (!reader) return { body: '', bodyTruncated: false };
-    return await Promise.race([read(), new Promise(resolve => {
+    return await Promise.race([scope.follow('evolution.body-read', read), new Promise(resolve => {
       timer = setTimeout(() => resolve({ body: '[BODY OMITTED: read timeout]', bodyTruncated: true }), 1000);
     })]);
   } catch {
     return { body: '[BODY OMITTED: read failure]', bodyTruncated: true };
   } finally {
     clearTimeout(timer);
-    if (reader) void reader.cancel().catch(() => {});
+    if (reader) scope.follow('evolution.body-cancel', () => reader.cancel()).catch(() => {});
   }
 }
 
@@ -246,6 +247,9 @@ function classifyFailure(status, payload, path) {
 }
 
 async function evolutionRequest(path, options = {}) {
+  return scope.admit('evolution.request', () => admittedEvolutionRequest(path, options));
+}
+async function admittedEvolutionRequest(path, options = {}) {
   const endpoint = path.split('?')[0];
   if (/^\/message\//i.test(endpoint)) require('./services/evolutionOwnershipOperation').assertEvolutionOperation(decodeURIComponent(endpoint.split('/')[3] || ''));
   const instance = options.instanceName || endpoint.split('/')[3];
@@ -257,6 +261,9 @@ async function evolutionRequest(path, options = {}) {
 }
 
 async function requestTransport(path, options = {}) {
+  return scope.follow('evolution.http', () => requestTransportBody(path, options));
+}
+async function requestTransportBody(path, options = {}) {
   const config = ensureEvolutionConfigured();
   const { retryAttempts = config.retryAttempts, retryDelayMs = config.retryDelayMs,
     timeoutMs = config.timeoutMs, deadline, requestId = requestContext.current().requestId || randomUUID(), instanceName, temporaryDiagnostics = false,
@@ -280,6 +287,7 @@ async function requestTransport(path, options = {}) {
     try {
       if (endpoint.startsWith('/instance/connectionState/')) traceStatus('STATUS_CALLING_EVOLUTION', { requestId });
       await require('./services/evolutionOwnershipOperation').authorizeEvolutionEffect(instance || '', { required: /^\/message\//i.test(endpoint) });
+      scope.assertOpen();
       transmitted = true;
       const response = await fetch(`${config.baseUrl}${path}`, {
         ...fetchOptions, redirect: 'manual', signal: /^\/message\//i.test(endpoint)

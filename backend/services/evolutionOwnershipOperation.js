@@ -3,8 +3,9 @@ const execution = new AsyncLocalStorage();
 const { randomUUID } = require('node:crypto');
 const { createEvolutionOwnershipResolver } = require('./evolutionOwnership');
 const { deliveryIdentity, registerExecution, checkAuthorization } = require('./executionLifecycle');
+const { executionScope: scope } = require('./executionScope');
 let shuttingDown = false;
-function stopExecutionAuthorization() { shuttingDown = true; }
+function stopExecutionAuthorization() { shuttingDown = true; scope.beginDrain(); }
 const error = code => Object.assign(new Error('Evolution ownership operation could not be completed.'), { code });
 
 // Internal API only: callers provide an authenticated/internal tenant, never a
@@ -13,10 +14,13 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw error('INSTANCE_INVALID_SCHEMA');
   const s = '"' + schema + '"';
   async function transaction(work) {
+    return scope.follow('ownership.sql', () => transactionBody(work));
+  }
+  async function transactionBody(work) {
     let client, abandoned = false, timer;
     try {
       client = await Promise.race([
-        pool.connect().then(c => { if (abandoned) { c.release(); throw error('INSTANCE_OPERATION_BUSY'); } return c; }),
+        scope.follow('ownership.connection', () => pool.connect().then(c => { if (abandoned) { c.release(); throw error('INSTANCE_OPERATION_BUSY'); } return c; })),
         new Promise((_, reject) => { timer = setTimeout(() => { abandoned = true; reject(error('INSTANCE_OPERATION_BUSY')); }, 2000); }),
       ]);
     } catch (cause) {
@@ -72,13 +76,17 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     const token = randomUUID();
     const owner = await transaction(async client => {
       const { owner, record } = await locked(client, tenant, expectedInstance);
+      scope.assertOpen();
       if (record.operation_token) throw error('INSTANCE_OPERATION_BUSY');
       await client.query('UPDATE ' + s + '.evolution_instance_owners SET operation_token=$1,operation_started_at=clock_timestamp() WHERE instance_key=$2 COLLATE "C"', [token, owner.instanceName.toLowerCase()]);
       // Optional persistence hook is SQL-only: delivery claim and reservation commit atomically.
       if (onReserved) await onReserved(client, { ...owner, operationToken: token });
+      scope.assertOpen();
       const identity = await registerExecution(client, schema, owner, token, binding);
+      scope.assertOpen();
       return { ...owner, ...identity };
     });
+    scope.bindExecution(owner);
     // Reservation commits BEFORE invoking the operation. All association writers
     // are fenced by migration 018, even across models/processes or after a crash.
     const controller = new AbortController();
@@ -89,9 +97,9 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
       const allowed = await transaction(async client => {
         const { record } = await locked(client, tenant, owner.instanceName);
         if (record.operation_token !== token) return false;
-        if (options?.renew && (!active || shuttingDown)) return false;
+        if (options?.renew && (!active || shuttingDown || !scope.isOpen())) return false;
         const allowed = await checkAuthorization(client, schema, identity, binding, options);
-        if (options?.renew && (!active || shuttingDown)) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
+        if (options?.renew && (!active || shuttingDown || !scope.isOpen())) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
         return allowed;
       });
       return allowed;
@@ -100,13 +108,15 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     const authorizeEffect = async () => {
       assertActive();
       try {
+        scope.assertOpen();
         if (shuttingDown || !await authorization()) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
+        scope.assertOpen();
         if (shuttingDown) throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE');
         assertActive();
       } catch { deny(); throw error('INSTANCE_AUTHORIZATION_UNAVAILABLE'); }
     };
     const heartbeat = async () => {
-      if (!active || shuttingDown) { deny(); return; }
+      if (!active || shuttingDown || !scope.isOpen()) { deny(); return; }
       try { if (!await authorization({ renew: true })) deny(); }
       catch { deny(); }
     };
@@ -116,10 +126,10 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
         active = false; controller.abort(); reject(error('INSTANCE_OPERATION_TIMEOUT'));
       }, timeoutMs); });
       heartbeatTimer = setInterval(() => {
-        if (!heartbeatInFlight) heartbeatInFlight = heartbeat().finally(() => { heartbeatInFlight = undefined; });
+        if (!heartbeatInFlight && active && scope.isOpen()) heartbeatInFlight = scope.follow('ownership.heartbeat', heartbeat).finally(() => { heartbeatInFlight = undefined; });
       }, 3000);
       heartbeatTimer.unref();
-      const result = await Promise.race([Promise.resolve().then(async () => { await authorizeEffect(); return execution.run(context, () => operation(context)); }), timeout]);
+      const result = await Promise.race([scope.follow('ownership.callback', async () => { await authorizeEffect(); return execution.run(context, () => operation(context)); }), timeout]);
       assertActive(); active = false; clearTimeout(timer);
       // Transport has ended. Finalize its persisted result and release the fence
       // in ONE short, SQL-only transaction, bounded by the database timeouts.
@@ -135,6 +145,7 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     } catch (cause) {
       // An exception/timeout may follow provider acceptance. Do not expire or
       // silently release this durable fence. No retry or new owner is authorized.
+      if (cause?.code === 'INSTANCE_ADMISSION_CLOSED' || !scope.isOpen()) authorizationDenied = true;
       active = false;
       // Best effort persistence only. Failure cannot restore local authority or
       // release a fence. The effective-state view also handles crashed processes.
@@ -162,7 +173,14 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
       return work(client, owner);
     });
   }
-  return Object.freeze({ run, acknowledgeStoppedOperation: release, reconcileUnreservedOperation });
+  const trackedRun = (...args) => {
+    if (!scope.isOpen()) {
+      const failure = error('INSTANCE_AUTHORIZATION_UNAVAILABLE'); failure.authorizationLost = true;
+      return Promise.reject(failure);
+    }
+    return scope.admit('ownership.operation', () => run(...args));
+  };
+  return Object.freeze({ run: trackedRun, acknowledgeStoppedOperation: release, reconcileUnreservedOperation });
 }
 function assertEvolutionOperation(instanceName) {
   const context = execution.getStore();

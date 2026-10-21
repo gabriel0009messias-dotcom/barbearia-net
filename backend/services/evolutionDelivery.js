@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { createEvolutionOwnershipOperation } = require('./evolutionOwnershipOperation');
 const { acceptedEvolutionMessage } = require('../evolutionApi');
+const { executionScope: scope } = require('./executionScope');
 const tables = new Set(['whatsapp_messages', 'appointment_reminders']);
 const activeTransports = new Set();
 const executionSlots = new WeakMap();
@@ -39,7 +40,7 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
       held = true;
       activeTransports.add(context.operationToken);
       context.assertActive();
-      return await work();
+      return await scope.follow('delivery.transport', work);
     } finally {
       activeTransports.delete(context.operationToken);
       if (held && !broken) {
@@ -57,6 +58,7 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
   // Revoke the claim atomically. An old paused worker cannot cross the durable
   // transport frontier with the revoked claim after recovery commits.
   async function recoverUnstarted(table, original, delayMs = 30000) {
+    if (!scope.isOpen()) return false;
     const target = qualified(table);
     for (let attempt = 0; attempt < 2; attempt++) {
       const row = await db.getAsync('SELECT * FROM ' + target + ' WHERE id=$1', [original.id]);
@@ -70,11 +72,13 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         " WHERE id=$3 AND claim_token IS NOT DISTINCT FROM $4::uuid AND status='sending' AND dispatch_started_at IS NULL AND operation_token IS NOT DISTINCT FROM $5::uuid RETURNING id";
       const values = [randomUUID(), table === 'whatsapp_messages' ? Date.now() + delayMs : new Date(Date.now() + delayMs), row.id, row.claim_token, row.operation_token];
       if (!row.operation_token) {
+        if (!scope.isOpen()) return false;
         const changed = await db.runAsync(sql, values);
         if (changed.changes === 1) return true;
         continue; // A reservation COMMIT may have completed while we waited.
       }
       try {
+        scope.assertOpen();
         // Here "stopped" is proven by the absent durable frontier AND atomic
         // revocation, not by a timeout or an assumption that a process died.
         await operation().acknowledgeStoppedOperation(row.assinatura_id, row.operation_token, async client => {
@@ -121,12 +125,14 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         await context.authorizeEffect();
         // Write-ahead intent is the frontier: AFTER its commit HTTP may start.
         // A lost acknowledgement of this write never authorizes calling send.
+        scope.assertOpen();
         const started = await db.runAsync('UPDATE ' + target +
           ' SET dispatch_started_at=CURRENT_TIMESTAMP,attempts=attempts+1 WHERE id=$1 AND assinatura_id=$2 AND claim_token=$3 AND operation_token=$4' +
           " AND status='sending' AND dispatch_started_at IS NULL AND EXISTS(SELECT 1 FROM " + owners + ' WHERE operation_token=$4 AND model=$5 AND source_schema=$6 AND owner_id=$7)',
           [row.id,row.assinatura_id,token,context.operationToken,'principal',schema,String(row.assinatura_id)]);
         if (started.changes !== 1) throw new Error('Delivery claim no longer active.');
         context.assertActive();
+        scope.assertOpen();
         if(table==='whatsapp_messages') require('./whatsapp/diagnostics').diagnostic('delivery_started',{deliveryId:String(row.id)});
         let result;
         try { result = await send(context.instanceName,row.phone,row.response); }
@@ -159,6 +165,8 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
         }
       }});
     } catch (failure) {
+      // Drain never initiates claim recovery, releases a fence or schedules retry.
+      if (!scope.isOpen()) failure.authorizationLost = true;
       if (['INSTANCE_NOT_CONFIGURED','INSTANCE_INVALID','INSTANCE_OWNER_MISMATCH','INSTANCE_AMBIGUOUS','INSTANCE_INVALID_TENANT','INSTANCE_DELIVERY_CLAIM_MISMATCH'].includes(failure.code)) {
         await db.runAsync('UPDATE ' + target + " SET status='failed',last_error='Instance ownership could not be confirmed.' WHERE id=$1 AND claim_token=$2 AND status='sending' AND dispatch_started_at IS NULL",[row.id,token]);
       } else if (failure.authorizationLost || !await recoverUnstarted(table, row)) {
@@ -213,6 +221,10 @@ function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || '
       }
     } catch (failure) { if (!await alreadyReconciled()) throw failure; }
   }
-  return { dispatch, reconcile, recoverInterrupted };
+  return {
+    dispatch: (...args) => scope.admit('delivery.dispatch', () => dispatch(...args)),
+    reconcile: (...args) => scope.admit('delivery.reconcile', () => reconcile(...args)),
+    recoverInterrupted: (...args) => scope.admit('delivery.recovery', () => recoverInterrupted(...args)),
+  };
 }
 module.exports = { createEvolutionDelivery, newDeliveryClaim: randomUUID };

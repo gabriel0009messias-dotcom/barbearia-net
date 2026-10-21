@@ -15,7 +15,7 @@ function assertClean(value) {
 test('normal HTTP boundary projects every artificial exception field by allowlist', async t => {
   const source = fs.readFileSync(path.resolve(__dirname, '../routes.js'), 'utf8');
   const start = source.indexOf('function responderErroWhatsapp(');
-  const boundary = source.slice(start, source.indexOf('\nrouter.', start));
+  const boundary = source.slice(start).match(/^[\s\S]*?\r?\n}/)[0];
   const context = { publicWhatsappError };
   vm.runInNewContext(boundary, context);
   for (const field of ['message','diagnostic','error','cause','stack','response','headers','body','nested','toJSON']) {

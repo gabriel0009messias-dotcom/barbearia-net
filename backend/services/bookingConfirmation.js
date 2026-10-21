@@ -1,4 +1,5 @@
 const { historicalCents } = require('./finance');
+const { executionScope: scope } = require('./executionScope');
 const { normalizeInstanceName } = require('./evolutionOwnership');
 const { normalizeBrazilianDestination, isBrazilianWhatsAppIdentity } = require('./whatsapp/phone');
 
@@ -76,6 +77,7 @@ async function validateBookingConfirmation(db, row) {
 async function materializeBookingConfirmations(db, { limit = 50 } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('Invalid confirmation batch.');
   for (let i = 0; i < limit; i++) {
+    if (!scope.isOpen()) return;
     const found = await db.transaction(async client => {
       const origin = await client.getAsync(`SELECT p.appointment_id,p.confirmation_snapshot,a.assinatura_id
         FROM public_booking_access p JOIN agendamentos a ON a.id=p.appointment_id
@@ -112,4 +114,8 @@ async function materializeBookingConfirmations(db, { limit = 50 } = {}) {
   }
 }
 
-module.exports = { buildBookingConfirmation, captureBookingConfirmation, materializeBookingConfirmations, validateBookingConfirmation };
+module.exports = {
+  buildBookingConfirmation, validateBookingConfirmation,
+  captureBookingConfirmation: (...args) => scope.admit('booking.confirmation-capture', () => captureBookingConfirmation(...args)),
+  materializeBookingConfirmations: (...args) => scope.admit('booking.confirmation-materialize', () => materializeBookingConfirmations(...args)),
+};

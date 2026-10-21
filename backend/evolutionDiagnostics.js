@@ -1,6 +1,7 @@
 // Temporary diagnostics: never serialize request headers, payloads or Error objects.
 const { sanitize, safeText } = require('./evolutionLog');
 const { STATUS_CODES } = require('node:http');
+const { executionScope: scope } = require('./services/executionScope');
 const SAFE_HEADERS = Object.freeze([
   'retry-after', 'content-type', 'server', 'via', 'cf-ray', 'cf-cache-status',
   'date', 'x-request-id', 'request-id', 'rndr-id',
@@ -71,14 +72,14 @@ async function readSafeBody(response) {
         chunks.push(Buffer.from(value));
       }
     };
-    return await Promise.race([read(), new Promise(resolve => {
+    return await Promise.race([scope.follow('evolution.diagnostic-read', read), new Promise(resolve => {
       timer = setTimeout(() => resolve({ body: '[BODY OMITTED: read timeout]', bodyTruncated: true, bodyOmitted: true }), 1000);
     })]);
   } catch {
     return { body: '[BODY OMITTED: read failure]', bodyTruncated: true, bodyOmitted: true };
   } finally {
     clearTimeout(timer);
-    if (reader) void reader.cancel().catch(() => {});
+    if (reader) scope.follow('evolution.diagnostic-cancel', () => reader.cancel()).catch(() => {});
   }
 }
 
@@ -93,6 +94,9 @@ function classifyOrigin(headers, status) {
 }
 
 async function responseDiagnostic(response, context, started) {
+  return scope.follow('evolution.diagnostic', () => responseDiagnosticBody(response, context, started));
+}
+async function responseDiagnosticBody(response, context, started) {
   const headers = safeHeaders(response.headers);
   const body = await readSafeBody(response);
   return { ...sanitize({ httpStatus: response.status, statusText: STATUS_CODES[response.status] || 'Unknown HTTP status',

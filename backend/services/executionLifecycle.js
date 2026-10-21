@@ -15,7 +15,7 @@ function processIdentity() {
     Object.defineProperty(globalThis, identityKey, { value: Object.freeze({
       executorId: randomUUID(), bootId: randomUUID(), processId: process.pid,
       startedAt: new Date(performance.timeOrigin).toISOString(), serviceId: metadata('RENDER_SERVICE_ID'),
-      deploymentId: metadata('RENDER_DEPLOY_ID'), instanceId: metadata('RENDER_INSTANCE_ID'),
+      deploymentId: null, instanceId: metadata('RENDER_INSTANCE_ID'),
       revision: metadata('RENDER_GIT_COMMIT'),
     }) });
   }
@@ -31,15 +31,44 @@ function deliveryIdentity(value) {
   return Object.freeze({ kind: value.kind, id: value.id, claimToken: value.claimToken });
 }
 
-// SQL only, on the SAME transaction/connection which acquired the reservation.
-// Registration failure rolls back both reservation and delivery binding.
-async function registerExecution(client, schema, owner, operationToken, delivery) {
+async function registerExecutor(client, schema) {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw Error('Invalid execution schema.');
-  const s = '"' + schema + '"', executor = processIdentity(), executionId = randomUUID();
+  const s = '"' + schema + '"', executor = processIdentity();
   await client.query('INSERT INTO ' + s + '.evolution_executors' +
     '(executor_id,boot_id,process_id,started_at,service_id,deployment_id,instance_id,revision)' +
     ' VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(executor_id) DO NOTHING',
     [executor.executorId,executor.bootId,executor.processId,executor.startedAt,executor.serviceId,executor.deploymentId,executor.instanceId,executor.revision]);
+  const record = await client.query('SELECT executor_id FROM ' + s + '.evolution_executors WHERE executor_id=$1 AND boot_id=$2 AND process_id=$3 AND started_at=$4' +
+    ' AND service_id IS NOT DISTINCT FROM $5 AND deployment_id IS NOT DISTINCT FROM $6 AND instance_id IS NOT DISTINCT FROM $7 AND revision IS NOT DISTINCT FROM $8',
+    [executor.executorId,executor.bootId,executor.processId,executor.startedAt,executor.serviceId,executor.deploymentId,executor.instanceId,executor.revision]);
+  if (record.rowCount !== 1) throw Error('Executor identity mismatch.');
+  require('./executionScope').executionScope.setExecutor(executor);
+  return executor;
+}
+
+// Startup must await COMMIT acknowledgement before starting listeners/workers.
+async function initializeExecutor(pool, { schema = process.env.DATABASE_SCHEMA || 'salaoflix' } = {}) {
+  const scope = require('./executionScope').executionScope;
+  return scope.admit('executor.startup', () => initializeExecutorBody(pool, schema));
+}
+async function initializeExecutorBody(pool, schema) {
+  const scope = require('./executionScope').executionScope;
+  scope.assertOpen();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const identity = await registerExecutor(client, schema);
+    await client.query('COMMIT');
+    scope.assertOpen();
+    return identity;
+  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+  finally { client.release(); }
+}
+
+// SQL only, on the SAME transaction/connection which acquired the reservation.
+// Registration failure rolls back both reservation and delivery binding.
+async function registerExecution(client, schema, owner, operationToken, delivery) {
+  const executor = await registerExecutor(client, schema), s = '"' + schema + '"', executionId = randomUUID();
   const inserted = await client.query('INSERT INTO ' + s + '.evolution_operation_executions' +
     '(execution_id,executor_id,operation_token,assinatura_id,instance_name,operation_kind,delivery_id,claim_token)' +
     ' SELECT $1,e.executor_id,$3,$4,$5,$6,$7,$8 FROM ' + s + '.evolution_executors e' +
@@ -97,4 +126,4 @@ async function checkAuthorization(client, schema, context, delivery, { renew = f
 }
 
 // No STOPPED, release, reconciliation or recovery API belongs to this module.
-module.exports = { processIdentity, deliveryIdentity, registerExecution, checkAuthorization };
+module.exports = { processIdentity, deliveryIdentity, registerExecution, checkAuthorization, initializeExecutor };

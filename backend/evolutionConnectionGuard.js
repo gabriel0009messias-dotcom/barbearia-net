@@ -3,6 +3,7 @@
 const queues = new Map();
 const cooldowns = new Map();
 const connections = new Map();
+const { executionScope: scope } = require('./services/executionScope');
 
 function retryAfterMs(value, now = Date.now()) {
   if (typeof value !== 'string' || !value.trim()) return 0;
@@ -45,12 +46,13 @@ function recordRateLimit(key, header, diagnostic) {
 function serialize(key, task) {
   checkCooldown(key);
   const previous = queues.get(key) || Promise.resolve();
-  const job = previous.catch(() => {}).then(() => { checkCooldown(key); return task(); });
+  const job = scope.admit('evolution.serial-queue', () => previous.catch(() => {}).then(() => { scope.assertOpen(); checkCooldown(key); return task(); }));
   queues.set(key, job);
   return job.finally(() => { if (queues.get(key) === job) queues.delete(key); });
 }
 
 function connectOnce(key, mode, task) {
+  scope.assertOpen();
   checkCooldown(key);
   const current = connections.get(key);
   if (current) {
@@ -58,7 +60,7 @@ function connectOnce(key, mode, task) {
     return current.promise;
   }
   const entry = { mode, pending: true, startedAt: Date.now() };
-  entry.promise = Promise.resolve().then(task).then(result => {
+  entry.promise = scope.follow('evolution.connect', () => Promise.resolve().then(task).then(result => {
     entry.pending = false;
     return result;
   }, error => {
@@ -66,7 +68,7 @@ function connectOnce(key, mode, task) {
     // A timeout/network failure does not prove that the provider stopped.
     if (error.code === 'EVOLUTION_RATE_LIMIT' && connections.get(key) === entry) connections.delete(key);
     throw error;
-  });
+  }));
   connections.set(key, entry);
   return entry.promise;
 }

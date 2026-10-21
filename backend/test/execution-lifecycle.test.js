@@ -161,7 +161,7 @@ test('execution lifecycle Stage 1: durable identity without new recovery semanti
       assert.notEqual(p.executorId,processIdentity().executorId);
       const stored = await db.getAsync('SELECT * FROM evolution_executors WHERE executor_id=$1', [p.executorId]);
       assert.equal(stored.boot_id,p.bootId); assert.equal(stored.process_id,p.processId);
-      assert.equal(stored.service_id,'synthetic-service'); assert.equal(stored.deployment_id,'synthetic-deployment');
+      assert.equal(stored.service_id,'synthetic-service'); assert.equal(stored.deployment_id,null); // Undocumented RENDER_DEPLOY_ID is not trusted.
       assert.equal(stored.instance_id,'synthetic-runtime'); assert.equal(stored.revision,'synthetic-revision');
     }
     const before = processIdentity(); delete require.cache[require.resolve('../services/executionLifecycle')];

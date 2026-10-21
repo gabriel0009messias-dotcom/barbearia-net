@@ -1,4 +1,5 @@
 const { localMoment } = require('./agenda');
+const { executionScope: scope } = require('./executionScope');
 const { avaliarAcessoAssinatura } = require('./access');
 const { createEvolutionOwnershipResolver } = require('./evolutionOwnership');
 const { composeMessage } = require('./returnReminderDispatcher');
@@ -85,12 +86,15 @@ function createReturnReminderWorker(db, {
       AND eligible_at<=${s}.studiofy_return_now() AND next_attempt_at<=${s}.studiofy_return_now()
       ORDER BY next_attempt_at,id LIMIT $1`, [limit]);
     const results = [];
-    for (const row of rows) { if (stopped) break; results.push(await materialize(row)); }
+    for (const row of rows) { if (stopped || !scope.isOpen()) break; results.push(await materialize(row)); }
     return results;
   }
   function drain() {
     if (stopped) return Promise.resolve([]);
-    if (!active) active = run().finally(() => { active = undefined; });
+    if (!active) {
+      const task = scope.admit('return.materialize', run);
+      active = task.finally(() => { active = undefined; });
+    }
     return active;
   }
   async function stop() { stopped = true; await active; }
@@ -119,9 +123,21 @@ async function validateReturnReminder(db, row, { schema = process.env.DATABASE_S
 function startWorker(db, options = {}) {
   if (registry.has(db)) return registry.get(db);
   const worker = createReturnReminderWorker(db, options);
-  const run = () => worker.drain().catch(() => console.error('[Studiofy] Falha ao materializar retornos.'));
+  let stopped = false;
+  const completions = new Set();
+  const run = () => {
+    if (stopped || !scope.isOpen()) return;
+    const task = scope.admitRoot('return.run', () => worker.drain().catch(() => console.error('[Studiofy] Falha ao materializar retornos.')), { canAdmit: () => !stopped });
+    completions.add(task.completion);
+    task.completion.then(() => completions.delete(task.completion));
+    return task;
+  };
   const timer = setInterval(run, INTERVAL_MS); timer.unref();
-  const handle = { stop: async () => { clearInterval(timer); try { await worker.stop(); } finally { registry.delete(db); } } };
-  registry.set(db, handle); void run(); return handle;
+  const handle = { stop: async () => {
+    stopped = true; clearInterval(timer);
+    try { await worker.stop(); await Promise.all([...completions]); }
+    finally { registry.delete(db); }
+  } };
+  registry.set(db, handle); run(); return handle;
 }
 module.exports = { createReturnReminderWorker, materializeReturnReminders, validateReturnReminder, startWorker, inProcessingWindow, INTERVAL_MS };

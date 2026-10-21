@@ -758,28 +758,35 @@ app.post('/webhook', (req, res) => {
 // Mantem as rotas legadas acima e expõe os endpoints novos do backend modular.
 app.use(require('./services/httpErrors').createHttpErrorHandler());
 
-require('./database').ready.then(() => {
-  const webhookTimer = require('./evolutionWebhook').startWorker();
-  const reminderTimer = require('./services/reminders').startWorker(require('./database'));
+const executorScope = require('./services/executionScope').executionScope;
+let executorServer, executorOutbox, executorReminders, executorShutdown;
+const shutdownExecutor = () => {
+  if (executorShutdown) return executorShutdown;
+  // Synchronous, irreversible local barrier, before any database await.
+  require('./services/evolutionOwnershipOperation').stopExecutionAuthorization();
+  const outboxClosing = executorOutbox?.stop();
+  const remindersClosing = executorReminders?.stop();
+  const serverClosing = executorServer ? new Promise(resolve => executorServer.close(resolve)) : Promise.resolve();
+  executorShutdown = Promise.all([serverClosing, outboxClosing, remindersClosing, executorScope.drain()])
+    .then(() => require('./database').close()).catch(() => { process.exitCode = 1; });
+  return executorShutdown;
+};
+process.once('SIGTERM', shutdownExecutor);
+process.once('SIGINT', shutdownExecutor);
+executorScope.admit('startup.identity', async () => {
+  await require('./database').ready;
+  await require('./services/executionLifecycle').initializeExecutor(require('./database').pool);
+}).then(() => {
+  executorScope.assertOpen();
+  executorOutbox = require('./evolutionWebhook').startWorker();
+  executorReminders = require('./services/reminders').startWorker(require('./database'));
   // The shared outbox worker materializes returns; migration 024 defaults delivery off.
-  const server = app.listen(PORT, () => {
+  executorServer = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
   });
-  server.on('error', (erro) => registrarErroRuntime('serverError', erro));
-  let stopping = false;
-  const shutdown = async () => {
-    if (stopping) return;
-    stopping = true;
-    require('./services/evolutionOwnershipOperation').stopExecutionAuthorization();
-    webhookTimer.stop(); clearInterval(reminderTimer);
-    const closing = new Promise(resolve => server.close(resolve));
-    try { await closing; await require('./database').close(); }
-    catch { process.exitCode = 1; }
-  };
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
+  executorServer.on('error', (erro) => registrarErroRuntime('serverError', erro));
 }).catch(async (erro) => {
   console.error('Falha ao inicializar o banco de dados:', erro);
   process.exitCode = 1;
-  await require('./database').close();
+  await shutdownExecutor();
 });

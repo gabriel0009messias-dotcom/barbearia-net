@@ -1,10 +1,15 @@
 const { createEvolutionDelivery, newDeliveryClaim } = require('./evolutionDelivery');
 const { buildReminderMessage } = require('./appointmentReminderMessage');
+const { executionScope: scope } = require('./executionScope');
 function createReminderWorker(db, send, clock) {
  async function drain() {
+  return scope.admit('reminder.drain', drainAdmitted);
+ }
+ async function drainAdmitted() {
   const delivery=createEvolutionDelivery(db);
   const now=clock ? clock() : new Date((await db.getAsync('SELECT studiofy_reminder_now() AS now')).now);
   await delivery.recoverInterrupted('appointment_reminders',new Date(now.getTime()-120000));
+  if (!scope.isOpen()) return;
   // One bounded expiration pass per cycle, rather than one UPDATE per candidate.
   await db.runAsync(`WITH expired AS (SELECT id FROM appointment_reminders
    WHERE status='pending' AND reminder_kind<>'legacy_20m' AND due_at<=$1 AND expires_at<=$1
@@ -12,6 +17,7 @@ function createReminderWorker(db, send, clock) {
    UPDATE appointment_reminders r SET status='expired' FROM expired e WHERE r.id=e.id`,[now]);
   const visited=[];
   for (let i=0;i<50;i++) {
+   if (!scope.isOpen()) return;
    const row=await db.transaction(async c=>{
     const r=await c.getAsync(`SELECT r.* FROM appointment_reminders r
      WHERE r.status='pending' AND r.reminder_kind<>'legacy_20m' AND r.due_at<=$1 AND r.expires_at>$1
@@ -23,6 +29,7 @@ function createReminderWorker(db, send, clock) {
        AND used.appointment_id=r.appointment_id AND used.reminder_kind=r.reminder_kind AND used.status IN ('sending','sent','uncertain'))
      ORDER BY r.due_at,r.id LIMIT 1 FOR UPDATE OF r SKIP LOCKED`,[now,visited]);
     if (!r) return null;
+    if (!scope.isOpen()) return null;
     // Appointment writers lock appointment before reminder. Never wait in reverse.
     const appointment=await c.getAsync('SELECT id,status FROM agendamentos WHERE id=$1 AND assinatura_id=$2 FOR SHARE NOWAIT',[r.appointment_id,r.assinatura_id]);
     // Refresh related display data only for the original instance. Ownership
@@ -38,10 +45,12 @@ function createReminderWorker(db, send, clock) {
     try { response=buildReminderMessage(r); }
     catch { await c.runAsync("UPDATE appointment_reminders SET status='cancelled',last_error='Invalid reminder recipient or snapshot.' WHERE id=$1",[r.id]);return {skip:true}; }
     const claim=newDeliveryClaim();
+    if (!scope.isOpen()) return null;
     await c.runAsync("UPDATE appointment_reminders SET status='sending',claim_token=$1,operation_token=NULL,dispatch_started_at=NULL,claimed_at=$2 WHERE id=$3",[claim,now,r.id]);
     return {...r,claim_token:claim,response,instance:r.snapshot.instance,phone:r.destination};
    },{serialize:false}).catch(error=>{if (['55P03','23505'].includes(error.code)) return null;throw error;});
    if (!row) return;
+   if (!scope.isOpen()) return;
    if (row.skip) continue;
    visited.push(row.id);
    const account=await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[row.assinatura_id]);
@@ -64,11 +73,25 @@ function createReminderWorker(db, send, clock) {
 }
 const workerStatus={startedAt:null,lastCompletedAt:null,lastErrorAt:null,running:false};
 function getWorkerStatus() { return {...workerStatus}; }
-function startWorker(db) {
+function startWorker(db, { drain: customDrain, intervalMs = 1000, taskScope = scope } = {}) {
  const worker=createReminderWorker(db,require('../evolutionApi').enviarTextoInstancia);
- let running=false;
+ let running=false, stopped=false, flight;
+ const completions=new Set();
  workerStatus.startedAt=new Date().toISOString();
- const run=async()=>{if(running)return;running=true;workerStatus.running=true;try{await worker.drain();workerStatus.lastCompletedAt=new Date().toISOString();}catch{workerStatus.lastErrorAt=new Date().toISOString();console.error('[Studiofy] Falha ao processar lembretes.');}finally{running=false;workerStatus.running=false;}};
- void run();const timer=setInterval(run,1000);timer.unref();return timer;
+ const run=()=>{
+  if(running||stopped||!taskScope.isOpen())return;
+  running=true;workerStatus.running=true;
+  flight=taskScope.admitRoot('reminder.run',async()=>{
+   try{await (customDrain||worker.drain)();workerStatus.lastCompletedAt=new Date().toISOString();}
+   catch{workerStatus.lastErrorAt=new Date().toISOString();console.error('[Studiofy] Falha ao processar lembretes.');}
+   finally{running=false;workerStatus.running=false;}
+  },{canAdmit:()=>!stopped});
+  const completion=flight.completion;completions.add(completion);
+  completion.then(()=>completions.delete(completion));
+  return flight;
+ };
+ run();const timer=setInterval(run,intervalMs);timer.unref();
+ timer.stop=()=>{stopped=true;clearInterval(timer);return Promise.all([...completions]);};
+ return timer;
 }
 module.exports={createReminderWorker,startWorker,getWorkerStatus};

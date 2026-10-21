@@ -100,7 +100,11 @@ async function processConnectionEvent(payload) {
   return job.finally(() => { if (connectionEventJobs.get(instance) === job) connectionEventJobs.delete(instance); });
 }
 
+const { executionScope: scope } = require('./services/executionScope');
 async function drain(send = enviarTextoInstancia) {
+  return scope.admit('outbox.drain', () => drainAdmitted(send));
+}
+async function drainAdmitted(send) {
   const db = require('./database');
   const { createEvolutionDelivery, newDeliveryClaim } = require('./services/evolutionDelivery');
   const delivery = createEvolutionDelivery(db);
@@ -112,8 +116,10 @@ async function drain(send = enviarTextoInstancia) {
   // failure keeps its durable origin and must not stop the existing outbox.
   try { await materializeBookingConfirmations(db); }
   catch { log('erro ao preparar confirmações de agendamento'); }
+  if (!scope.isOpen()) return;
   try { await materializeReturnReminders(db); }
   catch { log('erro ao materializar retornos'); }
+  if (!scope.isOpen()) return;
   await delivery.recoverInterrupted('whatsapp_messages');
   // A revoked unstarted reservation is recovered by the shared delivery first.
   // The persistent latch then ends the pending message without another claim.
@@ -122,13 +128,17 @@ async function drain(send = enviarTextoInstancia) {
       AND status='pending' AND operation_token IS NULL AND dispatch_started_at IS NULL`);
   await finishSuppressed();
   for (let i = 0; i < 50; i++) {
+    if (!scope.isOpen()) return;
     // Durable input recovery runs before looking for the next outbox message,
     // including after a restart or explicit reconciliation of uncertain delivery.
     await conversations.consumePending();
+    if (!scope.isOpen()) return;
     try { await materializeBookingConfirmations(db); }
     catch { log('erro ao preparar confirmações de agendamento'); }
+    if (!scope.isOpen()) return;
     try { await materializeReturnReminders(db); }
     catch { log('erro ao materializar retornos'); }
+    if (!scope.isOpen()) return;
     await finishSuppressed();
     const row = await db.transaction(async client => {
       const pending = await client.getAsync(`SELECT m.* FROM whatsapp_messages m
@@ -141,17 +151,20 @@ async function drain(send = enviarTextoInstancia) {
             OR (older.lease_until<$1 AND studiofy_return_outbox_ready(older))))
         ORDER BY m.id LIMIT 1 FOR UPDATE OF m SKIP LOCKED`, [Date.now()]);
       if (!pending) return null;
+      if (!scope.isOpen()) return null;
       const claim = newDeliveryClaim();
       await client.runAsync("UPDATE whatsapp_messages SET status='sending',claim_token=$1,operation_token=NULL,dispatch_started_at=NULL,claimed_at=CURRENT_TIMESTAMP WHERE id=$2",[claim,pending.id]);
       return { ...pending, claim_token: claim };
     }, { serialize: false });
     if (!row) return;
+    if (!scope.isOpen()) return;
     const account = await db.getAsync('SELECT * FROM assinaturas WHERE id=$1',[row.assinatura_id]);
     if (!require('./services/access').avaliarAcessoAssinatura(account).liberado) {
       await db.runAsync("UPDATE whatsapp_messages SET status='pending',lease_until=$1 WHERE id=$2 AND claim_token=$3 AND status='sending'",[Date.now()+300000,row.id,row.claim_token]);
       continue;
     }
     const sendWithContext = async (...args) => {
+      return scope.follow('delivery.provider-correlation', async () => {
       const result = await send(...args);
       // Store provider correlation before finalizing acceptance. A failure here
       // remains uncertain under the existing delivery protocol; never resend.
@@ -161,6 +174,7 @@ async function drain(send = enviarTextoInstancia) {
           await db.runAsync('UPDATE whatsapp_conversation_responses SET provider_message_id=$1 WHERE delivery_id=$2 AND assinatura_id=$3',[providerId,row.id,row.assinatura_id]);
       }
       return result;
+      });
     };
     await delivery.dispatch('whatsapp_messages',row,sendWithContext, { validate: async () =>
       await validateReturnReminder(db,row) && await validateConversationResponse(db,row)
@@ -171,6 +185,9 @@ async function drain(send = enviarTextoInstancia) {
 }
 
 async function processarWebhookEvolution(payload = {}, headers = {}, options = {}) {
+  return scope.admit('webhook.inbound', () => processAdmittedWebhook(payload, headers, options));
+}
+async function processAdmittedWebhook(payload, headers, options) {
   if (!authorized(headers)) {
     diagnostic('inbound_rejected', { reason: 'unauthorized', status: 401 });
     const error = new Error('Webhook não autorizado.'); error.statusCode = 401; throw error;
@@ -196,7 +213,7 @@ function startWorker({ send = enviarTextoInstancia } = {}) {
   const worker = require('./services/whatsapp/outboxWorker').createOutboxWorker(() => drain(send),{
     onError:() => log('erro de processamento da fila'),
   });
-  const controller = { wake:worker.wake, stop:() => { worker.stop(); if(outboxWorker===controller) outboxWorker=undefined; } };
+  const controller = { wake:worker.wake, stop:() => { const closing=worker.stop(); if(outboxWorker===controller) outboxWorker=undefined; return closing; } };
   outboxWorker=controller;
   return controller;
 }
