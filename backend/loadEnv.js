@@ -30,6 +30,7 @@ function aplicarLinhaEnv(linha = '') {
 }
 
 function carregarEnv(caminhoArquivo = path.join(__dirname, '.env')) {
+  if (require('./services/supervision/context').current()) return;
   if (!fs.existsSync(caminhoArquivo)) {
     return;
   }

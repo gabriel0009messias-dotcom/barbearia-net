@@ -1,6 +1,7 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
+const supervision = require('./supervision/context');
 
 const admissionError = () => Object.assign(new Error('Executor admission is closed.'), { code: 'INSTANCE_ADMISSION_CLOSED' });
 
@@ -36,7 +37,7 @@ function createExecutionScope({ certifiable = false, runtimeProfile = 'evolution
     if (task.parent) { task.parent.children.delete(task); finish(task.parent); }
     notify();
   };
-  const isOpen = () => state === 'OPEN' && (storage.getStore()?.canAdmit?.() ?? true);
+  const isOpen = () => supervision.admissionAllowed() && state === 'OPEN' && (storage.getStore()?.canAdmit?.() ?? true);
   const assertOpen = () => {
     const parent = storage.getStore();
     if (!isOpen() || (parent && (parent.ownSettled || !tasks.has(parent.id)))) throw admissionError();
@@ -46,7 +47,7 @@ function createExecutionScope({ certifiable = false, runtimeProfile = 'evolution
     if (canAdmit !== undefined && typeof canAdmit !== 'function') throw Error('Invalid task admission guard.');
     const parent = storage.getStore();
     canAdmit = parent?.canAdmit || canAdmit;
-    if ((certifiable && continuation && !parent) || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
+    if ((!supervision.admissionAllowed() && (!continuation || !parent)) || (certifiable && continuation && !parent) || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
         (state !== 'OPEN' && (!continuation || !parent)) ||
         (!continuation && canAdmit && !canAdmit())) return Promise.reject(admissionError());
     let resolveCompletion;
@@ -69,7 +70,7 @@ function createExecutionScope({ certifiable = false, runtimeProfile = 'evolution
   const beginDrain = () => { if (state === 'OPEN') { state = 'DRAINING'; generation++; } return state; };
   function assertContinuation() {
     const parent = storage.getStore();
-    if (seal || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
+    if ((!supervision.admissionAllowed() && !parent) || seal || state === 'CLOSED' || (parent && (parent.ownSettled || !tasks.has(parent.id))) ||
         (state !== 'OPEN' && !parent)) throw admissionError();
   }
   function obligation(kind) {

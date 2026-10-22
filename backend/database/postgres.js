@@ -1,3 +1,5 @@
+const supervision = require('../services/supervision/context');
+supervision.assertRuntimeImport();
 const { Pool } = require('pg');
 const { connectionConfig } = require('./config');
 const { migrate } = require('./migrate');
@@ -32,7 +34,7 @@ function access(query) {
   };
   return api;
 }
-const ready = migrate(pool);
+const ready = supervision.current() ? supervision.current().schemaAlreadyPrepared(pool) : migrate(pool);
 const db = access(async (sql, params) => { await ready; return pool.query(sql, params); });
 db.ready = ready;
 db.pool = pool;

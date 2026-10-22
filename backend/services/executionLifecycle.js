@@ -11,6 +11,8 @@ const metadata = name => {
 // One identity per Node process, including across module reloads. A restarted
 // process gets fresh UUIDs even when its PID or deployment commit is reused.
 function processIdentity() {
+  const supervised = require('./supervision/context').current();
+  if (supervised) return supervised.identity;
   if (!globalThis[identityKey]) {
     Object.defineProperty(globalThis, identityKey, { value: Object.freeze({
       executorId: randomUUID(), bootId: randomUUID(), processId: process.pid,
@@ -34,6 +36,14 @@ function deliveryIdentity(value) {
 async function registerExecutor(client, schema) {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw Error('Invalid execution schema.');
   const s = '"' + schema + '"', executor = processIdentity();
+  const supervised = require('./supervision/context').current();
+  if (supervised) {
+    supervised.assertOpen(); await supervised.confirmEnrollment();
+    supervised.assertOpen();
+    // No legacy INSERT before/after a supervised birth. 3B.3A uses test authority.
+    require('./executionScope').executionScope.setExecutor(executor);
+    return executor;
+  }
   await client.query('INSERT INTO ' + s + '.evolution_executors' +
     '(executor_id,boot_id,process_id,started_at,service_id,deployment_id,instance_id,revision)' +
     ' VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(executor_id) DO NOTHING',

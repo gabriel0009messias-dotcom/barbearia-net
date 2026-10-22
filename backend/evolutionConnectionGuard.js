@@ -85,6 +85,7 @@ function connectionAttempt(key) {
 function clearRateLimit(key) { cooldowns.delete(key); }
 
 // Bound retention without timers that keep the process alive.
+require('./services/supervision/context').assertRuntimeImport();
 const cleanup = setInterval(() => {
   for (const [key, state] of cooldowns) if (Date.now() - state.until > 600000) cooldowns.delete(key);
 }, 60000);

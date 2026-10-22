@@ -1,3 +1,5 @@
+const supervision = require('./services/supervision/context');
+supervision.assertRuntimeImport();
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
@@ -774,9 +776,15 @@ const shutdownExecutor = () => {
 };
 process.once('SIGTERM', shutdownExecutor);
 process.once('SIGINT', shutdownExecutor);
+supervision.current()?.onShutdown(shutdownExecutor);
 executorScope.admit('startup.identity', async () => {
   await require('./database').ready;
-  await require('./services/executionLifecycle').initializeExecutor(require('./database').pool);
+  const supervised = supervision.current();
+  if (supervised) {
+    supervised.assertOpen();
+    const identity = await supervised.confirmEnrollment();
+    supervised.assertOpen(); executorScope.setExecutor(identity);
+  } else await require('./services/executionLifecycle').initializeExecutor(require('./database').pool);
 }).then(() => {
   executorScope.assertOpen();
   executorOutbox = require('./evolutionWebhook').startWorker();
@@ -784,6 +792,7 @@ executorScope.admit('startup.identity', async () => {
   // The shared outbox worker materializes returns; migration 024 defaults delivery off.
   executorServer = app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
+    supervision.current()?.onReady(executorServer.address().port);
   });
   capabilityCoordinator.register('listener.http', () => new Promise((resolve, reject) => executorServer.close(error => error ? reject(error) : resolve())));
   executorServer.on('error', (erro) => registrarErroRuntime('serverError', erro));
