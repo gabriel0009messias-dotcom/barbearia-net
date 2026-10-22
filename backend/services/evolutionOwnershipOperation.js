@@ -1,6 +1,7 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 const execution = new AsyncLocalStorage();
 const { randomUUID } = require('node:crypto');
+const { setTimeout: nativeSetTimeout, clearTimeout: nativeClearTimeout } = require('node:timers');
 const { createEvolutionOwnershipResolver } = require('./evolutionOwnership');
 const { deliveryIdentity, registerExecution, checkAuthorization } = require('./executionLifecycle');
 const { executionScope: scope } = require('./executionScope');
@@ -10,8 +11,14 @@ const error = code => Object.assign(new Error('Evolution ownership operation cou
 
 // Internal API only: callers provide an authenticated/internal tenant, never a
 // request-selected provider name. This module does not import any transport.
-function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE_SCHEMA || 'salaoflix' } = {}) {
+function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE_SCHEMA || 'salaoflix' } = {}, deadlineScheduler) {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw error('INSTANCE_INVALID_SCHEMA');
+  // Trusted internal DI, never configuration. Capture methods once; only the
+  // operational deadline uses this dependency. SQL timers/heartbeat stay real.
+  const scheduler = deadlineScheduler === undefined
+    ? Object.freeze({ schedule: nativeSetTimeout, cancel: nativeClearTimeout }) : deadlineScheduler;
+  if (!scheduler || typeof scheduler.schedule !== 'function' || typeof scheduler.cancel !== 'function') throw error('INSTANCE_INVALID_OPERATION');
+  const scheduleDeadline = scheduler.schedule.bind(scheduler), cancelDeadline = scheduler.cancel.bind(scheduler);
   const s = '"' + schema + '"';
   async function transaction(work) {
     return scope.follow('ownership.sql', () => transactionBody(work));
@@ -94,6 +101,14 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     // are fenced by migration 018, even across models/processes or after a crash.
     const controller = new AbortController();
     let timer, heartbeatTimer, active = true, authorizationDenied = false, heartbeatInFlight;
+    let deadlineState = 'unarmed', hasHandle = false, cancelled = false;
+    const closeDeadline = () => {
+      deadlineState = 'closed';
+      if (hasHandle && !cancelled) {
+        cancelled = true;
+        try { cancelDeadline(timer); } catch { /* Logical closure is authoritative even if trusted cleanup fails. */ }
+      }
+    };
     const assertActive = () => { if (!active || controller.signal.aborted) throw error('INSTANCE_OPERATION_EXPIRED'); };
     const identity = Object.freeze({ ...owner, operationToken: token });
     const authorization = async options => {
@@ -125,15 +140,29 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
     };
     try {
       const context = Object.freeze({ ...identity, signal: controller.signal, assertActive, authorizeEffect });
-      const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
-        active = false; controller.abort(); reject(error('INSTANCE_OPERATION_TIMEOUT'));
-      }, timeoutMs); });
+      let rejectTimeout, synchronousFire = false;
+      const timeout = new Promise((_, reject) => { rejectTimeout = reject; });
+      try {
+        deadlineState = 'scheduling';
+        timer = scheduleDeadline(() => {
+          if (deadlineState === 'scheduling') { synchronousFire = true; return; }
+          if (deadlineState !== 'armed') return;
+          deadlineState = 'fired';
+          active = false; controller.abort(); rejectTimeout(error('INSTANCE_OPERATION_TIMEOUT'));
+        }, timeoutMs);
+        // Opaque identity handles (including native Node Timeout objects).
+        hasHandle = timer !== null && ['object', 'function', 'symbol'].includes(typeof timer);
+        if (!hasHandle || synchronousFire) throw error('INSTANCE_INVALID_OPERATION');
+        deadlineState = 'armed';
+      } catch (cause) {
+        active = false; closeDeadline(); controller.abort(); throw cause;
+      }
       heartbeatTimer = setInterval(() => {
         if (!heartbeatInFlight && active && scope.isOpen()) heartbeatInFlight = scope.follow('ownership.heartbeat', heartbeat).finally(() => { heartbeatInFlight = undefined; });
       }, 3000);
       heartbeatTimer.unref();
       const result = await Promise.race([scope.follow('ownership.callback', async () => { await authorizeEffect(); return execution.run(context, () => operation(context)); }), timeout]);
-      assertActive(); active = false; clearTimeout(timer);
+      assertActive(); active = false; closeDeadline();
       // Transport has ended. Finalize its persisted result and release the fence
       // in ONE short, SQL-only transaction, bounded by the database timeouts.
       // A failure rolls back both facts; a lost COMMIT acknowledgement cannot
@@ -161,7 +190,7 @@ function createEvolutionOwnershipOperation(pool, { schema = process.env.DATABASE
       failure.operationToken = token;
       failure.authorizationLost = authorizationDenied;
       throw failure;
-    } finally { active = false; clearTimeout(timer); clearInterval(heartbeatTimer); controller.abort(); }
+    } finally { active = false; closeDeadline(); clearInterval(heartbeatTimer); controller.abort(); }
   }
   // Privileged INTERNAL reconciliation only, after verifying the old execution
   // has stopped and its outcome. Never expose this as a customer HTTP endpoint,

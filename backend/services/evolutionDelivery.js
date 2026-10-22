@@ -10,10 +10,10 @@ const safeBeforeRequest = error => error?.deliveryOutcome === 'not_attempted' ||
   ['EVOLUTION_NOT_CONFIGURED','EVOLUTION_INVALID_URL'].includes(error?.code) ||
   (error?.code === 'EVOLUTION_RATE_LIMIT' && error.rateLimitSource === 'local_cooldown');
 
-function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || 'salaoflix', timeoutMs = 15000 } = {}) {
+function createEvolutionDelivery(db, { schema = process.env.DATABASE_SCHEMA || 'salaoflix', timeoutMs = 15000 } = {}, deadlineScheduler) {
   if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) throw new Error('Invalid delivery schema.');
   const qualified = table => { if (!tables.has(table)) throw new Error('Invalid delivery kind.'); return '"' + schema + '".' + table; };
-  const operation = () => createEvolutionOwnershipOperation(db.pool, { schema });
+  const operation = () => createEvolutionOwnershipOperation(db.pool, { schema }, deadlineScheduler);
   const owners = '"' + schema + '".evolution_instance_owners';
 
   // Keep the execution guard until the actual callback settles, even when the

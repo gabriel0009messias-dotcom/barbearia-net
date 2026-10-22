@@ -141,5 +141,144 @@ test('Evolution ownership operation: durable fencing, deadlines and explicit rec
     await assert.rejects(fake.run(806, () => assert.fail()), { code: 'INSTANCE_OPERATION_BUSY' });
     resolve({ release() { released++; } }); await new Promise(r => setImmediate(r)); assert.equal(released, 1);
   });
+  // Manual schedulers belong to each scenario; PostgreSQL authorization and
+  // durable reservations remain real. Always join late work before releasing.
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+  const factory = scheduler => createEvolutionOwnershipOperation(pool, { schema: env.schema }, scheduler);
+  const setupFailure = async scheduler => {
+    let calls = 0;
+    const guarded = factory(scheduler), pending = guarded.run(806, () => { calls++; });
+    try {
+      await assert.rejects(pending, { code: 'INSTANCE_OPERATION_UNCERTAIN' });
+      assert.equal(calls, 0, 'No operation/transport without a usable deadline');
+    } finally {
+      await pending.completion;
+      const owner = await record(806);
+      if (owner.operation_token) await guarded.acknowledgeStoppedOperation(806, owner.operation_token);
+    }
+  };
+  await t.test('deadline DI: omitted/undefined scheduler retains the native default', async () => {
+    const pending = factory(undefined).run(806, context => { context.assertActive(); return 'native'; });
+    assert.equal(await pending, 'native'); await pending.completion;
+    assert.equal((await record(806)).operation_token, null);
+  });
+  await t.test('deadline DI: explicitly invalid scheduler is rejected at construction', () => {
+    for (const scheduler of [null, false, 1, '', {}, { schedule() {} }, { cancel() {} }, { schedule: 1, cancel() {} }]) {
+      assert.throws(() => factory(scheduler), { code: 'INSTANCE_INVALID_OPERATION' });
+    }
+  });
+  await t.test('deadline DI: schedule/cancel references and receiver are captured once', async () => {
+    const handle = Object.freeze({}); let schedules = 0, cancels = 0;
+    const scheduler = {
+      schedule(callback, delayMs) { assert.equal(this, scheduler); assert.equal(typeof callback, 'function'); assert.equal(delayMs, 137); schedules++; return handle; },
+      cancel(value) { assert.equal(this, scheduler); assert.equal(value, handle); cancels++; },
+    };
+    const guarded = factory(scheduler);
+    scheduler.schedule = scheduler.cancel = () => assert.fail('Replaced method must not be consulted');
+    const pending = guarded.run(806, () => 'captured', { timeoutMs: 137 });
+    assert.equal(await pending, 'captured'); await pending.completion;
+    assert.equal(schedules, 1); assert.equal(cancels, 1);
+  });
+  await t.test('deadline DI: success closes before finalization and cancels exactly once', async () => {
+    const handle = {}; let fire, cancels = 0, context;
+    const guarded = factory({ schedule(callback) { fire = callback; return handle; }, cancel(value) { assert.equal(value, handle); cancels++; fire(); } });
+    const pending = guarded.run(806, value => { context = value; return 'success'; }, { onCompleted: async () => {
+      assert.equal(cancels, 1); fire(); assert.equal(context.signal.aborted, false);
+      assert.throws(() => context.assertActive(), { code: 'INSTANCE_OPERATION_EXPIRED' });
+    } });
+    assert.equal(await pending, 'success'); await pending.completion; assert.equal(cancels, 1);
+  });
+  await t.test('deadline DI: duplicate firing performs timeout and abort only once', async () => {
+    const entered = deferred(), late = deferred(); let fire, context, aborts = 0, cancels = 0;
+    const guarded = factory({ schedule(callback) { fire = callback; return {}; }, cancel() { cancels++; } });
+    const pending = guarded.run(806, async value => {
+      context = value; context.signal.addEventListener('abort', () => { aborts++; }); entered.resolve(); await late.promise;
+    });
+    try {
+      await Promise.race([entered.promise, pending.then(() => assert.fail('Premature success'))]);
+      context.assertActive(); fire(); fire();
+      await assert.rejects(pending, { code: 'INSTANCE_OPERATION_TIMEOUT' });
+      assert.equal(aborts, 1); assert.equal(cancels, 1);
+      assert.equal((await record(806)).operation_token, context.operationToken);
+    } finally {
+      late.resolve(); await Promise.allSettled([pending, pending.completion]);
+      if (context) await guarded.acknowledgeStoppedOperation(806, context.operationToken);
+    }
+  });
+  await t.test('deadline DI: retained callback after cancellation is inert', async () => {
+    let fire, context, aborts = 0, cancels = 0;
+    const guarded = factory({ schedule(callback) { fire = callback; return {}; }, cancel() { cancels++; } });
+    const pending = guarded.run(806, value => { context = value; context.signal.addEventListener('abort', () => { aborts++; }); return 42; });
+    assert.equal(await pending, 42); await pending.completion;
+    fire(); fire(); assert.equal(aborts, 1); assert.equal(cancels, 1);
+    assert.equal((await record(806)).operation_token, null);
+  });
+  await t.test('deadline DI: concurrent operations keep independent handles and deadline state', async () => {
+    const entries = [], enteredA = deferred(), enteredB = deferred(), lateA = deferred(), lateB = deferred(); let a, b;
+    const guarded = factory({ schedule(callback) { const entry = { callback, cancels: 0 }; entries.push(entry); return entry; }, cancel(entry) { entry.cancels++; } });
+    const first = guarded.run(806, async context => { a = context; enteredA.resolve(); await lateA.promise; return 'first'; });
+    let second;
+    try {
+      await Promise.race([enteredA.promise, first.then(() => assert.fail('First ended prematurely'))]);
+      second = guarded.run(807, async context => { b = context; enteredB.resolve(); await lateB.promise; });
+      await Promise.race([enteredB.promise, second.then(() => assert.fail('Second ended prematurely'))]);
+      assert.equal(entries.length, 2); assert.notEqual(entries[0], entries[1]);
+      lateA.resolve(); assert.equal(await first, 'first'); await first.completion;
+      entries[0].callback(); b.assertActive(); assert.equal(b.signal.aborted, false);
+      assert.equal(entries[0].cancels, 1); assert.equal(entries[1].cancels, 0);
+      entries[1].callback(); await assert.rejects(second, { code: 'INSTANCE_OPERATION_TIMEOUT' });
+      assert.equal(entries[1].cancels, 1); assert.equal((await record(806)).operation_token, null);
+      assert.equal((await record(807)).operation_token, b.operationToken);
+    } finally {
+      lateA.resolve(); lateB.resolve();
+      await Promise.allSettled([first, first.completion, second, second?.completion]);
+      for (const [id, context] of [[806, a], [807, b]]) if (context && (await record(id)).operation_token === context.operationToken) await guarded.acknowledgeStoppedOperation(id, context.operationToken);
+    }
+  });
+  await t.test('deadline DI: failure before scheduling never cancels an uncreated handle', async () => {
+    let schedules = 0, cancels = 0;
+    const scheduler = { schedule() { schedules++; return {}; }, cancel() { cancels++; } };
+    await assert.rejects(factory(scheduler).run(0, () => assert.fail()), { code: 'INSTANCE_INVALID_TENANT' });
+    const broken = createEvolutionOwnershipOperation({ connect: async () => { throw Error('Synthetic'); } }, { schema: env.schema }, scheduler);
+    const pending = broken.run(806, () => assert.fail());
+    await assert.rejects(pending, { code: 'INSTANCE_OPERATION_FAILED' }); await pending.completion;
+    assert.equal(schedules, 0); assert.equal(cancels, 0);
+  });
+  await t.test('deadline DI: throwing schedule fails closed and retained callback is inert', async () => {
+    let fire, cancels = 0;
+    await setupFailure({ schedule(callback) { fire = callback; throw Error('PRIVATE_SCHEDULER'); }, cancel() { cancels++; } });
+    fire(); fire(); assert.equal(cancels, 0);
+  });
+  await t.test('deadline DI: throwing cancel preserves success/error and cannot reactivate deadline', async () => {
+    for (const rejectOperation of [false, true]) {
+      let fire, cancels = 0, context, aborts = 0;
+      const guarded = factory({ schedule(callback) { fire = callback; return {}; }, cancel() { cancels++; fire(); throw Error('PRIVATE_CANCEL'); } });
+      const pending = guarded.run(806, value => {
+        context = value; context.signal.addEventListener('abort', () => { aborts++; });
+        if (rejectOperation) throw Error('PRIVATE_OPERATION'); return 'preserved';
+      }, { onCompleted: async () => { fire(); assert.equal(context.signal.aborted, false); } });
+      try {
+        if (rejectOperation) await assert.rejects(pending, e => e.code === 'INSTANCE_OPERATION_UNCERTAIN' && !e.message.includes('PRIVATE'));
+        else assert.equal(await pending, 'preserved');
+        await pending.completion; fire(); assert.equal(cancels, 1); assert.equal(aborts, 1);
+      } finally {
+        await Promise.allSettled([pending, pending.completion]);
+        const owner = await record(806);
+        if (owner.operation_token) await guarded.acknowledgeStoppedOperation(806, owner.operation_token);
+      }
+    }
+  });
+  await t.test('deadline DI: synchronous scheduling is incompatible and fails closed', async () => {
+    let fire, cancels = 0;
+    await setupFailure({ schedule(callback) { fire = callback; callback(); callback(); return {}; }, cancel() { cancels++; fire(); } });
+    fire(); assert.equal(cancels, 1);
+  });
+  await t.test('deadline DI: absent/nonidentity handles fail closed without cancellation', async () => {
+    for (const handle of [undefined, null, 0, 1, NaN, false, '']) {
+      let fire, cancels = 0;
+      await setupFailure({ schedule(callback) { fire = callback; return handle; }, cancel() { cancels++; } });
+      fire(); assert.equal(cancels, 0);
+    }
+  });
   assert.equal(network, 0);
 });

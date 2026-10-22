@@ -85,7 +85,46 @@ test('OWN-01/02/03: durable PostgreSQL dispatch, isolation and uncertain outcome
   await message();await q('UPDATE whatsapp_messages SET attempts=1');await webhook.drain(()=>assert.fail());assert.equal((await state()).status,'uncertain');
  });
  await t.test('OWN-03: crashed claim after durable transport intent becomes uncertain, never pending',async()=>{await message();await q("UPDATE whatsapp_messages SET status='sending',claim_token=$1,dispatch_started_at=CURRENT_TIMESTAMP,claimed_at=CURRENT_TIMESTAMP-interval '3 minutes'",[randomUUID()]);await webhook.drain(()=>assert.fail());assert.equal((await state()).status,'uncertain')});
- await t.test('OWN-03: local operation timeout fences late callback and requires reconciliation',async()=>{const row=await message(),claim=randomUUID();await q("UPDATE whatsapp_messages SET status='sending',claim_token=$1",[claim]);let finish;const late=new Promise(r=>{finish=r});await createEvolutionDelivery(db,{timeoutMs:20}).dispatch('whatsapp_messages',{...row,claim_token:claim},()=>late);assert.equal((await state()).status,'uncertain');finish(accepted());await new Promise(r=>setTimeout(r,20));assert.equal((await state()).status,'uncertain');assert.ok((await fence()).operation_token)});
+ await t.test('OWN-03: local operation timeout fences late callback and requires reconciliation',async()=>{
+  const row=await message(),claim=randomUUID(),handle=Object.freeze({});
+  await q("UPDATE whatsapp_messages SET status='sending',claim_token=$1 WHERE id=$2",[claim,row.id]);
+  let fire,finish,enter,callbackFinished,context,calls=0,cancels=0,dispatchSettled=false;
+  const sendEntered=new Promise(resolve=>{enter=resolve});
+  const late=new Promise(resolve=>{finish=resolve});
+  const callbackDone=new Promise(resolve=>{callbackFinished=resolve});
+  const scheduler={schedule(callback,delayMs){assert.equal(delayMs,20);assert.equal(fire,undefined);fire=callback;return handle},cancel(value){assert.equal(value,handle);cancels++}};
+  const dispatchPromise=createEvolutionDelivery(db,{timeoutMs:20},scheduler).dispatch('whatsapp_messages',{...row,claim_token:claim},async()=>{
+   calls++;context=require('../services/evolutionOwnershipOperation').assertEvolutionOperation(row.instance);enter();
+   try{return await late}finally{callbackFinished()}
+  });
+  const completion=dispatchPromise.completion;
+  dispatchPromise.then(()=>{dispatchSettled=true},()=>{dispatchSettled=true});
+  const stored=()=>db.getAsync('SELECT * FROM whatsapp_messages WHERE id=$1',[row.id]);
+  const check=async status=>{
+   const current=await stored(),owner=await fence();
+   assert.equal(current.status,status);assert.ok(current.dispatch_started_at);assert.equal(current.attempts,1);
+   assert.equal(current.sent_at,null);assert.equal(current.claim_token,claim);
+   assert.ok(context.operationToken);assert.equal(current.operation_token,context.operationToken);
+   assert.equal(owner.operation_token,context.operationToken);assert.ok(owner.operation_started_at);assert.equal(calls,1);
+  };
+  try{
+   assert.ok(completion instanceof Promise);
+   await Promise.race([sendEntered,dispatchPromise.then(()=>assert.fail('Dispatch ended before entering send'))]);
+   await check('sending');context.assertActive();assert.equal(context.signal.aborted,false);assert.equal(dispatchSettled,false);
+   fire();await dispatchPromise;
+   assert.equal(context.signal.aborted,true);assert.throws(()=>context.assertActive(),{code:'INSTANCE_OPERATION_EXPIRED'});
+   await check('uncertain');assert.equal(cancels,1);
+   finish(accepted());await callbackDone;await completion;
+   await check('uncertain');
+   const retry=webhook.drain(()=>{calls++;assert.fail('Uncertain delivery must never reach a second transport')});
+   await retry;
+   await check('uncertain');
+  }finally{
+   finish(accepted());
+   await Promise.allSettled([dispatchPromise,completion]);
+   if(context)await callbackDone;
+  }
+ });
  await t.test('OWN-03: uncertain reminder survives restart, rescheduling and cancellation',async()=>{await reminder();await createReminderWorker(db,async()=>{throw Error('Unknown')},clock).drain();await q("UPDATE agendamentos SET hora='11:00'");await q("UPDATE agendamentos SET status='cancelado'");await createReminderWorker(db,()=>assert.fail(),clock).drain();assert.equal((await state('appointment_reminders')).status,'uncertain')});
  await t.test('transport: direct text/list and generic message request require ownership',async()=>{await assert.rejects(api.enviarTextoInstancia('own-test-a','5511999990000','Synthetic'),{code:'INSTANCE_OPERATION_REQUIRED'});await assert.rejects(api.enviarListaInstancia('own-test-a','5511999990000'),{code:'INSTANCE_OPERATION_REQUIRED'});await assert.rejects(api.evolutionRequest('/message/sendText/own-test-a',{method:'POST'}),{code:'INSTANCE_OPERATION_REQUIRED'})});
  for(const status of [200,400,401,403,408,429,500,502,503,504])await t.test('transport: HTTP '+status+' classified without real provider',async sub=>{
