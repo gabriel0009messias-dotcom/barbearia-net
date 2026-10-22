@@ -93,10 +93,10 @@ function createExecutionScope({ certifiable = false, runtimeProfile = 'evolution
     return Object.freeze({ close() { if (!closed) { closed = true; capabilities.delete(id); notify(); } } });
   }
   function sealClosedScope() {
-    if (seal) return seal;
     if (!certifiable || state !== 'CLOSED' || !executor || tasks.size || capabilities.size || obligations.size || blockers.size || requiredKinds.some(kind => !registeredKinds.has(kind))) {
       throw Object.assign(Error('Scope is not certifiably closed.'), { code: 'CERTIFICATION_BLOCKED' });
     }
+    if (seal) return seal;
     // No callbacks, getters supplied by callers, or await in this critical section.
     const counters = Object.freeze({ active_tasks: 0, active_descendants: 0, active_transports: 0,
       pending_callbacks: 0, pending_correlations: 0, pending_sql: 0, unresolved_sql: 0, capabilities: 0 });

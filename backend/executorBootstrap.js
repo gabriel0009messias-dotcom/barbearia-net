@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { performance } = require('node:perf_hooks');
 const { validate, channel } = require('./services/supervision/protocol');
+const { createChildBridge } = require('./services/supervision/cooperativeSealBridge');
 const boundary = require('./services/supervision/context');
 
 // This entrypoint is not npm start. No app/database/business imports before ACK.
@@ -9,29 +10,40 @@ function runExecutor({ transport = process, startRuntime = startLocalTestRuntime
   const identity = Object.freeze({ executorId: randomUUID(), bootId: randomUUID(), processId: process.pid,
     startedAt: new Date(performance.timeOrigin).toISOString(), serviceId: process.env.RENDER_SERVICE_ID || null,
     deploymentId: null, instanceId: process.env.RENDER_INSTANCE_ID || null, revision: process.env.RENDER_GIT_COMMIT || null });
-  let state = 'WAIT_INIT', protocol, init, runtime, startup, timer, deadline, lastHeartbeat, stopped, pendingSends = 0;
+  let state = 'WAIT_INIT', protocol, init, runtime, startup, timer, deadline, lastHeartbeat, stopped, pendingSends = 0, bridge, cooperativeClosing = false;
   const gate = boundary.install({ identity, schemaAlreadyPrepared,
     confirmEnrollment: async () => { gate.value.assertOpen(); if (!init || state !== 'RUNNING') throw Error('No enrollment confirmation.'); return identity; } });
   const report = (type, details = {}) => onEvent(Object.freeze({ type, state, ...details }));
   const send = message => {
-    if (!transport.connected) { stop('disconnect'); return; }
-    if (pendingSends >= 8) { stop('ipc-backpressure'); return; }
-    pendingSends++;
-    try { transport.send(message,error => { pendingSends--; if (error) stop('ipc-send'); }); }
-    catch { pendingSends--; stop('ipc-send'); }
+    const pending = new Promise((resolve, reject) => {
+      if (!transport.connected || pendingSends >= 8) { reject(Error('Control channel unavailable.')); return; }
+      pendingSends++;
+      try { transport.send(message,error => { pendingSends--; if (error) reject(error); else resolve(); }); }
+      catch (error) { pendingSends--; reject(error); }
+    });
+    pending.catch(() => { bridge?.fail(); stop('ipc-send'); });
+    return pending;
   };
-  const closing = () => ['STOPPING','CLOSED'].includes(state);
+  const closing = () => cooperativeClosing || ['STOPPING','CLOSED'].includes(state);
+  function cleanup() {
+    clearTimeout(deadline); clearInterval(timer);
+    transport.removeListener('message',receive);
+    transport.removeListener('disconnect',disconnected);
+    process.removeListener('SIGTERM',term); process.removeListener('SIGINT',interrupt);
+    if (transport.connected) transport.disconnect();
+  }
   function stop(reason) {
+    if (cooperativeClosing) {
+      bridge?.fail(); cooperativeClosing = false; process.exitCode = 1;
+      state = 'CLOSED'; report('closure-failed'); cleanup(); return stopped;
+    }
     if (closing()) return stopped;
     state = 'STOPPING'; const runtimeClosing = gate.close(); clearTimeout(deadline); clearInterval(timer); report('admission-closed',{ reason });
     stopped = Promise.resolve(startup).catch(() => {}).then(async () => {
       await runtime?.stop?.();
       await runtimeClosing;
       state = 'CLOSED'; report('closed');
-      transport.removeListener('message',receive);
-      transport.removeListener('disconnect',disconnected);
-      process.removeListener('SIGTERM',term); process.removeListener('SIGINT',interrupt);
-      if (transport.connected) transport.disconnect();
+      cleanup();
     }).catch(() => { process.exitCode = 1; if (transport.connected) transport.disconnect(); });
     return stopped;
   }
@@ -39,7 +51,7 @@ function runExecutor({ transport = process, startRuntime = startLocalTestRuntime
   process.on('SIGTERM',term); process.on('SIGINT',interrupt); transport.on('disconnect',disconnected);
   gate.setReady(port => { if (!closing()) send(protocol.message('READY',{ port })); });
   function receive(message, handle) {
-    if (closing()) return;
+    if (closing() && !cooperativeClosing) return;
     try {
       if (handle) throw Error('IPC handles forbidden.');
       validate(message);
@@ -59,12 +71,36 @@ function runExecutor({ transport = process, startRuntime = startLocalTestRuntime
         report('hello');
         return;
       }
-      if (protocol.receive(message) === 'duplicate') return;
+      if (protocol.receive(message) === 'duplicate') { if (cooperativeClosing) throw Error('Closure replay.'); return; }
+      if (cooperativeClosing) {
+        bridge.receive(message); return;
+      }
+      if (message.message_type === 'COOPERATIVE_CLOSE_REQUEST' && state === 'RUNNING') {
+        cooperativeClosing = true; state = 'CLOSE_REQUESTED';
+        clearInterval(timer); clearTimeout(deadline);
+        deadline = setTimeout(() => stop('closure-timeout'), init.handshake_timeout_ms);
+        const scope = require('./services/executionScope').executionScope;
+        const coordinator = require('./services/executionCapabilities').coordinator;
+        bridge = createChildBridge({ protocol, send, scope,
+          closeAdmission: () => {
+            const closing = gate.close(); scope.beginDrain(); state = 'DRAINING';
+            report('admission-closed', { reason: 'cooperative-close' });
+            return Promise.all([closing, Promise.resolve(startup).then(() => runtime?.stop?.())]);
+          },
+          drain: () => coordinator.drain(),
+          onClosed: () => { state = 'CLOSED'; cooperativeClosing = false; report('cooperative-closed'); cleanup(); },
+          onFailure: () => stop('not-certifiable'),
+        });
+        bridge.close(message).catch(() => stop('closure-failed'));
+        return;
+      }
       if (message.message_type === 'STOPPING') { stop('parent-stopping'); return; }
       if (message.message_type === 'ACK' && state === 'WAIT_ACK') {
         // All checks and grant are synchronous; shutdown is irreversible.
         if (closing()) return;
-        gate.open(); state = 'RUNNING'; clearTimeout(deadline); lastHeartbeat = performance.now();
+        gate.open();
+        require('./services/executionScope').executionScope.setExecutor(identity);
+        state = 'RUNNING'; clearTimeout(deadline); lastHeartbeat = performance.now();
         timer = setInterval(() => { if (performance.now() - lastHeartbeat > init.heartbeat_timeout_ms) stop('heartbeat-expired'); },init.heartbeat_ms);
         report('ack');
         startup = Promise.resolve().then(() => {
@@ -80,7 +116,7 @@ function runExecutor({ transport = process, startRuntime = startLocalTestRuntime
   // Only a control deadline exists before INIT/ACK. No business modules loaded.
   deadline = setTimeout(() => { process.exitCode = 1; stop('handshake-timeout'); },10000);
   report('bootstrap');
-  return Object.freeze({ stop, snapshot: () => Object.freeze({ state, admitted: gate.value.isOpen(), identity, proof: false, stopped: false }) });
+  return Object.freeze({ stop, snapshot: () => Object.freeze({ state, cooperativeState: bridge?.snapshot().state || null, admitted: gate.value.isOpen(), identity, proof: false, stopped: false }) });
 }
 function startLocalTestRuntime({ mode, context }) {
   context.assertOpen();

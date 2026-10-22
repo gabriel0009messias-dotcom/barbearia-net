@@ -86,7 +86,7 @@ test('real app starts after ACK on prepared local PostgreSQL without migrations,
   assert.equal(events.some(e=>e.type==='ready'),false);assert.doesNotMatch(output,/Servidor rodando|PostgreSQL conectado|outbox_worker_started/);
   const ready=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Runtime not ready: '+output)),15000);s.events.on('event',e=>{if(e.type==='ready'){clearTimeout(timer);resolve(e);}});});
   release();const event=await ready;const health=await fetch('http://127.0.0.1:'+event.port+'/health');assert.equal(health.status,200);assert.equal((await health.json()).ok,true);
-  s.shutdown();await s.done;
+  s.shutdown();const closure=await s.done;assert.equal(closure.cooperativeClosed,true);
   assert.deepEqual(await protectedState(),before);assert.deepEqual((await pool.query('SELECT * FROM schema_migrations ORDER BY name')).rows,migrations);
   for(const table of ['evolution_executors','evolution_supervisors','evolution_executor_birth_bindings','evolution_executor_gates','evolution_executor_closure_events','evolution_execution_stop_proofs','evolution_execution_stops'])assert.equal((await pool.query('SELECT count(*)::int n FROM '+table)).rows[0].n,0,table);
   assert.doesNotMatch(output,/Migration aplicada|Falha ao inicializar|erro ao|Falha ao processar/);

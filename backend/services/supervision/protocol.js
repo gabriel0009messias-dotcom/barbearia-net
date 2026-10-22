@@ -5,7 +5,11 @@ const hex = /^[a-f0-9]{64}$/;
 const common = ['protocol_version','message_type','supervisor_id','supervisor_boot_id','spawn_id','executor_id','boot_id',
   'sequence','challenge','runtime_profile','revision','instance_id'];
 const fields = Object.freeze({ INIT: ['session_key','runtime_mode','heartbeat_ms','heartbeat_timeout_ms','handshake_timeout_ms'],
-  HELLO: ['pid','started_at'], ACK: ['local_test_enrollment'], READY: ['port'], HEARTBEAT: [], HEARTBEAT_ACK: [], STOPPING: [] });
+  HELLO: ['pid','started_at'], ACK: ['local_test_enrollment'], READY: ['port'], HEARTBEAT: [], HEARTBEAT_ACK: [], STOPPING: [],
+  COOPERATIVE_CLOSE_REQUEST: ['closure_request_id','closure_nonce','closure_capability'],
+  COOPERATIVE_SEAL: ['closure_request_id','closure_nonce','closure_capability','seal_id','closure_generation'],
+  COOPERATIVE_SEAL_ACK: ['closure_request_id','closure_nonce','closure_capability','seal_id','closure_generation'],
+  COOPERATIVE_CLOSE_FAILED: ['closure_request_id','closure_nonce','closure_capability','failure_code'] });
 const invalid = () => Object.assign(Error('Invalid supervision protocol.'), { code: 'SUPERVISION_PROTOCOL_INVALID' });
 function canonical(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -32,6 +36,12 @@ function validate(message) {
   if (message.message_type === 'HELLO' && (!Number.isSafeInteger(message.pid) || message.pid <= 0 || typeof message.started_at !== 'string' || !Number.isFinite(Date.parse(message.started_at)))) throw invalid();
   if (message.message_type === 'ACK' && message.local_test_enrollment !== true) throw invalid();
   if (message.message_type === 'READY' && (!Number.isSafeInteger(message.port) || message.port < 0 || message.port > 65535)) throw invalid();
+  if (message.message_type.startsWith('COOPERATIVE_')) {
+    if (!uuid.test(message.closure_request_id) || !hex.test(message.closure_nonce) || !hex.test(message.closure_capability)) throw invalid();
+    if (['COOPERATIVE_SEAL','COOPERATIVE_SEAL_ACK'].includes(message.message_type) &&
+        (!uuid.test(message.seal_id) || !Number.isSafeInteger(message.closure_generation) || message.closure_generation < 1)) throw invalid();
+    if (message.message_type === 'COOPERATIVE_CLOSE_FAILED' && message.failure_code !== 'NOT_CERTIFIABLE') throw invalid();
+  }
   return message;
 }
 function authenticate(message, key) {
@@ -51,7 +61,10 @@ function channel(session, key, initialSent = 0, initialReceived = 0) {
       for (const name of common.filter(n => !['protocol_version','message_type','sequence'].includes(n))) if (message[name] !== session[name]) throw invalid();
       if (!timingSafeEqual(Buffer.from(message.auth,'hex'),Buffer.from(authenticate(message,key),'hex'))) throw invalid();
       const hash = createHash('sha256').update(canonical(message)).digest('hex');
-      if (message.sequence === received && hash === previous) return 'duplicate';
+      if (message.sequence === received && hash === previous) {
+        if (message.message_type.startsWith('COOPERATIVE_')) throw invalid();
+        return 'duplicate';
+      }
       if (message.sequence !== received + 1) throw invalid();
       received = message.sequence; previous = hash; return 'new';
     },
