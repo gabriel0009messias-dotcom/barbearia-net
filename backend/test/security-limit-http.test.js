@@ -7,6 +7,51 @@ test('Etapa 5: APIs sensiveis, headers hostis, checkout e isolamento',async t=>{
   const env=require('./helpers/postgres').testEnvironment();
   Object.assign(process.env,{LEGACY_ADMIN_EMAIL:'limits-admin@example.test',LEGACY_ADMIN_PASSWORD:crypto.randomUUID(),MERCADO_PAGO_ACCESS_TOKEN:crypto.randomUUID(),MERCADO_PAGO_WEBHOOK_SECRET:crypto.randomUUID(),MERCADO_PAGO_MODE:'test',PUBLIC_APP_URL:'https://example.test',RESEND_API_KEY:'synthetic-resend-key',EMAIL_FROM:'security@example.test'});
   const db=require('../database');await db.ready;
+  // Control only quota SQL time; counters, transactions and authentication stay real.
+  const quotaTime='2026-01-01T00:00:30.000Z';
+  const compact=sql=>sql.replace(/\s+/g,' ').trim();
+  const counterSql=compact(`WITH moment AS (
+    SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS at
+  ), frame AS (
+    SELECT at, (at / $2::bigint) * $2::bigint AS start FROM moment
+  ) INSERT INTO public_request_limits(key_hash,window_start,hits,expires_at)
+    SELECT $1,start,1,to_timestamp((start+$2::bigint)/1000.0) FROM frame
+    ON CONFLICT(key_hash,window_start) DO UPDATE
+      SET hits=LEAST(public_request_limits.hits::bigint+1,$3::bigint+1)::integer
+    RETURNING hits,ceil(extract(epoch FROM (expires_at-clock_timestamp())))::integer AS retry`);
+  const cleanupSql=operator=>`DELETE FROM public_request_limits WHERE (key_hash,window_start) IN (SELECT key_hash,window_start FROM public_request_limits WHERE expires_at${operator}clock_timestamp() LIMIT 1000)`;
+  const quotaQueries=new Map([
+    [counterSql,{name:'counter',clocks:2,params:3}],
+    [cleanupSql('<='),{name:'securityCleanup',clocks:1,params:0}],
+    [cleanupSql('<'),{name:'publicCleanup',clocks:1,params:0}],
+  ]);
+  const adapted={counter:0,securityCleanup:0,publicCleanup:0},structureErrors=[];
+  function quotaArgs(sql,params=[]) {
+    const normalized=compact(sql),shape=quotaQueries.get(normalized);
+    const quotaFamily=/^WITH\b.*\bINSERT INTO public_request_limits\b/.test(normalized)||
+      /^DELETE FROM public_request_limits WHERE \(key_hash,window_start\) IN/.test(normalized);
+    if(!shape&&!quotaFamily)return [sql,params];
+    try {
+      assert.ok(shape,'Quota SQL structure changed; review the test time adapter.');
+      assert.equal((sql.match(/clock_timestamp\(\)/g)||[]).length,shape.clocks,'Quota SQL clock count changed.');
+      assert.equal(params.length,shape.params,'Quota SQL parameter count changed.');
+    } catch(error) {structureErrors.push(error.message);throw error;}
+    adapted[shape.name]++;
+    return [sql.replace(/clock_timestamp\(\)/g,()=>`$${params.length+1}::timestamptz`),[...params,quotaTime]];
+  }
+  const transaction=db.transaction,runAsync=db.runAsync;
+  const transactionMock=t.mock.method(db,'transaction',(work,...options)=>transaction.call(db,store=>work({
+    ...store,
+    getAsync:(sql,params)=>store.getAsync(...quotaArgs(sql,params)),
+    runAsync:(sql,params)=>store.runAsync(...quotaArgs(sql,params)),
+  }),...options));
+  const cleanupMock=t.mock.method(db,'runAsync',(sql,params)=>runAsync.call(db,...quotaArgs(sql,params)));
+  t.after(()=>{
+    try {
+      assert.deepEqual(structureErrors,[],'Quota SQL adapter structural failures (even if caught by a limiter).');
+      for(const [name,count] of Object.entries(adapted))assert.ok(count>0,`Quota SQL adapter not exercised: ${name}`);
+    } finally {transactionMock.mock.restore();cleanupMock.mock.restore();}
+  });
   const app=express();app.set('trust proxy',true);app.use(express.json());app.use('/api',require('../routes'));
   const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
   t.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await db.close();await env.cleanup();});
@@ -33,12 +78,23 @@ test('Etapa 5: APIs sensiveis, headers hostis, checkout e isolamento',async t=>{
     const admin=await api('/admin/login','POST',{email:process.env.LEGACY_ADMIN_EMAIL,senha:process.env.LEGACY_ADMIN_PASSWORD});assert.equal(admin.status,200);assert.equal(admin.cache,'no-store');
   });
   await t.test('brute force e normalizacao: vinte tentativas, depois 429 apesar de trocar IP/header',async()=>{
+    const key=await limiter.budgetKey('ownerLogin',b.email);
+    const windowStart=Math.floor(Date.parse(quotaTime)/POLICIES.ownerLogin.windowMs)*POLICIES.ownerLogin.windowMs;
+    const persisted=async hits=>{
+      const rows=await db.allAsync('SELECT window_start,hits,expires_at FROM public_request_limits WHERE key_hash=$1',[key]);
+      assert.equal(rows.length,1,'One real PostgreSQL quota window for this identity.');
+      assert.equal(rows[0].window_start,windowStart);assert.equal(rows[0].hits,hits);
+      assert.equal(rows[0].expires_at.getTime(),windowStart+POLICIES.ownerLogin.windowMs);
+    };
+    await persisted(1); // The successful fixture login consumed this same window.
     for(let n=0;n<20;n++){
       const r=await api('/barbeiro/login','POST',{identificador:b.email,senha:'wrong-sensitive-password'},{'X-Forwarded-For':`203.0.113.${n}`,'X-Real-IP':`192.0.2.${n}`});
       assert.equal(r.status,n<19?401:429); // Initial successful login already consumed one.
+      await persisted(n+2);
     }
     const r=await api('/barbeiro/login','POST',{identificador:' '+b.email.toUpperCase()+' ',senha:b.senha},{Forwarded:'for=8.8.8.8','X-Forwarded-For':'1.1.1.1','X-RateLimit-Limit':'999999'});
     assert.equal(r.status,429);assert.ok(Number(r.retry)>=1&&Number(r.retry)<=300);assert.equal(r.cache,'no-store');assert.doesNotMatch(JSON.stringify(r.body),/limit-owner|password|token|key_hash/);
+    await persisted(21); // Normalization retains the key and the saturated counter.
     assert.equal((await api('/barbeiro/login','POST',{identificador:a.email,senha:a.senha})).status,200,'No collective login lock');
   });
   await t.test('login inexistente e existente com senha errada usam resposta generica e quotas iguais',async()=>{
