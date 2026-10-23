@@ -62,8 +62,54 @@ test('OWN-AUD-01: atomic finalization and durable explicit reconciliation', { ti
   });
   await t.test('exact OWN-AUD-01 probe: 250ms SQL finalization exceeds 50ms transport budget safely', async () => {
     await delayFinalization(0.25); const row = await message(); let calls = 0;
-    const send = async () => { calls++; return accepted(); };
-    await createEvolutionDelivery(db, { timeoutMs: 50 }).dispatch('whatsapp_messages', row, send);
+    // Control only the operational deadline. PostgreSQL, intent, guard cleanup
+    // and the trigger's pg_sleep(0.25) remain real, regardless of OS scheduling.
+    const handle = Object.freeze({}), events = [];
+    let queuedDeadline, context, cancels = 0, lateFires = 0;
+    const scheduler = {
+      schedule(callback, delayMs) {
+        assert.equal(delayMs, 50); assert.equal(typeof callback, 'function');
+        assert.equal(queuedDeadline, undefined);
+        queuedDeadline = callback; events.push('armed'); return handle;
+      },
+      cancel(value) {
+        assert.equal(value, handle); cancels++; events.push('cancelled');
+        // A callback retained/queued before cancellation must still be inert.
+        queuedDeadline(); queuedDeadline(); lateFires += 2;
+      },
+    };
+    const send = async () => {
+      calls++;
+      if (calls === 1) {
+        assert.deepEqual(events, ['armed']); assert.equal(cancels, 0);
+        const stored = await state(row.id), reserved = await owner();
+        assert.equal(stored.status, 'sending'); assert.ok(stored.dispatch_started_at);
+        assert.equal(stored.attempts, 1); assert.ok(stored.operation_token);
+        assert.equal(stored.operation_token, reserved.operation_token);
+        context = require('../services/evolutionOwnershipOperation').assertEvolutionOperation(row.instance);
+        context.assertActive(); assert.equal(context.signal.aborted, false);
+        events.push('send');
+      }
+      return accepted();
+    };
+    const pool = wrappedPool(async (client, config) => {
+      if (!config.text.includes(' SET status=$1,last_error=$2,')) return client.query(config);
+      assert.equal(config.values[0], 'sent', 'Accepted result must reach real SQL finalization');
+      assert.deepEqual(events, ['armed', 'send', 'cancelled']);
+      assert.equal(cancels, 1); assert.equal(lateFires, 2);
+      assert.equal(context.signal.aborted, false, 'Cancelled callback must not abort finalization');
+      assert.throws(() => context.assertActive(), { code: 'INSTANCE_OPERATION_EXPIRED' });
+      events.push('sql-start');
+      const pending = client.query(config); // Includes the real 250ms PostgreSQL trigger.
+      queuedDeadline(); queuedDeadline(); lateFires += 2;
+      assert.equal(context.signal.aborted, false);
+      const result = await pending; events.push('sql-end'); return result;
+    });
+    await createEvolutionDelivery({ ...db, pool }, { timeoutMs: 50 }, scheduler).dispatch('whatsapp_messages', row, send);
+    assert.equal(calls, 1); assert.equal(cancels, 1); assert.equal(lateFires, 4);
+    assert.deepEqual(events, ['armed', 'send', 'cancelled', 'sql-start', 'sql-end']);
+    assert.equal((await state(row.id)).status, 'sent'); assert.equal((await owner()).operation_token, null);
+    queuedDeadline(); queuedDeadline();
     assert.equal((await state(row.id)).status, 'sent'); assert.equal((await owner()).operation_token, null);
     await message(false); await drain(send); assert.equal(calls, 2);
     await drain(() => assert.fail('neither sent message may retry'));
