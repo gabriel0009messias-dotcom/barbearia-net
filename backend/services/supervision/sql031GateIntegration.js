@@ -23,7 +23,7 @@ function createDormantSql031Gate(options) {
   scope.certifyProfile({ requiredCapabilities: [...options.requiredCapabilities] });
   const coordinator = createCapabilityCoordinator(scope);
   const identity = Object.freeze({ executor_id: birth.executor_id, boot_id: birth.boot_id });
-  let state = 'NEW', gate = null, code = null;
+  let state = 'NEW', gate = null, code = null, confirmedClosure, stopProjection;
   const failure = () => Object.freeze({ outcome: state === 'UNKNOWN' ? 'UNKNOWN' : 'KNOWN_FAILURE', code: code || 'SQL031_GATE_SEQUENCE' });
   function fence(next, reason) {
     state = next; code = reason; scope.beginDrain();
@@ -124,8 +124,20 @@ function createDormantSql031Gate(options) {
         state = 'SEALING';
         result = await persist(() => authority.acceptCooperativeClosure(evidence));
         if (result.outcome !== 'CONFIRMED') return result;
+        confirmedClosure = result.value;
         gate = 'CLOSED'; state = 'CLOSED'; return result;
       } catch { return fence('FAILED', 'SQL031_SCOPE_NOT_CERTIFIABLE'); }
+    },
+    createStopProjection(...args) {
+      if (args.length) throw p.invalid();
+      if (stopProjection) return stopProjection; // Never construct a fresh session after UNKNOWN/failure.
+      if (state !== 'CLOSED' || gate !== 'CLOSED' || !confirmedClosure || !accountingClear()) throw p.invalid();
+      const receipt = confirmedClosure;
+      const { createDormantSql031StopProjection } = require('./sql031StopIntegration');
+      stopProjection = createDormantSql031StopProjection({ authority, closureReceipt: receipt,
+        binding: { ...identity, supervisor_id: supervisor.supervisor_id, supervisor_boot_id: supervisor.supervisor_boot_id },
+        isClosed: () => state === 'CLOSED' && gate === 'CLOSED' && confirmedClosure === receipt });
+      return stopProjection;
     },
     snapshot: () => Object.freeze({ state, gate, admissionAllowed: state === 'OPEN' && accountingClear() && scope.isOpen(),
       accounting: authority.snapshot(), scope: scope.snapshot(), proof: false, stopped: false,

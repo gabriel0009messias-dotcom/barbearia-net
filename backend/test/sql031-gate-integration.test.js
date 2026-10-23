@@ -83,8 +83,8 @@ test('import is dormant: no scope singleton, DB, app, supervisor, timers, listen
 test('injected authentic authority required; executor gets no self-authorization, proof or release API', () => {
   const f = fixture(); assert.equal(f.connects(), 0);
   assert.throws(() => createDormantSql031Gate({ ...f.input, transactionRunner: { run() {} } }));
-  for (const name of ['bootstrap', 'open', 'close', 'acceptExecutionStop', 'release', 'retry', 'authority', 'transactionRunner']) assert.equal(f.executor[name], undefined);
-  assert.deepEqual(Object.keys(f.control).sort(), ['bootstrap', 'close', 'executor', 'open', 'snapshot']);
+  for (const name of ['bootstrap', 'open', 'close', 'createStopProjection', 'certifyNextPage', 'subjects', 'acceptExecutionStop', 'release', 'retry', 'authority', 'transactionRunner']) assert.equal(f.executor[name], undefined);
+  assert.deepEqual(Object.keys(f.control).sort(), ['bootstrap', 'close', 'createStopProjection', 'executor', 'open', 'snapshot']);
 });
 
 test('requires a bound bootstrap identity and explicit capability coverage; no child/legacy identity override', async () => {
