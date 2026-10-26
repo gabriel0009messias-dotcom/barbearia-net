@@ -132,17 +132,65 @@ test('unknown delivery disposition is terminal, audited and never a retry author
     if(audit.outcome==='accepted') await assert.rejects(abandon(f,row));
     else await assert.rejects(abandon(f,row,{outcome:'accepted'}));
   });
-  await t.test('timeout is not proof of stopped execution, including from another process',async()=>{
-    const {f,row}=await pending(),claim=randomUUID();let finish,calls=0;
+  await t.test('timeout is not proof of stopped execution, including from another process',async t=>{
+    const {f,row}=await pending(),claim=randomUUID();let finish,signalEntry,deadline,calls=0;
+    const scope=require('../services/executionScope').executionScope;
+    const proofCounts=async()=>db.getAsync('SELECT (SELECT count(*)::int FROM evolution_execution_stop_proofs) AS proofs, (SELECT count(*)::int FROM evolution_execution_stops) AS stops');
+    const proofsBefore=await proofCounts(),handle=Object.freeze({});
+    const entered=new Promise(resolve=>{signalEntry=resolve;});
+    const scheduler={
+      schedule(callback,delayMs){assert.equal(delayMs,100);assert.equal(typeof callback,'function');assert.equal(deadline,undefined);deadline=callback;return handle;},
+      cancel(value){assert.equal(value,handle);},
+    };
     await db.runAsync("UPDATE whatsapp_messages SET status='sending',claim_token=$1,claimed_at=clock_timestamp() WHERE id=$2",[claim,row.id]);
-    await createEvolutionDelivery(db,{timeoutMs:100}).dispatch('whatsapp_messages',await state(row.id),()=>{calls++;return new Promise(resolve=>{finish=resolve;});});
+    const claimed=await state(row.id);
+    // Prove durable transport entry before manually expiring the operation.
+    const dispatch=scope.admitRoot('test.unknown-timeout',()=>
+      createEvolutionDelivery(db,{timeoutMs:100},scheduler).dispatch('whatsapp_messages',claimed,()=>{
+        calls++;return new Promise(resolve=>{finish=resolve;signalEntry();});
+      }));
+    await Promise.race([entered,dispatch.then(()=>assert.fail('dispatch ended before transport entry'))]);
+    assert.equal(calls,1);assert.equal(typeof finish,'function');assert.equal(typeof deadline,'function');
+    const started=await state(row.id),token=started.operation_token;
+    assert.equal(started.status,'sending');assert.ok(started.dispatch_started_at);
+    assert.equal(started.attempts,claimed.attempts+1);assert.equal(started.claim_token,claim);assert.ok(token);
+    assert.equal((await owner(f)).operation_token,token);
+    deadline();await dispatch;
     const uncertain=await state(row.id);assert.equal(uncertain.status,'uncertain');assert.equal(calls,1);
-    await assert.rejects(abandon(f,uncertain));assert.equal(await childReconcile(f,uncertain),1);
-    finish(await f.sendMock());
-    for(let n=0;n<100;n++) {
-      try {await abandon(f,uncertain);break;} catch(error) {if(n===99)throw error;await new Promise(resolve=>setTimeout(resolve,10));}
-    }
-    assert.equal((await state(row.id)).status,'failed');assert.equal(calls,1);
+    assert.equal(uncertain.claim_token,claim);assert.equal(uncertain.operation_token,token);
+    assert.equal((await owner(f)).operation_token,token);assert.deepEqual(await proofCounts(),proofsBefore);
+    await assert.rejects(abandon(f,uncertain));
+    // Reject spawn errors separately: exit 1 must come from a real process B.
+    let processBSpawned=false;
+    const processBResult=await new Promise((resolve,reject)=>{
+      const code=`const db=require('./database');db.ready.then(()=>require('./services/evolutionDelivery').createEvolutionDelivery(db).reconcile('whatsapp_messages',${row.id},${f.tenant},'${token}',${JSON.stringify({stopped:true,outcome:'abandoned_unknown',expectedInstance:f.instance})})).then(()=>db.close()).catch(async()=>{await db.close();process.exitCode=1});`;
+      const child=spawn(process.execPath,['-e',code],{cwd:path.join(__dirname,'..'),env:process.env,windowsHide:true,stdio:'ignore'});
+      child.once('spawn',()=>{processBSpawned=true;});child.once('error',reject);child.once('close',resolve);
+    });
+    assert.equal(processBSpawned,true);assert.equal(processBResult,1);
+    assert.equal((await state(row.id)).status,'uncertain');assert.equal(await receipt(row.id),undefined);
+    assert.equal((await owner(f)).operation_token,token);
+    finish(await f.sendMock());await dispatch.completion;
+    const late=await state(row.id);
+    assert.equal(late.status,'uncertain');assert.equal(late.sent_at,null);assert.equal(late.attempts,started.attempts);
+    assert.equal(late.claim_token,claim);assert.equal(late.operation_token,token);
+    assert.equal((await owner(f)).operation_token,token);assert.deepEqual(await proofCounts(),proofsBefore);
+    await abandon(f,uncertain);
+    const after=await state(row.id),audit=await receipt(row.id);
+    assert.equal(after.status,'failed');assert.equal(calls,1);assert.equal(after.sent_at,null);
+    assert.equal(after.attempts,started.attempts);assert.deepEqual(after.dispatch_started_at,started.dispatch_started_at);
+    assert.equal(audit.outcome,'abandoned_unknown');assert.equal(audit.operation_token,token);
+    assert.equal(audit.claim_token,claim);assert.equal(audit.instance_name,f.instance);
+    assert.equal((await owner(f)).operation_token,null);
+    await f.webhook.drain(()=>assert.fail('abandoned unknown delivery must never retry'));
+    assert.equal(calls,1);assert.equal((await state(row.id)).status,'failed');
+    assert.deepEqual(await proofCounts(),proofsBefore);
+    t.diagnostic('DELIVERY_UNKNOWN_HARDENING '+JSON.stringify({transportBarrierReached:true,
+      dispatchStartedAtBeforeDeadline:!!started.dispatch_started_at,attemptsBeforeDeadline:started.attempts,
+      claimPreserved:started.claim_token===claim,operationTokenBound:!!token,ownerFencePreserved:true,
+      manualDeadlineTriggered:true,statusAfterDeadline:uncertain.status,processBSpawned,processBResult,
+      abandonWhileActive:'REJECTED',lateCompletion:'AWAITED; uncertain fenced',finalAuditedDisposition:audit.outcome,
+      finalStatus:after.status,unsafeRetry:0,falseStoppedProof:0}));
   });
   await t.test('failure releasing ownership rolls back disposition and receipt atomically',async()=>{
     const {f,row}=await incident();

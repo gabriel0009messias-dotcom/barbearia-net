@@ -234,11 +234,41 @@ test('OWN-AUD-01: atomic finalization and durable explicit reconciliation', { ti
     assert.equal((await state(row.id)).status, 'sent');
   });
   await t.test('transport timeout keeps uncertain fenced; late acceptance cannot finalize or retry', async () => {
-    const row = await message(); let finish;
-    await createEvolutionDelivery(db, { timeoutMs: 30 }).dispatch('whatsapp_messages', row, () => new Promise(resolve => { finish = resolve; }));
-    const token = (await state(row.id)).operation_token; finish(accepted()); await new Promise(resolve => setTimeout(resolve, 30));
-    assert.equal((await state(row.id)).status, 'uncertain'); assert.equal((await owner()).operation_token, token);
+    const row = await message();
+    const scope = require('../services/executionScope').executionScope;
+    const proofCounts = async () => (await q('SELECT (SELECT count(*)::int FROM evolution_execution_stop_proofs) AS proofs, (SELECT count(*)::int FROM evolution_execution_stops) AS stops')).rows[0];
+    const proofsBefore = await proofCounts();
+    const handle = Object.freeze({});
+    let deadline, finish, signalEntry, calls = 0;
+    const entered = new Promise(resolve => { signalEntry = resolve; });
+    const scheduler = {
+      schedule(callback, delayMs) {
+        assert.equal(delayMs, 30); assert.equal(typeof callback, 'function');
+        assert.equal(deadline, undefined); deadline = callback; return handle;
+      },
+      cancel(value) { assert.equal(value, handle); },
+    };
+    // Keep the deadline manual until the actual transport captures its resolver.
+    // Root completion also waits for descendants surviving the timeout race.
+    const dispatch = scope.admitRoot('test.late-acceptance', () =>
+      createEvolutionDelivery(db, { timeoutMs: 30 }, scheduler).dispatch('whatsapp_messages', row,
+        () => new Promise(resolve => { calls++; finish = resolve; signalEntry(); })));
+    await Promise.race([entered, dispatch.then(() => assert.fail('dispatch ended before transport entry'))]);
+    assert.equal(calls, 1); assert.equal(typeof finish, 'function');
+    const started = await state(row.id), token = started.operation_token;
+    assert.ok(token); assert.ok(started.dispatch_started_at);
+    assert.equal(started.attempts, 1); assert.equal(started.claim_token, row.claim_token);
+    assert.equal((await owner()).operation_token, token);
+    deadline(); await dispatch;
+    const timedOut = await state(row.id);
+    assert.equal(timedOut.status, 'uncertain'); assert.equal(timedOut.operation_token, token);
+    finish(accepted()); await dispatch.completion;
+    const stored = await state(row.id);
+    assert.equal(stored.status, 'uncertain'); assert.equal(stored.sent_at, null);
+    assert.equal(stored.operation_token, token); assert.equal(stored.claim_token, row.claim_token);
+    assert.equal(stored.attempts, 1); assert.equal((await owner()).operation_token, token);
     await drain(() => assert.fail('uncertain cannot retry'));
+    assert.equal(calls, 1); assert.deepEqual(await proofCounts(), proofsBefore);
     await delivery.reconcile('whatsapp_messages', row.id, 1906, token, { stopped: true, outcome: 'accepted' });
   });
   await t.test('two independent processes reconcile the same terminal fence exactly once', async () => {

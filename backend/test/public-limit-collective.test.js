@@ -15,11 +15,34 @@ test('Collective public budgets: PostgreSQL load, expiry and four processes',{ti
    }));assert.equal(results.filter(Boolean).length,1);assert.equal((await db.getAsync('SELECT count(*)::int n FROM public_request_limits')).n,1);
   });
  }
- await t.test('multiple clients navigate one studio and different studios without premature blocking',async()=>{
-  await reset();const global=createPublicLimiter(db,'navigationGlobal'),local=createPublicLimiter(db,'navigation');
-  for(const tenantId of [1,2])await Promise.all(Array.from({length:400},async()=>{const res=response();assert.equal(await global.check(res),true);assert.equal(await local.check(res,{tenantId}),true);}));
-  assert.equal((await db.getAsync('SELECT sum(hits)::int n FROM public_request_limits')).n,1600);
- });
+  await t.test('multiple clients navigate one studio and different studios without premature blocking',async sub=>{
+   await reset();const windowMs=POLICIES.navigation.windowMs;
+   assert.equal(windowMs,60000);assert.equal(POLICIES.navigationGlobal.windowMs,windowMs);
+   const postgresClock=async()=>(await db.getAsync('SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now')).now;
+   const reference=await postgresClock(),windowStart=(Math.floor(reference/windowMs)+2)*windowMs;
+   // Reserve at least 120s of real PostgreSQL time; the existing parent timeout is 60s.
+   const jsClock=windowStart+windowMs/2,expiresAt=windowStart+windowMs,originalNow=Date.now;
+   const observed={postgresClockReference:reference,jsClockReference:jsClock,windowStart,expectedExpiresAt:expiresAt,globalChecksAccepted:0,localChecksAccepted:0};
+   sub.mock.method(Date,'now',()=>jsClock);
+   try {
+    const global=createPublicLimiter(db,'navigationGlobal'),local=createPublicLimiter(db,'navigation');
+    for(const tenantId of [1,2])await Promise.all(Array.from({length:400},async()=>{const res=response();assert.equal(await global.check(res),true);observed.globalChecksAccepted++;assert.equal(await local.check(res,{tenantId}),true);observed.localChecksAccepted++;}));
+    assert.equal((await db.getAsync('SELECT sum(hits)::int n FROM public_request_limits')).n,1600);
+    const rows=await db.allAsync('SELECT key_hash,window_start,hits,expires_at FROM public_request_limits');
+    assert.equal(rows.length,3);
+    const hits=(scope,context)=>rows.find(row=>row.key_hash===budgetKey(scope,POLICIES[scope],context))?.hits;
+    observed.globalPersistedHits=hits('navigationGlobal');observed.studio1PersistedHits=hits('navigation',{tenantId:1});observed.studio2PersistedHits=hits('navigation',{tenantId:2});
+    assert.equal(observed.globalPersistedHits,800);assert.equal(observed.studio1PersistedHits,400);assert.equal(observed.studio2PersistedHits,400);
+    for(const row of rows){assert.equal(row.window_start,windowStart);assert.equal(row.expires_at.getTime(),expiresAt);}
+    observed.postgresClockDuringAssertion=await postgresClock();
+    observed.windowExpiredDuringLoad=observed.postgresClockDuringAssertion>=expiresAt;
+    assert.equal(observed.windowExpiredDuringLoad,false);assert.equal(Date.now(),jsClock);
+   } finally {
+    sub.mock.restoreAll();observed.dateNowRestored=Date.now===originalNow;
+    sub.diagnostic('PUBLIC_LIMIT_CLOCK '+JSON.stringify(observed));
+    assert.equal(observed.dateNowRestored,true);
+   }
+  });
  await t.test('catalogue and slots share the tenant budget; another tenant remains usable',async()=>{
   await reset();await seed('navigation',{tenantId:1},POLICIES.navigation.limit-1);
   const catalogue=createPublicLimiter(db,'navigation'),slots=createPublicLimiter(db,'navigation');

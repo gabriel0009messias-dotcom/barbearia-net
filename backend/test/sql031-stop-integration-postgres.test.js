@@ -11,15 +11,38 @@ const { createSql031Authority } = require('../services/supervision/sql031Authori
 test('SQL031 2C dormant stop integration with real separated PostgreSQL logins', { timeout: 120000 }, async t => {
   const url = new URL(process.env.TEST_DATABASE_URL);
   assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Dedicated local test server required');
-  const admin = new Pool({ connectionString: url.toString() }), suffix = randomUUID().replaceAll('-', '');
+  const asyncErrors = [];
+  function trackedPool(options) {
+    const pool = new Pool(options), clientEnds = [];
+    // Track actual end events even after pg-pool removes a discarded Client.
+    pool.on('connect', client => {
+      clientEnds.push(new Promise(resolve => client.once('end', resolve)));
+    });
+    pool.on('error', error => { asyncErrors.push(error); });
+    return { pool, async close() {
+      // end() closes admission; its bookkeeping may finish before Client end.
+      try { await pool.end(); } finally { await Promise.all(clientEnds); }
+    } };
+  }
+  const adminOwner = trackedPool({ connectionString: url.toString() }), admin = adminOwner.pool, suffix = randomUUID().replaceAll('-', '');
   const database = 'test_sql031_' + suffix, schema = 'test_' + suffix, s = '"' + schema + '"';
   const roles = { migrator: 'test_migrator_' + suffix, executor: 'test_executor_' + suffix, issuer: 'test_issuer_' + suffix };
   const pools = [], createdRoles = []; let createdDatabase = false;
   t.after(async () => {
-    for (const pool of pools) await pool.end();
-    if (createdDatabase) await admin.query('DROP DATABASE "' + database + '" WITH (FORCE)');
-    for (const role of createdRoles.reverse()) await admin.query('DROP ROLE "' + role + '"');
-    await admin.end();
+    // Start all closures before waiting, retaining errors from every owner.
+    const ended = await Promise.allSettled(pools.map(owner => owner.close()));
+    const failures = [...asyncErrors, ...ended.filter(r => r.status === 'rejected').map(r => r.reason)];
+    try {
+      if (!failures.length) {
+        if (createdDatabase) await admin.query('DROP DATABASE "' + database + '" WITH (FORCE)');
+        for (const role of createdRoles.reverse()) await admin.query('DROP ROLE "' + role + '"');
+      }
+    } catch (error) { failures.push(error); }
+    finally {
+      try { await adminOwner.close(); } catch (error) { failures.push(error); }
+    }
+    failures.push(...asyncErrors);
+    if (failures.length) throw new AggregateError([...new Set(failures)], 'Fixture teardown or asynchronous Pool error');
   });
   const passwords = {};
   for (const [kind, role] of Object.entries(roles)) {
@@ -29,8 +52,8 @@ test('SQL031 2C dormant stop integration with real separated PostgreSQL logins',
   }
   await admin.query('CREATE DATABASE "' + database + '" OWNER "' + roles.migrator + '"'); createdDatabase = true;
   function poolFor(kind) {
-    const pool = new Pool({ host: url.hostname, port: Number(url.port || 5432), database, user: roles[kind], password: passwords[kind], max: 6,
-      options: '-c search_path=' + schema + ',public', query_timeout: 0 }); pools.push(pool); return pool;
+    const owner = trackedPool({ host: url.hostname, port: Number(url.port || 5432), database, user: roles[kind], password: passwords[kind], max: 6,
+      options: '-c search_path=' + schema + ',public', query_timeout: 0 }); pools.push(owner); return owner.pool;
   }
   const migrator = poolFor('migrator'), executor = poolFor('executor'), issuer = poolFor('issuer');
   await migrate(migrator, schema);
