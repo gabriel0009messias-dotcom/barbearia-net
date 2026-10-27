@@ -1,4 +1,5 @@
 const { invalid, object, text } = require('./sql031Payloads');
+const { distinctLogins, assertIssuerIdentity } = require('./sql031Permissions');
 
 const runners = new WeakSet();
 const AUTHORITIES = Object.freeze({ MIGRATOR: 'MIGRATOR', EXECUTOR: 'EXECUTOR', SUPERVISOR_PROOF_ISSUER: 'SUPERVISOR_PROOF_ISSUER' });
@@ -22,7 +23,7 @@ function createControlSqlRunner(options) {
   object(options, ['pool', 'authority', 'issuerLogin', 'migratorLogin', 'executorLogin', 'schema', 'database', 'localTestOnly']);
   if (options.authority !== AUTHORITIES.SUPERVISOR_PROOF_ISSUER || options.localTestOnly !== true || typeof options.pool?.connect !== 'function') throw invalid();
   const issuerLogin = login(options.issuerLogin), migratorLogin = login(options.migratorLogin), executorLogin = login(options.executorLogin);
-  if (new Set([issuerLogin, migratorLogin, executorLogin]).size !== 3) throw invalid();
+  distinctLogins({ issuerLogin, migratorLogin, executorLogin });
   const schema = text(options.schema, /^test_[a-f0-9]{32}$/), database = text(options.database, /^test_sql031_[a-f0-9]{32}$/), pool = options.pool;
   const context = Object.freeze({ authority: options.authority, issuerLogin, schema, database, localTestOnly: true });
   let inFlight = false, pendingSql = 0, attempts = 0, confirmed = 0, knownFailures = 0, unknown = 0;
@@ -50,10 +51,7 @@ function createControlSqlRunner(options) {
         if (started.command !== 'BEGIN') throw Error('Unconfirmed transaction start.');
         begun = true;
         const { rows } = await query(identitySql, [schema, migratorLogin, executorLogin]);
-        const row = rows[0];
-        if (rows.length !== 1 || row.session_user !== issuerLogin || row.current_user !== issuerLogin || row.database_name !== database ||
-            ['rolsuper', 'rolcreaterole', 'rolcreatedb', 'rolreplication', 'rolbypassrls', 'owns_schema', 'schema_create',
-              'owns_database', 'ledger_write', 'migrator_member', 'executor_member'].some(k => row[k] !== false)) throw invalid();
+        assertIssuerIdentity(rows, issuerLogin, database);
         operationActive = true;
         const value = await operation(Object.freeze({ query: (sql, values) => {
           if (!operationActive) throw invalid();

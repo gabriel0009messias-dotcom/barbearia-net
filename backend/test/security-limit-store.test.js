@@ -4,13 +4,15 @@ const crypto=require('node:crypto');
 const {fork}=require('node:child_process');
 const path=require('node:path');
 const {createSecurityLimits,POLICIES,BUCKETS}=require('../services/securityLimits');
+const {createTracedSecurityLimits}=require('./helpers/securityLimitTrace');
 function response(){return {statusCode:200,headers:{},body:null,set(k,v){this.headers[k]=v;return this;},status(n){this.statusCode=n;return this;},json(v){this.body=v;return this;}};}
 test('Etapa 5: armazenamento compartilhado atomico, limitado e fail-closed',async t=>{
   const env=require('./helpers/postgres').testEnvironment(),db=require('../database');await db.ready;t.after(async()=>{await db.close();await env.cleanup();});
-  const limiter=createSecurityLimits(db),identity=()=>crypto.randomUUID()+'@example.test';
+  const namespace=new URL(process.env.DATABASE_URL).pathname+':'+process.env.DATABASE_SCHEMA;
+  const limiter=createTracedSecurityLimits(db,{namespace}),identity=()=>crypto.randomUUID()+'@example.test',workerTraces=[];
   const worker=(scope,id,count)=>new Promise((resolve,reject)=>{
     const child=fork(path.join(__dirname,'helpers/security-limit-worker.js'),[scope,id,String(count)],{env:{...process.env},windowsHide:true,silent:true});
-    let message;child.on('message',m=>message=m);child.on('error',reject);child.stdout.resume();child.stderr.resume();child.on('exit',code=>code===0&&message?resolve(message.results):reject(Error('Isolated worker failed')));
+    let message;child.on('message',m=>{message=m;if(Array.isArray(m.trace)){workerTraces.push(...m.trace);if(workerTraces.length>512)workerTraces.splice(0,workerTraces.length-512);}});child.on('error',reject);child.stdout.resume();child.stderr.resume();child.on('exit',code=>code===0&&message?resolve(message.results):reject(Error('Isolated worker failed')));
   });
   await t.test('quota real sob concorrencia: somente vinte de quarenta sao admitidos',async()=>{
     const id=identity(),results=await Promise.all(Array.from({length:40},async()=>{const res=response();await limiter.check(res,'ownerLogin',id);return res;}));
@@ -20,12 +22,15 @@ test('Etapa 5: armazenamento compartilhado atomico, limitado e fail-closed',asyn
     const seconds=await db.getAsync('SELECT ceil(extract(epoch FROM ($1::timestamptz-clock_timestamp())))::int AS remaining',[row.expires_at]);assert.ok(Math.abs(Number(denied.headers['Retry-After'])-seconds.remaining)<=2);
   });
   await t.test('processos independentes e reinicio logico compartilham contador e segredo',async()=>{
+    let restart;
+    try{
     const id=identity(),results=(await Promise.all([worker('adminLogin',id,15),worker('adminLogin',id,15)])).flat();
     assert.equal(results.filter(n=>n===200).length,20);assert.equal(results.filter(n=>n===429).length,10);
     assert.deepEqual(await worker('adminLogin',id,1),[429]);
-    const restart=createSecurityLimits(db),res=response();await restart.check(res,'adminLogin',id);assert.equal(res.statusCode,429);
+    restart=createTracedSecurityLimits(db,{namespace});const res=response();await restart.check(res,'adminLogin',id);assert.equal(res.statusCode,429);
     assert.equal(await restart.budgetKey('adminLogin',id),await limiter.budgetKey('adminLogin',id));
     assert.equal((await db.getAsync("SELECT COUNT(*)::int AS n FROM configuracoes WHERE chave='security_limit_key_v1'")).n,1);
+    }catch(error){t.diagnostic('H5 shared counter decision trace '+JSON.stringify({workers:workerTraces,parent:limiter.decisionTrace(),restart:restart?.decisionTrace()}));throw error;}
   });
   await t.test('identidades arbitrarias usam conjunto fixo de buckets sem armazenar identidade',async()=>{
     const keys=new Set();for(let n=0;n<25000;n++)keys.add(await limiter.budgetKey('checkoutPassword','fake-'+n));assert.ok(keys.size<=BUCKETS);assert.ok(keys.size>BUCKETS/2);

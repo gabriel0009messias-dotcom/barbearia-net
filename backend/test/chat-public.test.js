@@ -34,6 +34,63 @@ test('2C.2: chat público em navegador e PostgreSQL reais', { timeout: 120000 },
   const accountId = signup.assinatura.id, slug = 'studio-' + accountId;
   const login = await post('/barbeiro/login', { identificador: 'chat-ui@example.test', senha: 'test-password' });
   const page = await browser.newPage(), errors = [], network = [];
+  // Observe the existing interaction; do not add a readiness wait or another click.
+  let diagnosticFd, diagnosticRows = 0, lastButtonState = null, diagnosticActive = false;
+  if (process.env.STUDIOFY_DIAGNOSTIC_DIR) {
+    const directory = fs.realpathSync(process.env.STUDIOFY_DIAGNOSTIC_DIR);
+    const relative = path.relative(path.resolve(__dirname, '../..'), directory);
+    if (!relative || (!relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))) throw Error('Diagnostic directory must be outside the repository');
+    diagnosticFd = fs.openSync(path.join(directory, 'chat-public-' + crypto.randomUUID() + '.jsonl'), 'wx', 0o600);
+    t.after(() => { if (diagnosticFd !== undefined) fs.closeSync(diagnosticFd); });
+  }
+  const diagnostic = (event, state = lastButtonState) => {
+    if (diagnosticFd === undefined) return;
+    const row = { event, timestamp: new Date().toISOString(), monotonicNs: process.hrtime.bigint().toString(), state };
+    try {
+      if (diagnosticRows < 512) fs.writeSync(diagnosticFd, JSON.stringify(row) + '\n');
+      else if (diagnosticRows === 512) fs.writeSync(diagnosticFd, JSON.stringify({ event: 'DIAGNOSTIC_LIMIT', limit: 512 }) + '\n');
+      diagnosticRows++;
+    } catch { process.stderr.write('Chat diagnostic side-channel write failed.\n'); try { fs.closeSync(diagnosticFd); } catch {} diagnosticFd = undefined; }
+  };
+  if (diagnosticFd !== undefined) {
+    page.on('console', message => {
+      const prefix = 'STUDIOFY_H8_BUTTON:';
+      if (!message.text().startsWith(prefix)) return;
+      try {
+        const data = JSON.parse(message.text().slice(prefix.length));
+        if (!['BUTTON_FOUND', 'BUTTON_STATE_CHANGED', 'INPUT_COMPLETE', 'POINTER_DOWN', 'POINTER_UP', 'CLICK_DISPATCHED', 'SUBMIT_DISPATCHED', 'SEM_HTML_OBSERVED'].includes(data.event)) return;
+        const source = data.state || {};
+        // Rebuild an allowlist; never copy console text, DOM values or URLs.
+        lastButtonState = Object.fromEntries(['exists', 'disabled', 'disabledAttribute', 'visible', 'readOnly', 'semHtml', 'busy'].map(k => [k, typeof source[k] === 'boolean' ? source[k] : null]));
+        lastButtonState.ariaDisabled = ['true', 'false'].includes(source.ariaDisabled) ? source.ariaDisabled : null;
+        lastButtonState.browserEpochMs = Number.isFinite(source.browserEpochMs) ? source.browserEpochMs : null;
+        lastButtonState.browserPerformanceMs = Number.isFinite(source.browserPerformanceMs) ? source.browserPerformanceMs : null;
+        if (diagnosticActive || data.event === 'BUTTON_FOUND') diagnostic(data.event);
+      } catch { diagnostic('DIAGNOSTIC_DECODE_ERROR', null); }
+    });
+    await page.evaluateOnNewDocument(() => {
+      let button = null, prior = '', rows = 0;
+      const snapshot = () => {
+        const b = document.querySelector('#chatSend'), input = document.querySelector('#chatMessage');
+        return { exists: !!b, disabled: !!b?.disabled, disabledAttribute: !!b?.hasAttribute('disabled'),
+          ariaDisabled: b?.getAttribute('aria-disabled') ?? null,
+          visible: !!b?.getClientRects().length && getComputedStyle(b).visibility !== 'hidden',
+          readOnly: !!input?.readOnly, busy: document.querySelector('#chatSendForm')?.getAttribute('aria-busy') === 'true',
+          semHtml: !!document.querySelector('#chatNotice')?.textContent.includes('sem HTML'),
+          browserEpochMs: Date.now(), browserPerformanceMs: performance.now() };
+      };
+      const emit = event => { if (rows++ < 512) console.debug('STUDIOFY_H8_BUTTON:' + JSON.stringify({ event, state: snapshot() })); };
+      new MutationObserver(() => {
+        const current = document.querySelector('#chatSend'); if (!current) return;
+        if (current !== button) { button = current; emit('BUTTON_FOUND'); }
+        const s = snapshot(), key = JSON.stringify([s.disabled, s.disabledAttribute, s.ariaDisabled, s.visible, s.readOnly, s.busy, s.semHtml]);
+        if (key !== prior) { prior = key; emit(s.semHtml ? 'SEM_HTML_OBSERVED' : 'BUTTON_STATE_CHANGED'); }
+      }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+      for (const [type, event] of [['pointerdown', 'POINTER_DOWN'], ['pointerup', 'POINTER_UP'], ['click', 'CLICK_DISPATCHED'], ['submit', 'SUBMIT_DISPATCHED'], ['input', 'INPUT_COMPLETE']]) {
+        document.addEventListener(type, e => { if (e.target.closest?.('#chatSend, #chatSendForm')) emit(event); }, true);
+      }
+    });
+  }
   page.on('pageerror', e => errors.push(e.message)); page.on('request', r => network.push({ url: r.url(), method: r.method() }));
   page.setDefaultTimeout(12000);
   const visible = selector => page.waitForSelector(selector, { visible: true });
@@ -89,10 +146,16 @@ test('2C.2: chat público em navegador e PostgreSQL reais', { timeout: 120000 },
     assert.equal((await db.getAsync('SELECT count(*)::int AS n FROM chat_conversations')).n, 1);
   });
   await t.test('XSS retornado pelo histórico é texto, não HTML; texto de entrada também validado', async () => {
+    diagnosticActive = true; diagnostic('ACTION_READY');
+    try {
     await db.runAsync('INSERT INTO chat_messages(conversation_id,sender_type,content,client_message_id) VALUES ($1,$2,$3,$4)', [conversationId, 'establishment', '<img src=x onerror="window.chatXss=1">', crypto.randomUUID()]);
     await page.click('#chatRefresh'); await page.waitForFunction(() => document.querySelector('#chatMessages').textContent.includes('<img'));
     assert.equal(await page.$('#chatMessages img'), null); assert.equal(await page.evaluate(() => window.chatXss), undefined);
-    await fill('#chatMessage', '<script>alert(1)</script>'); await page.click('#chatSend'); await status('sem HTML');
+    await fill('#chatMessage', '<script>alert(1)</script>'); diagnostic('INPUT_ACTION_COMPLETE');
+    diagnostic('CLICK_ATTEMPT'); await page.click('#chatSend'); diagnostic('CLICK_COMPLETE');
+    await status('sem HTML'); diagnostic('SEM_HTML_CONDITION_SATISFIED');
+    } catch (error) { diagnostic(error?.name === 'TimeoutError' ? 'ACTION_TIMEOUT' : 'ACTION_FAILED'); throw error; }
+    finally { diagnosticActive = false; }
   });
   await t.test('histórico paginado pela interface, lados, horários e limite de texto', async () => {
     for (let i = 0; i < 105; i++) await db.runAsync("INSERT INTO chat_messages(conversation_id,sender_type,content,client_message_id,created_at) VALUES ($1,$2,$3,$4,clock_timestamp()-interval '1 day')", [conversationId, i % 2 ? 'customer' : 'establishment', 'Histórico ' + i, crypto.randomUUID()]);
